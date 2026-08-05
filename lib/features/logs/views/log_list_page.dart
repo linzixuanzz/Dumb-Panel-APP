@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -70,8 +71,14 @@ class LogListState {
 }
 
 class LogListNotifier extends StateNotifier<LogListState> {
-  LogListNotifier() : super(const LogListState());
+  /// [dio] **仅供测试注入**，生产路径不传，仍然走 `DioClient` 单例。
+  /// 单例的 baseUrl 会随切换面板被改写，所以这里不在构造时把它存下来。
+  LogListNotifier({Dio? dio}) : _injectedDio = dio, super(const LogListState());
+
+  final Dio? _injectedDio;
   int _page = 1;
+
+  Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 
   Map<String, dynamic> _currentQueryParams({
     required int page,
@@ -94,7 +101,7 @@ class LogListNotifier extends StateNotifier<LogListState> {
     if (refresh) _page = 1;
     state = state.copyWith(loading: true, error: null);
     try {
-      final response = await DioClient.instance.dio.get(
+      final response = await _dio.get(
         ApiEndpoints.logs,
         queryParameters: _currentQueryParams(page: _page),
       );
@@ -140,12 +147,12 @@ class LogListNotifier extends StateNotifier<LogListState> {
   }
 
   Future<void> deleteLog(int id) async {
-    await DioClient.instance.dio.delete(ApiEndpoints.logById(id));
+    await _dio.delete(ApiEndpoints.logById(id));
     await load(refresh: true);
   }
 
   Future<void> batchDelete(List<int> ids) async {
-    await DioClient.instance.dio.post(
+    await _dio.post(
       ApiEndpoints.logsBatchDelete,
       data: {'ids': ids},
     );
@@ -160,7 +167,7 @@ class LogListNotifier extends StateNotifier<LogListState> {
     var total = 0;
 
     do {
-      final response = await DioClient.instance.dio.get(
+      final response = await _dio.get(
         ApiEndpoints.logs,
         queryParameters: _currentQueryParams(page: page, pageSize: pageSize),
       );
@@ -182,7 +189,7 @@ class LogListNotifier extends StateNotifier<LogListState> {
       return 0;
     }
 
-    await DioClient.instance.dio.post(
+    await _dio.post(
       ApiEndpoints.logsBatchDelete,
       data: {'ids': ids},
     );
@@ -191,7 +198,7 @@ class LogListNotifier extends StateNotifier<LogListState> {
   }
 
   Future<void> clean({int? days}) async {
-    await DioClient.instance.dio.delete(
+    await _dio.delete(
       ApiEndpoints.logsClean,
       queryParameters: days == null ? null : {'days': days},
     );

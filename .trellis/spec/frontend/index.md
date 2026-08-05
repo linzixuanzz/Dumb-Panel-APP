@@ -77,10 +77,14 @@ validateStatus: (status) => status != null && status < 500,
 **任何新增/修改调用点都必须自行确认 catch 兜得住**。详见
 [hook-guidelines.md](./hook-guidelines.md#网络层现状与陷阱)。
 
-### 3. 测试基本等于没有
+### 3. 测试只覆盖「改错了用户会丢数据」的地方
 
-`test/` 下只有 `test/widget_test.dart`，且用例体是空的（`test/widget_test.dart:4-6` 只有一句 `// TODO`）。
-`flutter test` 通过不代表任何东西被验证过。详见
+第 0 期 R5 之前 `test/` 下只有一个用例体是 `// TODO` 的空壳，全绿等于零信息。
+现在有 4 个测试文件，只保护三条线：**401 续期链路**、**通知渠道配置不丢未知字段**、
+**列表 error 语义**。其余绝大部分代码仍然没有任何覆盖，
+改动时不要把「`flutter test` 通过」当成安全。
+
+没有引入任何测试依赖，假 HTTP 是手写的 `HttpClientAdapter`。详见
 [quality-guidelines.md](./quality-guidelines.md#测试现状)。
 
 ---

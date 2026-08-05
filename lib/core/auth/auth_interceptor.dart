@@ -49,7 +49,26 @@ class AuthInterceptor extends Interceptor {
 
   final void Function()? onAuthFailed;
 
-  AuthInterceptor({this.onAuthFailed});
+  /// **仅供测试注入**，生产路径一律不传。
+  ///
+  /// 不在构造时把 `DioClient.instance.dio` 存下来，是因为单例的 baseUrl 会随
+  /// 切换面板被改写；两个 getter 都保持「用的时候再取」，注入前后行为一致。
+  final Dio? _injectedDio;
+  final Dio Function()? _injectedRawDioFactory;
+
+  AuthInterceptor({
+    this.onAuthFailed,
+    Dio? dio,
+    Dio Function()? rawDioFactory,
+  }) : _injectedDio = dio,
+       _injectedRawDioFactory = rawDioFactory;
+
+  /// 重发用：必须是挂着本拦截器的那个 dio，重发结果才会再走一遍完整链路。
+  Dio get _dio => _injectedDio ?? DioClient.instance.dio;
+
+  /// 刷新用：不挂拦截器，避免「刷新失败 → 触发续期 → 再刷新」的递归。
+  Dio get _rawDio =>
+      _injectedRawDioFactory?.call() ?? DioClient.instance.rawDio;
 
   @override
   void onRequest(
@@ -96,7 +115,7 @@ class AuthInterceptor extends Interceptor {
 
     try {
       // rawDio 不挂拦截器，刷新失败不会递归回到这里。
-      final response = await DioClient.instance.rawDio.post(
+      final response = await _rawDio.post(
         ApiEndpoints.refresh,
         options: Options(headers: {'Authorization': 'Bearer $refreshToken'}),
       );
@@ -135,7 +154,7 @@ class AuthInterceptor extends Interceptor {
   ) {
     options.headers['Authorization'] = 'Bearer $accessToken';
     options.extra[_kRetriedAfterRefresh] = true;
-    return DioClient.instance.dio.fetch(options);
+    return _dio.fetch(options);
   }
 
   /// 重发续期期间积压的请求。用 while 而不是 for-in：

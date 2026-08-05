@@ -58,24 +58,51 @@ rootMessenger.showSnackBar(const SnackBar(content: Text('已保存')));
 
 ```
 test/
-└── widget_test.dart      (7 行)
+├── support/
+│   └── fake_http_adapter.dart          手写假 HttpClientAdapter + jsonResponse + dioWithAdapter
+├── core/auth/auth_interceptor_test.dart 401 续期链路（续期成功/失败/防死锁/并发排队/noRefreshPaths）
+├── features/
+│   ├── list_error_state_test.dart      TaskListState / LogListState 的 error 语义与清空
+│   └── notifications/channel_config_test.dart  通知渠道配置合并（未知字段不丢）
+└── widget_test.dart                     空态 vs 错误态的渲染差异
 ```
+
+> 历史：`widget_test.dart` 原来只有一个用例体是 `// TODO` 的空壳，
+> 「`flutter test` 1 个用例通过」是**假绿**。第 0 期 R5 已经替换掉。
+
+`dev_dependencies` 仍然只有 `flutter_test` + `flutter_lints` + `flutter_launcher_icons`
+（`pubspec.yaml:43-47`），**没有** `mocktail` / `mockito` / `http_mock_adapter` / `integration_test`，
+第 0 期补测试时也没有新增。
+
+### 怎么在不加依赖的情况下假造 HTTP
+
+dio 允许整体替换 `dio.httpClientAdapter`，接口只有 `fetch` + `close` 两个方法，
+手写一个即可（`test/support/fake_http_adapter.dart`）。这样拦截器、transformer、
+`validateStatus`、`DioException` 全是真的，只有网络是假的：
 
 ```dart
-// test/widget_test.dart 全文
-import 'package:flutter_test/flutter_test.dart';
-
-void main() {
-  testWidgets('App smoke test', (WidgetTester tester) async {
-    // TODO: Add widget tests
-  });
-}
+final dio = dioWithAdapter(FakeHttpAdapter(
+  (options) => jsonResponse({'error': 'token 已过期'}, status: 401),
+));
 ```
 
-**这个用例体是空的。`flutter test` 全绿不代表任何代码被验证过。**
+`ResponseBody` 必须带 `content-type: application/json`，否则 dio 的 transformer 不解码，
+`response.data` 会是一整串未解析的字符串。
 
-`dev_dependencies` 只有 `flutter_test` + `flutter_lints` + `flutter_launcher_icons`
-（`pubspec.yaml:43-47`），没有 `mocktail` / `mockito` / `http_mock_adapter` / `integration_test`。
+安全存储用 `FlutterSecureStorage.setMockInitialValues({...})`
+（flutter_secure_storage 自带的内存实现，不需要 mock 平台通道）。
+
+### 可测性改造：Notifier 的可选 `Dio` 参数
+
+`TaskNotifier` / `LogListNotifier` / `AuthInterceptor` 都加了**仅供测试**的可选注入参数：
+
+```dart
+TaskNotifier({Dio? dio}) : _injectedDio = dio, super(const TaskListState());
+Dio get _dio => _injectedDio ?? DioClient.instance.dio;
+```
+
+**不要在构造时就把 `DioClient.instance.dio` 存进字段**：单例的 baseUrl 会随切换面板
+被改写，存下来会拿到旧地址。要给别的 Notifier 补测试时照抄这个形状。
 
 ### 新增功能至少要覆盖什么
 
@@ -89,9 +116,9 @@ void main() {
 | 纯 UI 调整 | 不强制 |
 | 新增 `shared/utils/` 函数 | 建议补纯函数单测（这类最容易测，目前一个都没有） |
 
-**测试的现实障碍**：除 `auth` 外的 Notifier 都直接使用 `DioClient.instance.dio` 单例
-（`task_provider.dart:61`、`env_list_page.dart:66` …），无法注入假 dio。
-若要给某个 provider 补测试，需要先给它的 Notifier 加可选的 `Dio` 构造参数。
+**测试的现实障碍**：除 `TaskNotifier` / `LogListNotifier` 外，其余 Notifier 仍然直接使用
+`DioClient.instance.dio` 单例（`env_list_page.dart`、`dep_list_page.dart` …），无法注入假 dio。
+若要给它们补测试，先按上面的形状加可选 `Dio` 构造参数。
 
 ---
 

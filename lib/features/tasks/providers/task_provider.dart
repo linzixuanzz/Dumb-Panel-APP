@@ -53,12 +53,18 @@ class TaskListState {
 }
 
 class TaskNotifier extends StateNotifier<TaskListState> {
-  TaskNotifier() : super(const TaskListState());
+  /// [dio] **仅供测试注入**，生产路径不传，仍然走 `DioClient` 单例。
+  /// 单例的 baseUrl 会随切换面板被改写，所以这里不在构造时把它存下来。
+  TaskNotifier({Dio? dio}) : _injectedDio = dio, super(const TaskListState());
+
+  final Dio? _injectedDio;
+
+  Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 
   Future<void> load({bool refresh = false}) async {
     state = state.copyWith(loading: true, error: null);
     try {
-      final dio = DioClient.instance.dio;
+      final dio = _dio;
       final queryParams = <String, dynamic>{'all': 1};
       if (state.keyword.isNotEmpty) {
         queryParams['keyword'] = state.keyword;
@@ -107,32 +113,32 @@ class TaskNotifier extends StateNotifier<TaskListState> {
   }
 
   Future<void> runTask(int id) async {
-    await DioClient.instance.dio.put(ApiEndpoints.taskRun(id));
+    await _dio.put(ApiEndpoints.taskRun(id));
     await load(refresh: true);
   }
 
   Future<void> stopTask(int id) async {
-    await DioClient.instance.dio.put(ApiEndpoints.taskStop(id));
+    await _dio.put(ApiEndpoints.taskStop(id));
     await load(refresh: true);
   }
 
   Future<void> enableTask(int id) async {
-    await DioClient.instance.dio.put(ApiEndpoints.taskEnable(id));
+    await _dio.put(ApiEndpoints.taskEnable(id));
     await load(refresh: true);
   }
 
   Future<void> disableTask(int id) async {
-    await DioClient.instance.dio.put(ApiEndpoints.taskDisable(id));
+    await _dio.put(ApiEndpoints.taskDisable(id));
     await load(refresh: true);
   }
 
   Future<void> deleteTask(int id) async {
-    await DioClient.instance.dio.delete(ApiEndpoints.taskById(id));
+    await _dio.delete(ApiEndpoints.taskById(id));
     await load(refresh: true);
   }
 
   Future<void> batchRun(List<int> ids) async {
-    await DioClient.instance.dio.post(
+    await _dio.post(
       ApiEndpoints.tasksBatchRun,
       // 面板批量任务接口使用 task_ids 字段，不能复用环境变量的 ids 字段。
       data: {'task_ids': ids},
@@ -141,7 +147,7 @@ class TaskNotifier extends StateNotifier<TaskListState> {
   }
 
   Future<void> batchEnable(List<int> ids) async {
-    await DioClient.instance.dio.put(
+    await _dio.put(
       ApiEndpoints.tasksBatchEnable,
       // 面板批量任务接口使用 task_ids 字段，保证与 Web 端请求保持一致。
       data: {'task_ids': ids},
@@ -150,7 +156,7 @@ class TaskNotifier extends StateNotifier<TaskListState> {
   }
 
   Future<void> batchDisable(List<int> ids) async {
-    await DioClient.instance.dio.put(
+    await _dio.put(
       ApiEndpoints.tasksBatchDisable,
       // 面板批量任务接口使用 task_ids 字段，避免后端提示“请求参数错误”。
       data: {'task_ids': ids},
@@ -159,7 +165,7 @@ class TaskNotifier extends StateNotifier<TaskListState> {
   }
 
   Future<void> batchDelete(List<int> ids) async {
-    await DioClient.instance.dio.delete(
+    await _dio.delete(
       ApiEndpoints.tasksBatchDelete,
       // DELETE 请求的 body 也需要传 task_ids，和 Web 端保持一致。
       data: {'task_ids': ids},
@@ -171,7 +177,7 @@ class TaskNotifier extends StateNotifier<TaskListState> {
     // 后端当前没有独立的任务排序接口，但任务更新接口允许写入 sort_order。
     // 这里按当前拖拽后的列表顺序写入 10、20、30...，后续插入任务时仍有间隔。
     for (var index = 0; index < tasks.length; index++) {
-      await DioClient.instance.dio.put(
+      await _dio.put(
         ApiEndpoints.taskById(tasks[index].id),
         data: {'sort_order': (index + 1) * 10},
       );
@@ -191,7 +197,7 @@ class TaskNotifier extends StateNotifier<TaskListState> {
 
   Future<TaskLog?> fetchLatestLog(int id) async {
     try {
-      final response = await DioClient.instance.dio.get(
+      final response = await _dio.get(
         ApiEndpoints.taskLatestLog(id),
       );
       final data = extractData(response.data);
@@ -211,22 +217,22 @@ class TaskNotifier extends StateNotifier<TaskListState> {
   }
 
   Future<void> pinTask(int id) async {
-    await DioClient.instance.dio.put(ApiEndpoints.taskPin(id));
+    await _dio.put(ApiEndpoints.taskPin(id));
     await load(refresh: true);
   }
 
   Future<void> unpinTask(int id) async {
-    await DioClient.instance.dio.put(ApiEndpoints.taskUnpin(id));
+    await _dio.put(ApiEndpoints.taskUnpin(id));
     await load(refresh: true);
   }
 
   Future<void> copyTask(int id) async {
-    await DioClient.instance.dio.post(ApiEndpoints.taskCopy(id));
+    await _dio.post(ApiEndpoints.taskCopy(id));
     await load(refresh: true);
   }
 
   Future<void> updateTaskLabels(int id, List<String> labels) async {
-    await DioClient.instance.dio.put(
+    await _dio.put(
       ApiEndpoints.taskById(id),
       data: {'labels': labels},
     );

@@ -1,0 +1,153 @@
+import 'dart:convert';
+
+import 'package:daidai_app/features/notifications/utils/channel_config.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+/// 通知渠道「读取 → 修改 → 回写」的回归保护。
+///
+/// 背景：APP 的字段表（notification_list_page.dart 的 `_channelFieldMap`）是本地写死的，
+/// 面板支持而表里没有的键（telegram proxy、wecom 图文卡片参数…）一旦被覆盖掉，
+/// 用户在 Web 上配好的东西就没了，而且**在 APP 里完全看不出来**。
+void main() {
+  group('buildChannelConfigFromFields', () {
+    test('APP 字段表里没有的键（telegram proxy）保存后仍在', () {
+      final existing = <String, dynamic>{
+        'token': '123:ABC',
+        'chat_id': '-100123',
+        // 面板支持、APP 字段表里没有的键。
+        'proxy': 'socks5://127.0.0.1:1080',
+        'parse_mode': 'MarkdownV2',
+      };
+
+      final result = buildChannelConfigFromFields(
+        existingConfig: existing,
+        keepExistingConfig: true,
+        fieldValues: const {
+          'token': '123:ABC',
+          'chat_id': '-100999',
+          'api_host': '',
+        },
+      );
+
+      expect(result['proxy'], 'socks5://127.0.0.1:1080');
+      expect(result['parse_mode'], 'MarkdownV2');
+      expect(result['chat_id'], '-100999', reason: '表单改过的字段要生效');
+    });
+
+    test('表单里被清空的字段视为删除，不退回旧值', () {
+      final result = buildChannelConfigFromFields(
+        existingConfig: const {'webhook': 'https://old', 'secret': 'SEC123'},
+        keepExistingConfig: true,
+        fieldValues: const {'webhook': 'https://new', 'secret': ''},
+      );
+
+      expect(result['webhook'], 'https://new');
+      expect(result.containsKey('secret'), isFalse);
+    });
+
+    test('切换渠道类型后不把旧类型的配置带回去', () {
+      final result = buildChannelConfigFromFields(
+        existingConfig: const {
+          'token': '123:ABC',
+          'proxy': 'socks5://127.0.0.1:1080',
+        },
+        // 用户在下拉里把 telegram 换成了 bark。
+        keepExistingConfig: false,
+        fieldValues: const {'key': 'device-key'},
+      );
+
+      expect(result, {'key': 'device-key'});
+      expect(result.containsKey('proxy'), isFalse);
+      expect(result.containsKey('token'), isFalse);
+    });
+
+    test('email 的 smtp_ssl 开关写进 config；非 email 不写', () {
+      final withSsl = buildChannelConfigFromFields(
+        existingConfig: const {'smtp_host': 'smtp.qq.com'},
+        keepExistingConfig: true,
+        fieldValues: const {'smtp_host': 'smtp.qq.com'},
+        smtpSsl: true,
+      );
+      expect(withSsl['smtp_ssl'], true);
+
+      final withoutSsl = buildChannelConfigFromFields(
+        existingConfig: const {'url': 'https://example.com'},
+        keepExistingConfig: true,
+        fieldValues: const {'url': 'https://example.com'},
+      );
+      expect(withoutSsl.containsKey('smtp_ssl'), isFalse);
+    });
+
+    test('不修改传入的 existingConfig', () {
+      final existing = <String, dynamic>{'token': 'a', 'proxy': 'p'};
+      buildChannelConfigFromFields(
+        existingConfig: existing,
+        keepExistingConfig: true,
+        fieldValues: const {'token': 'b'},
+      );
+      expect(existing['token'], 'a');
+    });
+  });
+
+  group('custom 渠道的 JSON 编辑框', () {
+    test('打开已有渠道 → 直接保存 → 配置不被清空', () {
+      final existing = <String, dynamic>{
+        'url': 'https://example.com/hook',
+        'method': 'POST',
+        'headers': {'X-Token': 'abc'},
+      };
+
+      // 打开弹窗：编辑框回填服务端已有配置。
+      final editorText = buildRawConfigEditorText(
+        existingConfig: existing,
+        keepExistingConfig: true,
+      );
+      expect(editorText, isNotEmpty, reason: '初值为空 = 保存时用 {} 覆盖，整份配置没了');
+
+      // 用户一个字都没改就点保存。
+      final saved = parseChannelConfig(
+        editorText.isEmpty ? '{}' : editorText,
+      );
+
+      expect(saved, isNotNull);
+      expect(saved, existing);
+    });
+
+    test('切换到 custom 时编辑框是空的，不带旧类型的配置', () {
+      final editorText = buildRawConfigEditorText(
+        existingConfig: const {'token': '123:ABC'},
+        keepExistingConfig: false,
+      );
+      expect(editorText, isEmpty);
+    });
+
+    test('新建渠道时编辑框是空的', () {
+      final editorText = buildRawConfigEditorText(
+        existingConfig: const {},
+        keepExistingConfig: true,
+      );
+      expect(editorText, isEmpty);
+    });
+
+    test('JSON 写错返回 null，调用方必须提示而不是退化成 {}', () {
+      expect(parseChannelConfig('{"a": '), isNull);
+      expect(parseChannelConfig('[1, 2]'), isNull, reason: '顶层不是对象也不合法');
+      expect(parseChannelConfig(''), isEmpty);
+      expect(parseChannelConfig('{"a": 1}'), {'a': 1});
+    });
+
+    test('回填的文本是合法 JSON，能被原样解析回去', () {
+      final existing = <String, dynamic>{
+        'nested': {
+          'list': [1, 2, 3],
+        },
+        'flag': true,
+      };
+      final editorText = buildRawConfigEditorText(
+        existingConfig: existing,
+        keepExistingConfig: true,
+      );
+      expect(jsonDecode(editorText), existing);
+    });
+  });
+}

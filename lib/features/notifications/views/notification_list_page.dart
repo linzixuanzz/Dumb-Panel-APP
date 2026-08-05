@@ -9,6 +9,7 @@ import '../../../core/network/dio_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/models/notify_channel.dart';
 import '../../../shared/utils/api_utils.dart';
+import '../utils/channel_config.dart';
 
 final notificationListProvider =
     StateNotifierProvider<NotificationListNotifier, NotificationListState>((
@@ -649,13 +650,14 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
     TextEditingController getFieldController(String key) {
       return fieldControllers.putIfAbsent(key, () {
         if (key == _rawConfigFieldKey) {
-          // 这个编辑框原来永远是空的（existingConfig 里不存在 __raw_json__ 这个键），
-          // 于是「打开 custom 渠道 → 直接保存」= 用 {} 覆盖，整份配置被清空。
-          // 这里回填服务端已有配置，用户看到什么就保存什么。
-          final base = keepsExistingConfig() && existingConfig.isNotEmpty
-              ? const JsonEncoder.withIndent('  ').convert(existingConfig)
-              : '';
-          return TextEditingController(text: base);
+          // 回填逻辑与「打开 → 直接保存不清空配置」的回归用例都在
+          // features/notifications/utils/channel_config.dart。
+          return TextEditingController(
+            text: buildRawConfigEditorText(
+              existingConfig: existingConfig,
+              keepExistingConfig: keepsExistingConfig(),
+            ),
+          );
         }
         return TextEditingController(
           text: existingConfig[key]?.toString() ?? '',
@@ -779,32 +781,24 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
 
                         Map<String, dynamic> configMap;
                         if (fields.isNotEmpty) {
-                          // 以服务端返回的原始 config 为基底，只覆盖表单里出现的键。
-                          // 原来这里是从 {} 起手再整串 jsonEncode 覆盖，面板支持而
-                          // APP 字段表里没有的键（telegram proxy、wecom 图文卡片参数等）
-                          // 一经 APP 编辑保存就被清空。
-                          // 做法与 open_api_page.dart 保留未知 scope 的思路一致。
-                          configMap = keepsExistingConfig()
-                              ? Map<String, dynamic>.from(existingConfig)
-                              : <String, dynamic>{};
-                          for (final f in fields) {
-                            final val = getFieldController(f.key).text.trim();
-                            // 表单里清空某个字段 = 明确要求删除它，
-                            // 不能退回去用 existingConfig 里的旧值。
-                            if (val.isEmpty) {
-                              configMap.remove(f.key);
-                            } else {
-                              configMap[f.key] = val;
-                            }
-                          }
-                          if (selectedType == 'email') {
-                            configMap['smtp_ssl'] = smtpSsl;
-                          }
+                          // 合并规则（保留未知字段）与回归用例都在
+                          // features/notifications/utils/channel_config.dart。
+                          configMap = buildChannelConfigFromFields(
+                            existingConfig: existingConfig,
+                            keepExistingConfig: keepsExistingConfig(),
+                            fieldValues: {
+                              for (final f in fields)
+                                f.key: getFieldController(f.key).text.trim(),
+                            },
+                            smtpSsl: selectedType == 'email' ? smtpSsl : null,
+                          );
                         } else {
                           final raw = getFieldController(
                             _rawConfigFieldKey,
                           ).text.trim();
-                          final parsed = _parseConfig(raw.isEmpty ? '{}' : raw);
+                          final parsed = parseChannelConfig(
+                            raw.isEmpty ? '{}' : raw,
+                          );
                           if (parsed == null) {
                             // JSON 写错时原来会静默退化成 {}，等于把整份配置清空。
                             messenger.showSnackBar(
@@ -1015,25 +1009,6 @@ String _typeName(List<NotificationTypeOption> types, String type) {
     }
   }
   return type;
-}
-
-Map<String, dynamic>? _parseConfig(String raw) {
-  final text = raw.trim();
-  if (text.isEmpty) {
-    return <String, dynamic>{};
-  }
-
-  try {
-    final decoded = jsonDecode(text);
-    if (decoded is Map<String, dynamic>) {
-      return decoded;
-    }
-    if (decoded is Map) {
-      return decoded.map((key, value) => MapEntry(key.toString(), value));
-    }
-  } catch (_) {}
-
-  return null;
 }
 
 bool _configBool(dynamic value) {

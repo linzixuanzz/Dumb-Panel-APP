@@ -99,6 +99,10 @@ error: error,                    // 不是 error ?? this.error
 都会把 error 清空**。这是刻意的（每次新请求自动清掉上次的错误），但很容易被误改成 `error ?? this.error`。
 `AuthState`（`auth_provider.dart:34`）则相反，用哨兵保留。**两种语义在仓库里并存。**
 
+> 这条语义已经被 `test/features/list_error_state_test.dart` 锁住：
+> 改成 `error ?? this.error` 会让 `TaskListState` / `LogListState` 两组用例直接变红。
+> 想改语义就得同时改用例，不能「顺手修正」。
+
 ---
 
 ## 加载与错误：`loading: bool` + `error: String?`，**没有** `AsyncValue`

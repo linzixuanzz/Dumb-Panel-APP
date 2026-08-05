@@ -71,7 +71,14 @@ features/
 | `views/` | **全部 16 个** | 唯一稳定的约定 |
 | `providers/` | 仅 3 个：`tasks`、`dashboard`、`app_lock` | 其余 13 个把 provider 写在 view 文件顶部 |
 | `widgets/` | 仅 3 个：`dashboard`、`app_lock`、`login` | 其余把私有子组件写在同一个 view 文件里 |
+| `utils/` | 仅 1 个：`notifications` | `channel_config.dart`：从弹窗闭包里抽出来的纯数据变换，**为了可测** |
 | `models/` | **0 个** | feature 私有模型要么在 `shared/models/`，要么是 view 文件里的私有 class |
+
+> `features/notifications/utils/channel_config.dart` 是第 0 期 R5 抽的：
+> 「读取-修改-回写」的合并规则原来写在 `showModalBottomSheet` 的闭包里，
+> 不起 UI 就没法断言，而它恰恰是**改错了用户会丢配置**的地方。
+> 以后遇到同类情况（纯数据变换被 UI 闭包裹住），照这个做法抽到 feature 的 `utils/`，
+> **只搬不改**，行为变更要单独一次改动。
 
 **两种并存写法**：
 
