@@ -1,162 +1,171 @@
-# Cross-Layer Thinking Guide
+# 跨层思考清单
 
-> **Purpose**: Think through data flow across layers before implementing.
-
----
-
-## The Problem
-
-**Most bugs happen at layer boundaries**, not within layers.
-
-Common cross-layer bugs:
-- API returns format A, frontend expects format B
-- Database stores X, service transforms to Y, but loses data
-- Multiple layers implement the same logic differently
+> **用途**：动手前想清楚数据怎么在层与层之间流动。
 
 ---
 
-## Before Implementing Cross-Layer Features
+## 问题
 
-### Step 1: Map the Data Flow
+**多数 bug 发生在层的边界上，不在层的内部。**
 
-Draw out how data moves:
+本仓库的层：
 
 ```
-Source → Transform → Store → Retrieve → Transform → Display
+面板 HTTP API
+  ↓  ApiEndpoints（路径常量）
+dio / SseClient（传输，含 validateStatus + AuthInterceptor）
+  ↓  api_utils（extractData / extractPaginated / extractErrorMessage）
+Model.fromJson（防御式解析）
+  ↓
+StateNotifier → XxxState（loading / error / 业务字段）
+  ↓  ref.watch / ref.read
+Widget（SnackBar / 空状态 / 列表）
 ```
 
-For each arrow, ask:
-- What format is the data in?
-- What could go wrong?
-- Who is responsible for validation?
+回写方向：
 
-### Step 2: Identify Boundaries
-
-| Boundary | Common Issues |
-|----------|---------------|
-| API ↔ Service | Type mismatches, missing fields |
-| Service ↔ Database | Format conversions, null handling |
-| Backend ↔ Frontend | Serialization, date formats |
-| Component ↔ Component | Props shape changes |
-
-### Step 3: Define Contracts
-
-For each boundary:
-- What is the exact input format?
-- What is the exact output format?
-- What errors can occur?
+```
+Widget 表单 → Notifier 方法 → Model.toJson 或裸 Map → dio → 面板
+```
 
 ---
 
-## Common Cross-Layer Mistakes
+## 动手之前
 
-### Mistake 1: Implicit Format Assumptions
+### 第一步：画出数据流
 
-**Bad**: Assuming date format without checking
+对每一个箭头问：
 
-**Good**: Explicit format conversion at boundaries
+- 这里的数据是什么形状？
+- 可能出什么错？
+- 谁负责校验？
 
-### Mistake 2: Scattered Validation
+### 第二步：识别边界
 
-**Bad**: Validating the same thing in multiple layers
+| 边界 | 本仓库常见问题 |
+|---|---|
+| 面板 ↔ dio | **4xx 不抛异常**（`validateStatus: status < 500`），错误体被当成功响应解析 |
+| dio ↔ api_utils | 响应有 3 种包裹形态：`{data:[...],total:N}` / `{data:{data:[...],total:N}}` / 裸 `[...]` |
+| api_utils ↔ Model | 字段可能是 `List` 也可能是逗号串（`task.dart:134-136` 的 `labels`） |
+| Model ↔ State | `toJson` **不是** `fromJson` 的镜像，是提交体，会省略只读字段 |
+| State ↔ Widget | `error` 字段被赋值但 UI 不读（11 个 State 里 4 个有 error，只有 1 处被消费） |
+| Widget → 回写 | **「读取-修改-回写」丢字段**（见下方专章） |
 
-**Good**: Validate once at the entry point
+### 第三步：定义契约
 
-### Mistake 3: Leaky Abstractions
-
-**Bad**: Component knows about database schema
-
-**Good**: Each layer only knows its neighbors
-
----
-
-## Checklist for Cross-Layer Features
-
-Before implementation:
-- [ ] Mapped the complete data flow
-- [ ] Identified all layer boundaries
-- [ ] Defined format at each boundary
-- [ ] Decided where validation happens
-
-After implementation:
-- [ ] Tested with edge cases (null, empty, invalid)
-- [ ] Verified error handling at each boundary
-- [ ] Checked data survives round-trip
+对每个边界写清楚：输入格式、输出格式、可能的错误。
 
 ---
 
-## Cross-Platform Template Consistency
+## 本仓库真实的跨层坑
 
-In Trellis, command templates (e.g., `record-session.md`) exist in **multiple platforms** with identical or near-identical content. This is a cross-layer boundary.
+### 坑 1：`validateStatus` —— 一行配置，全层失效
 
-### Checklist: After Modifying Any Command Template
+`lib/core/network/dio_client.dart:16`：
 
-- [ ] Find all platforms with the same command: `find src/templates/*/commands/trellis/ -name "<command>.*"`
-- [ ] Update all platform copies (Markdown `.md` and TOML `.toml`)
-- [ ] For Gemini TOML: adapt line continuations (`\\` vs `\`) and triple-quoted strings
-- [ ] Run `/trellis:check-cross-layer` to verify nothing was missed
+```dart
+validateStatus: (status) => status != null && status < 500,
+```
 
-**Real-world example**: Updated `record-session.md` in Claude to use `--mode record`, but forgot iFlow, Kilo, OpenCode, and Gemini — caught by cross-layer check.
+4xx 被判为成功，波及**每一层**：
 
----
+| 层 | 失效表现 |
+|---|---|
+| 拦截器 | `AuthInterceptor.onError` 永不触发 → 70 行续期 + 排队重发是死代码（`:46-114`） |
+| 解析层 | `extractPaginated` 从错误体里解出空列表 |
+| provider | `catch` 兜不到 4xx，`error` 保持 null |
+| UI | 显示「暂无数据」，用户以为面板是空的 |
+| 设置页 | 400 也弹「配置已保存」（`system_settings_page.dart:496-529`） |
 
-## Generated Runtime Template Upgrade Consistency
+**局部绕过存在但不成体系**：`auth_service.dart:68-84` 登录接口自己判 `statusCode >= 400`
+手动抛 `DioException`；`sse_client.dart:61` 单独处理 401（SSE 不经 dio）。
 
-Some generated files are both documentation and runtime input. In Trellis,
-`.trellis/workflow.md` is parsed by `get_context.py`, `workflow_phase.py`,
-SessionStart filters, and per-turn hooks. Template changes must be validated
-against both fresh init and upgrade paths.
+> **改这一行之前**：`rg "DioClient.instance.dio" lib` 找出所有调用点，逐个确认 catch 兜得住。
+> 这不是抽查能过关的事。
 
-### Checklist: After Modifying A Runtime-Parsed Template
+### 坑 2：「读取 → 修改 → 回写」丢字段
 
-- [ ] Identify every runtime parser that reads the template, not just the file
-  writer that installs it
-- [ ] Check whether relevant syntax lives outside obvious managed regions
-  such as tag blocks
-- [ ] Verify fresh `init` output and a versioned `update` scenario that writes
-  the older `.trellis/.version`
-- [ ] Add an upgrade regression using an older pristine template fixture, then
-  assert the installed file reaches the current packaged shape
-- [ ] Update the backend spec that owns the runtime contract
+**症状**：用户在 Web 端配的参数，经 APP 编辑保存后消失。
 
-**Real-world example**: Codex inline mode changed workflow platform markers from
-`[Codex]` / `[Kilo, Antigravity, Windsurf]` to `[codex-sub-agent]` /
-`[codex-inline, Kilo, Antigravity, Windsurf]`. Fresh init was correct, but
-`trellis update` only merged `[workflow-state:*]` blocks and preserved stale
-markers outside those blocks. Result: upgraded projects got new hook scripts
-but old workflow routing, so `get_context.py --mode phase --platform codex`
-could return empty Phase 2.1 detail.
+**成因**（`notification_list_page.dart:735-757`）：编辑时 `configMap` 从 `{}` 开始，
+只填客户端写死的 `_channelFieldMap`（229 行常量表，`:361`）里有的键，然后整串
+`jsonEncode(configMap)` 覆盖回服务端。面板支持而 APP 表里没有的键（telegram proxy、
+wecom 图文卡片参数等）**保存即丢失**。
 
----
+**正确对照**（同仓库内）：`open_api_page.dart:671` 用 `_parseScopes(scopes).toSet()`
+完整保留未知 scope，保存时原样带回。
 
-## Mode-Detection Probe Checklist
+**清单**：
 
-When a CLI auto-detects a mode by probing a remote resource (e.g., checking if `index.json` exists to decide marketplace vs direct download):
+- [ ] 回写的基底是**服务端返回的原始对象**，不是新建的空对象
+- [ ] 客户端字段表只用于**渲染表单**，不得用于**决定提交哪些键**
+- [ ] 有测试证明：塞一个客户端不认识的键，保存后它还在
 
-### Before implementing:
-- [ ] Probe runs in **ALL** code paths that use the result (interactive, `-y`, `--flag` combos)
-- [ ] 404 vs transient error are distinguished — don't treat both as "not found"
-- [ ] Transient errors **abort or retry**, never silently switch modes
-- [ ] Shared state (caches, prefetched data) is **reset** when context changes (e.g., user switches source)
-- [ ] **Shortcut paths** (e.g., `--template` skipping picker) must have the same error-handling quality as the probed path — check that downstream functions don't call catch-all wrappers
+### 坑 3：一处路径改了，另一处没改
 
-### After implementing:
-- [ ] Trace every path from probe result to the mode-decision branch — no fallthrough
-- [ ] External format contracts (giget URI, raw URLs) are tested or at least documented as comments
-- [ ] Metadata reads consume a complete response or use a streaming parser — never parse a fixed-size prefix as full JSON
-- [ ] When reconstructing a composite identifier from parsed parts, verify **all** fields are included and in the **correct position** (e.g., `provider:repo/path#ref` not `provider:repo#ref/path`)
-- [ ] Verify that **action functions** called after a shortcut don't internally use the old catch-all fetch — they must use the probe-quality variant when error distinction matters
+`ApiEndpoints` 是唯一路径来源，但有 3 处绕过它直接拼字符串：
+`system_settings_page.dart:265 / 349 / 419`。面板改路径时这三处不会被 `rg ApiEndpoints` 找到。
 
-**Real-world example**: Custom registry flow had 8 bugs across 3 review rounds: (1) probe only ran in interactive mode, (2) transient errors fell through to wrong mode, (3) giget URI had `#ref` in wrong position, (4) prefetched templates leaked across source switches, (5) `--template` shortcut bypassed probe but `downloadTemplateById` internally used catch-all `fetchTemplateIndex`, turning timeouts into "Template not found".
+### 坑 4：分页上限的隐式契约
 
-**Real-world example**: Agent-session update hints fetched npm `latest` metadata with `response.read(4096)` and then parsed it as complete JSON. The `@mindfoldhq/trellis` package metadata exceeded 4 KB, so the JSON was truncated, parse failed silently, and the first session injection showed no update hint. Fix: read the complete response before parsing, and add a regression where `version` is followed by an 8 KB metadata tail.
+后端 `page_size` 上限 100，**超限静默退回 20**（不是报错）。
+`env_list_page.dart:67-69` 的注释记录了这次事故（列表只显示 40 行）。
+
+三种分页策略在仓库里并存（一次性 `all=1` / 循环拉完 / 滚动加载更多），
+改任何一处前先确认对应端点的实际上限。
+
+### 坑 5：时间与时区
+
+后端返回 ISO 字符串，`_date()` 用 `DateTime.tryParse` 解析（保留 UTC 标记），
+显示时统一 `formatTimeCn()`（`shared/utils/time_utils.dart:6-17`），内部做 `.toLocal()`。
+**不要在页面里自己 `DateFormat`** —— 该文件的注释就是为了终结「页面里混用 MM-dd」。
 
 ---
 
-## When to Create Flow Documentation
+## 通用错误
 
-Create detailed flow docs when:
-- Feature spans 3+ layers
-- Multiple teams are involved
-- Data format is complex
-- Feature has caused bugs before
+### 错误 1：隐式格式假设
+
+**坏**：假定 `labels` 一定是字符串。
+**好**：`json['labels'] is List ? (...).join(',') : json['labels']?.toString() ?? ''`（`task.dart:134-136`）。
+
+### 错误 2：校验散落在多层
+
+**坏**：模型、provider、widget 各判一次 null。
+**好**：解析层（`fromJson`）负责把类型变干净，上层拿到的就是非空的确定类型。
+
+### 错误 3：抽象泄漏
+
+**坏**：widget 里出现 `response.data['data']['total']`。
+**好**：widget 只碰 State 的字段和 getter。`dynamic` 止步于 `api_utils`。
+
+---
+
+## 跨层改动清单
+
+**实现前**：
+
+- [ ] 画出完整数据流（API → 解析 → State → UI，以及回写方向）
+- [ ] 列出所有边界
+- [ ] 定义每个边界的格式
+- [ ] 决定校验在哪一层做
+
+**实现后**：
+
+- [ ] 用边界情况测过（null、空列表、字段缺失、字段类型不符）
+- [ ] 每个边界的错误处理都验证过
+- [ ] **数据能完整往返**（读出来 → 改一个字段 → 存回去 → 再读，其他字段没变）
+- [ ] 失败路径下用户看到的是原因，不是「暂无数据」也不是假的「保存成功」
+
+---
+
+## 什么时候该单独写流程文档
+
+- 改动跨 3 层以上
+- 数据形状复杂或有多种兼容形态
+- 这块以前出过 bug
+
+本仓库已有的这类文档：
+`.trellis/tasks/08-05-app-v2-phase0-foundation/research/legacy-compatibility-map-v2218-2219.md`
+（记录面板 v2.2.18 / v2.2.19 两次更新各自要求 APP 改哪些地方）。
+面板每次升级都要改 APP —— 这正是第 2 期「通用化适配」要解决的模式。
