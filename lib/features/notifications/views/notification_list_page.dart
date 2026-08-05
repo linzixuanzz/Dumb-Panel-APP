@@ -87,28 +87,18 @@ class NotificationListNotifier extends StateNotifier<NotificationListState> {
     state = state.copyWith(loading: true);
     try {
       final dio = DioClient.instance.dio;
-      final results = await Future.wait([
-        dio.get(ApiEndpoints.notifications),
-        dio.get(ApiEndpoints.notificationTypes),
-      ]);
+      final channelsFuture = dio.get(ApiEndpoints.notifications);
+      // 渠道类型表是辅助数据，本来就有 _fallbackTypes 兜底。收紧 validateStatus 后
+      // 它的 4xx 会让 Future.wait 整体失败，连已经取到的渠道列表都会被丢掉，
+      // 页面反而变成「暂无通知渠道」。所以类型表单独降级，不参与主流程成败。
+      final typesFuture = _fetchTypes();
+      final channelsResponse = await channelsFuture;
+      final types = await typesFuture;
 
-      final paginated = extractPaginated(results[0].data);
+      final paginated = extractPaginated(channelsResponse.data);
       final items = paginated.items
           .map((e) => NotifyChannel.fromJson(e))
           .toList();
-
-      final typeData = extractData(results[1].data);
-      final types = typeData is List
-          ? typeData
-                .whereType<Map>()
-                .map(
-                  (e) => NotificationTypeOption.fromJson(
-                    Map<String, dynamic>.from(e),
-                  ),
-                )
-                .where((option) => option.type.isNotEmpty)
-                .toList()
-          : <NotificationTypeOption>[];
 
       state = state.copyWith(
         items: items,
@@ -120,6 +110,29 @@ class NotificationListNotifier extends StateNotifier<NotificationListState> {
         loading: false,
         types: state.types.isNotEmpty ? state.types : _fallbackTypes,
       );
+    }
+  }
+
+  /// 取渠道类型表。失败不抛，交给 [_fallbackTypes] 兜底。
+  Future<List<NotificationTypeOption>> _fetchTypes() async {
+    try {
+      final response = await DioClient.instance.dio.get(
+        ApiEndpoints.notificationTypes,
+      );
+      final typeData = extractData(response.data);
+      if (typeData is! List) {
+        return const [];
+      }
+      return typeData
+          .whereType<Map>()
+          .map(
+            (e) =>
+                NotificationTypeOption.fromJson(Map<String, dynamic>.from(e)),
+          )
+          .where((option) => option.type.isNotEmpty)
+          .toList();
+    } catch (_) {
+      return const [];
     }
   }
 
@@ -273,9 +286,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                             typeLabel: _typeName(state.types, channel.type),
                             isLight: isLight,
                             onEdit: () => _showChannelDialog(channel: channel),
-                            onToggle: () => ref
-                                .read(notificationListProvider.notifier)
-                                .toggle(channel.id, !channel.enabled),
+                            onToggle: () => _doToggle(channel),
                             onTest: () => _doTest(channel),
                             onDelete: () => _confirmDelete(channel),
                           );
@@ -287,6 +298,23 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
         ),
       ),
     );
+  }
+
+  /// 启用/禁用原来是直接内联调 notifier 的裸 await，没有任何 catch。
+  /// 收紧 validateStatus 后 4xx 会抛异常，必须在这里兜住并提示。
+  Future<void> _doToggle(NotifyChannel channel) async {
+    try {
+      await ref
+          .read(notificationListProvider.notifier)
+          .toggle(channel.id, !channel.enabled);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_extractMessage(error, '修改渠道状态失败'))),
+      );
+    }
   }
 
   Future<void> _doTest(NotifyChannel channel) async {
@@ -588,6 +616,9 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
         ],
       };
 
+  /// 没有字段表的渠道类型（如 custom）走「配置 JSON」编辑框，用这个 key 存控制器。
+  static const String _rawConfigFieldKey = '__raw_json__';
+
   void _showChannelDialog({NotifyChannel? channel}) {
     final messenger = ScaffoldMessenger.of(context);
     final nameController = TextEditingController(text: channel?.name ?? '');
@@ -610,12 +641,26 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
       fieldControllers.clear();
     }
 
+    /// 服务端已有的 config 只有在渠道类型没被改过时才对得上号。
+    /// 用户在下拉里换了类型，旧配置的键就没有意义了，不能再带回服务端。
+    bool keepsExistingConfig() =>
+        channel != null && selectedType == channel.type;
+
     TextEditingController getFieldController(String key) {
-      return fieldControllers.putIfAbsent(
-        key,
-        () =>
-            TextEditingController(text: existingConfig[key]?.toString() ?? ''),
-      );
+      return fieldControllers.putIfAbsent(key, () {
+        if (key == _rawConfigFieldKey) {
+          // 这个编辑框原来永远是空的（existingConfig 里不存在 __raw_json__ 这个键），
+          // 于是「打开 custom 渠道 → 直接保存」= 用 {} 覆盖，整份配置被清空。
+          // 这里回填服务端已有配置，用户看到什么就保存什么。
+          final base = keepsExistingConfig() && existingConfig.isNotEmpty
+              ? const JsonEncoder.withIndent('  ').convert(existingConfig)
+              : '';
+          return TextEditingController(text: base);
+        }
+        return TextEditingController(
+          text: existingConfig[key]?.toString() ?? '',
+        );
+      });
     }
 
     showModalBottomSheet(
@@ -707,7 +752,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                     if (fields.isEmpty) ...[
                       const SizedBox(height: 12),
                       TextField(
-                        controller: getFieldController('__raw_json__'),
+                        controller: getFieldController(_rawConfigFieldKey),
                         minLines: 5,
                         maxLines: 10,
                         decoration: const InputDecoration(
@@ -734,20 +779,40 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
 
                         Map<String, dynamic> configMap;
                         if (fields.isNotEmpty) {
-                          configMap = {};
+                          // 以服务端返回的原始 config 为基底，只覆盖表单里出现的键。
+                          // 原来这里是从 {} 起手再整串 jsonEncode 覆盖，面板支持而
+                          // APP 字段表里没有的键（telegram proxy、wecom 图文卡片参数等）
+                          // 一经 APP 编辑保存就被清空。
+                          // 做法与 open_api_page.dart 保留未知 scope 的思路一致。
+                          configMap = keepsExistingConfig()
+                              ? Map<String, dynamic>.from(existingConfig)
+                              : <String, dynamic>{};
                           for (final f in fields) {
                             final val = getFieldController(f.key).text.trim();
-                            if (val.isNotEmpty) configMap[f.key] = val;
+                            // 表单里清空某个字段 = 明确要求删除它，
+                            // 不能退回去用 existingConfig 里的旧值。
+                            if (val.isEmpty) {
+                              configMap.remove(f.key);
+                            } else {
+                              configMap[f.key] = val;
+                            }
                           }
                           if (selectedType == 'email') {
                             configMap['smtp_ssl'] = smtpSsl;
                           }
                         } else {
                           final raw = getFieldController(
-                            '__raw_json__',
+                            _rawConfigFieldKey,
                           ).text.trim();
-                          configMap =
-                              _parseConfig(raw.isEmpty ? '{}' : raw) ?? {};
+                          final parsed = _parseConfig(raw.isEmpty ? '{}' : raw);
+                          if (parsed == null) {
+                            // JSON 写错时原来会静默退化成 {}，等于把整份配置清空。
+                            messenger.showSnackBar(
+                              const SnackBar(content: Text('配置 JSON 格式不正确')),
+                            );
+                            return;
+                          }
+                          configMap = parsed;
                         }
 
                         final payload = {

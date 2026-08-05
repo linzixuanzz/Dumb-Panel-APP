@@ -24,7 +24,11 @@ void main() async {
     0,
     AuthInterceptor(
       onAuthFailed: () {
-        container.read(authProvider.notifier).setUnauthenticated();
+        // 续期失败 → 置为未登录，GoRouter 的 refreshListenable 会立刻跳登录页；
+        // reason 会在登录页顶部显示，避免用户看到的是一个没有任何解释的登录页。
+        container
+            .read(authProvider.notifier)
+            .setUnauthenticated(reason: '登录已失效，请重新登录');
       },
     ),
   );

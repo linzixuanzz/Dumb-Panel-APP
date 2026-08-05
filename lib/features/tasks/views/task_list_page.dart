@@ -840,6 +840,13 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                           ),
                         ],
                       )
+                    // TaskListState 一直有 error 字段，但从来没有被渲染过：
+                    // 拿不到数据和真的没有任务是两回事，必须先判 error。
+                    : state.error != null && state.tasks.isEmpty
+                    ? ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: [_buildLoadError(state.error!)],
+                      )
                     : state.tasks.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
@@ -879,6 +886,41 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
           const Text(
             '暂无任务',
             style: TextStyle(color: AppColors.slate400, fontSize: 15),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 请求失败时显示原因 + 重试，而不是伪装成「暂无任务」的空态。
+  Widget _buildLoadError(String message) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(32, 100, 32, 0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.cloud_off_outlined,
+            size: 56,
+            color: AppColors.red500.withAlpha(120),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            '任务加载失败',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 13, color: AppColors.slate400),
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: () =>
+                ref.read(taskProvider.notifier).load(refresh: true),
+            icon: const Icon(Icons.refresh, size: 16),
+            label: const Text('重试'),
           ),
         ],
       ),

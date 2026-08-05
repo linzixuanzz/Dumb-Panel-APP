@@ -80,7 +80,10 @@ class TaskNotifier extends StateNotifier<TaskListState> {
 
       state = state.copyWith(tasks: items, total: total, loading: false);
     } catch (e) {
-      state = state.copyWith(loading: false, error: '加载失败');
+      state = state.copyWith(
+        loading: false,
+        error: extractListErrorMessage(e, '加载任务失败'),
+      );
     }
   }
 
@@ -197,6 +200,9 @@ class TaskNotifier extends StateNotifier<TaskListState> {
       }
       return null;
     } on DioException catch (e) {
+      // 这个分支在 validateStatus 收紧前是死代码：404 不抛异常，永远进不来，
+      // 「任务没有日志」是靠 extractData 解析失败碰巧返回 null 蒙对的。
+      // 收紧后 404 才真正走到这里，语义变成显式的。
       if (e.response?.statusCode == 404) {
         return null;
       }

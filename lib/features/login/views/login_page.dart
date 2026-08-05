@@ -95,6 +95,12 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       }
     }
 
+    // 被 AuthInterceptor 踢回登录页时（token 续期失败），把原因显示出来。
+    final sessionError = ref.read(authProvider).error;
+    if (sessionError != null && sessionError.trim().isNotEmpty) {
+      _error = sessionError;
+    }
+
     if (mounted) setState(() {});
 
     if (ref.read(authProvider).status == AuthStatus.authenticated) {

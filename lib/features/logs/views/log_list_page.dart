@@ -23,6 +23,11 @@ class LogListState {
   final String keyword;
   final String taskIdFilter;
   final int? statusFilter;
+
+  /// 加载失败原因。为 null 表示这次请求成功了 —— UI 必须靠它区分
+  /// 「面板里真的一条日志都没有」和「压根没拿到数据」。
+  final String? error;
+
   const LogListState({
     this.logs = const [],
     this.total = 0,
@@ -30,6 +35,7 @@ class LogListState {
     this.keyword = '',
     this.taskIdFilter = '',
     this.statusFilter,
+    this.error,
   });
 
   LogListState copyWith({
@@ -40,6 +46,7 @@ class LogListState {
     String? taskIdFilter,
     int? statusFilter,
     bool resetStatusFilter = false,
+    String? error,
   }) {
     return LogListState(
       logs: logs ?? this.logs,
@@ -50,6 +57,12 @@ class LogListState {
       statusFilter: resetStatusFilter
           ? null
           : statusFilter ?? this.statusFilter,
+      // ⚠️ 这里**故意不写** `error ?? this.error`，与 TaskListState
+      // （task_provider.dart:43）保持同一套语义：不显式传 error 的 copyWith
+      // 一律清空错误，于是每次新请求自动抹掉上一次的失败提示。
+      // 仓库里 AuthState 用哨兵保留旧值，是相反的语义；本 State 明确选前者。
+      // 改成 `??` 会让错误提示一旦出现就再也消不掉。
+      error: error,
     );
   }
 }
@@ -77,7 +90,7 @@ class LogListNotifier extends StateNotifier<LogListState> {
 
   Future<void> load({bool refresh = false}) async {
     if (refresh) _page = 1;
-    state = state.copyWith(loading: true);
+    state = state.copyWith(loading: true, error: null);
     try {
       final response = await DioClient.instance.dio.get(
         ApiEndpoints.logs,
@@ -90,8 +103,13 @@ class LogListNotifier extends StateNotifier<LogListState> {
         total: paginated.total,
         loading: false,
       );
-    } catch (_) {
-      state = state.copyWith(loading: false);
+    } catch (e) {
+      // 原来这里只写 copyWith(loading: false)，错误被完全吞掉，
+      // 页面退化成「暂无日志」，用户分不清是没数据还是拿不到数据。
+      state = state.copyWith(
+        loading: false,
+        error: extractListErrorMessage(e, '加载日志失败'),
+      );
     }
   }
 
@@ -392,6 +410,41 @@ class _LogListPageState extends ConsumerState<LogListPage> {
     }
   }
 
+  /// 请求失败时显示原因 + 重试，而不是伪装成「暂无日志」的空态。
+  Widget _buildLoadError(String message) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(32, 100, 32, 0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.cloud_off_outlined,
+            size: 56,
+            color: AppColors.red500.withAlpha(120),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            '日志加载失败',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 13, color: AppColors.slate400),
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: () =>
+                ref.read(logListProvider.notifier).load(refresh: true),
+            icon: const Icon(Icons.refresh, size: 16),
+            label: const Text('重试'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _handleDelete(TaskLog log) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -626,6 +679,12 @@ class _LogListPageState extends ConsumerState<LogListPage> {
                             ),
                           ),
                         ],
+                      )
+                    // 拿不到数据和真的没有数据是两回事，必须先判 error。
+                    : state.error != null && state.logs.isEmpty
+                    ? ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: [_buildLoadError(state.error!)],
                       )
                     : state.logs.isEmpty
                     ? ListView(

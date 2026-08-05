@@ -27,6 +27,10 @@ class EnvListState {
   final List<String> selectedGroups;
   final String keyword;
 
+  /// 加载失败原因。为 null 表示这次请求成功了 —— UI 必须靠它区分
+  /// 「面板里真的一个变量都没有」和「压根没拿到数据」。
+  final String? error;
+
   const EnvListState({
     this.envs = const [],
     this.total = 0,
@@ -34,6 +38,7 @@ class EnvListState {
     this.groups = const [],
     this.selectedGroups = const [],
     this.keyword = '',
+    this.error,
   });
 
   EnvListState copyWith({
@@ -43,6 +48,7 @@ class EnvListState {
     List<String>? groups,
     Object? selectedGroups = _selectedGroupUnset,
     String? keyword,
+    String? error,
   }) {
     return EnvListState(
       envs: envs ?? this.envs,
@@ -53,6 +59,14 @@ class EnvListState {
           ? this.selectedGroups
           : selectedGroups as List<String>,
       keyword: keyword ?? this.keyword,
+      // ⚠️ 这里**故意不写** `error ?? this.error`。
+      // 语义选的是 TaskListState（task_provider.dart:43）那一套：
+      // 任何不显式传 error 的 copyWith 都会清空错误，于是每次新请求
+      // （load 开头的 copyWith(loading: true)）自动把上次的错误抹掉，
+      // 不需要到处补 error: null。
+      // 仓库里还有相反的一套（AuthState 用 _authFieldUnset 哨兵保留旧值），
+      // 两种语义并存；这个 State 明确选前者，改成 `??` 会让错误提示永远不消失。
+      error: error,
     );
   }
 }
@@ -61,7 +75,7 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
   EnvListNotifier() : super(const EnvListState());
 
   Future<void> load() async {
-    state = state.copyWith(loading: true);
+    state = state.copyWith(loading: true, error: null);
     try {
       final dio = DioClient.instance.dio;
       // The panel backend caps page_size at 100. Requesting a larger value
@@ -79,10 +93,14 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
         ApiEndpoints.envs,
         queryParameters: params,
       );
-      final groupsFuture = dio.get(ApiEndpoints.envsGroups);
-      final results = await Future.wait([firstPageFuture, groupsFuture]);
+      // 分组列表是辅助数据。收紧 validateStatus 后它的 4xx（例如非管理员角色被 403）
+      // 会让 Future.wait 整体失败，把已经取到的变量列表一起打成「加载失败」。
+      // 两个请求仍然并发发出，但分组失败只降级成空分组。
+      final groupsFuture = _fetchGroups();
+      final firstPageResponse = await firstPageFuture;
+      final groups = await groupsFuture;
 
-      final paginated = extractPaginated(results[0].data);
+      final paginated = extractPaginated(firstPageResponse.data);
       final allItems = <Map<String, dynamic>>[...paginated.items];
       var page = 2;
       while (allItems.length < paginated.total) {
@@ -99,24 +117,41 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
       }
 
       final items = allItems.map((e) => EnvVar.fromJson(e)).toList();
-      final groupsRaw = results[1].data;
-      List groupsList;
-      if (groupsRaw is List) {
-        groupsList = groupsRaw;
-      } else if (groupsRaw is Map && groupsRaw['data'] is List) {
-        groupsList = groupsRaw['data'] as List;
-      } else {
-        groupsList = [];
-      }
-      final groups = groupsList.map((e) => e.toString()).toList();
       state = state.copyWith(
         envs: items,
         total: paginated.total > items.length ? paginated.total : items.length,
         loading: false,
         groups: groups,
       );
+    } catch (e) {
+      // 原来这里只写 copyWith(loading: false)，错误被完全吞掉，
+      // 页面退化成「暂无环境变量」，用户分不清是没数据还是拿不到数据。
+      state = state.copyWith(
+        loading: false,
+        error: extractListErrorMessage(e, '加载环境变量失败'),
+      );
+    }
+  }
+
+  /// 取分组列表。失败不抛：分组只用于筛选条，拿不到就当没有分组，
+  /// 不能因此把整个环境变量列表判成加载失败。
+  Future<List<String>> _fetchGroups() async {
+    try {
+      final response = await DioClient.instance.dio.get(
+        ApiEndpoints.envsGroups,
+      );
+      final raw = response.data;
+      final List list;
+      if (raw is List) {
+        list = raw;
+      } else if (raw is Map && raw['data'] is List) {
+        list = raw['data'] as List;
+      } else {
+        list = const [];
+      }
+      return list.map((e) => e.toString()).toList();
     } catch (_) {
-      state = state.copyWith(loading: false);
+      return const [];
     }
   }
 
@@ -712,6 +747,40 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     await ref.read(envListProvider.notifier).load();
   }
 
+  /// 请求失败时显示原因 + 重试，而不是伪装成「暂无环境变量」的空态。
+  Widget _buildLoadError(String message) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(32, 100, 32, 0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.cloud_off_outlined,
+            size: 56,
+            color: AppColors.red500.withAlpha(120),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            '环境变量加载失败',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 13, color: AppColors.slate400),
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: _refresh,
+            icon: const Icon(Icons.refresh, size: 16),
+            label: const Text('重试'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(envListProvider);
@@ -1116,6 +1185,12 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                           ),
                         ],
                       )
+                    // 拿不到数据和真的没有数据是两回事，必须先判 error。
+                    : state.error != null && state.envs.isEmpty
+                    ? ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: [_buildLoadError(state.error!)],
+                      )
                     : state.envs.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
@@ -1345,22 +1420,37 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                     const Spacer(),
                     OutlinedButton.icon(
                       onPressed: () async {
-                        await ref
-                            .read(envListProvider.notifier)
-                            .toggle(env.id, !env.enabled);
-                        if (!mounted) {
-                          return;
-                        }
-                        navigator.pop();
-                        messenger.showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              env.enabled
-                                  ? '已禁用 ${env.name}'
-                                  : '已启用 ${env.name}',
+                        // 收紧 validateStatus 后 4xx 会抛异常，这里必须自己兜，
+                        // 否则失败时既不提示也不关闭弹层，只在控制台留一个未捕获异常。
+                        try {
+                          await ref
+                              .read(envListProvider.notifier)
+                              .toggle(env.id, !env.enabled);
+                          if (!mounted) {
+                            return;
+                          }
+                          navigator.pop();
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                env.enabled
+                                    ? '已禁用 ${env.name}'
+                                    : '已启用 ${env.name}',
+                              ),
                             ),
-                          ),
-                        );
+                          );
+                        } catch (error) {
+                          if (!mounted) {
+                            return;
+                          }
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                extractErrorMessage(error, '修改环境变量状态失败'),
+                              ),
+                            ),
+                          );
+                        }
                       },
                       icon: Icon(
                         env.enabled

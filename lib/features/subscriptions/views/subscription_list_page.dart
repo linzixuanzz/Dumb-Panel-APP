@@ -327,9 +327,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                             onPull: () => _doPull(sub),
                             onStopPull: () => _doStopPull(sub),
                             onLogs: () => _openLogs(sub),
-                            onToggle: () => ref
-                                .read(subscriptionListProvider.notifier)
-                                .toggle(sub.id, !sub.enabled),
+                            onToggle: () => _doToggle(sub),
                             onDelete: () => _confirmDelete(sub),
                             onEdit: () => _showEditDialog(sub),
                           );
@@ -341,6 +339,25 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
         ),
       ),
     );
+  }
+
+  /// 启用/禁用原来是直接内联调 notifier 的裸 await，没有任何 catch。
+  /// 收紧 validateStatus 后 4xx 会抛异常，必须在这里兜住并提示。
+  Future<void> _doToggle(Subscription sub) async {
+    try {
+      await ref
+          .read(subscriptionListProvider.notifier)
+          .toggle(sub.id, !sub.enabled);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_extractRequestErrorMessage(error, '修改订阅状态失败')),
+        ),
+      );
+    }
   }
 
   Future<void> _doPull(Subscription sub) async {

@@ -310,13 +310,24 @@ class _UserListPageState extends ConsumerState<UserListPage> {
       return;
     }
 
-    await ref.read(userListProvider.notifier).update(user.id, role: changed);
-    if (!mounted) {
-      return;
+    // 原来这里既没有 catch，也无条件弹「角色更新成功」：
+    // 面板返回 4xx 时用户会看到一个假的成功提示。收紧 validateStatus 后必须自己兜。
+    try {
+      await ref.read(userListProvider.notifier).update(user.id, role: changed);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('角色更新成功')));
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(extractErrorMessage(error, '角色更新失败'))),
+      );
     }
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('角色更新成功')));
   }
 
   void _showCreateDialog() {

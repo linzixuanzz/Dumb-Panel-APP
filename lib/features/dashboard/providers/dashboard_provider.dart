@@ -78,20 +78,33 @@ class DashboardData {
 class DashboardNotifier extends StateNotifier<DashboardData> {
   DashboardNotifier() : super(const DashboardData());
 
+  /// 把「可选接口」的失败吃掉，返回 null。用于只做锦上添花的请求，
+  /// 避免它们的 4xx 把主数据一起拖垮。
+  Future<dynamic> _optional(Future<dynamic> request) async {
+    try {
+      final response = await request;
+      return extractData(response.data);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> load() async {
     state = state.copyWith(loading: true, error: null);
     try {
       final dio = DioClient.instance.dio;
-      final results = await Future.wait([
-        dio.get(ApiEndpoints.systemInfo),
-        dio.get(ApiEndpoints.dashboard),
-        dio.get(ApiEndpoints.panelSettings),
-        dio.get(ApiEndpoints.systemVersion),
-      ]);
-      final sysData = extractData(results[0].data);
-      final dashData = extractData(results[1].data);
-      final panelData = extractData(results[2].data);
-      final versionData = extractData(results[3].data);
+      // 主数据：系统信息 + 仪表盘统计，失败就是整页失败。
+      final systemFuture = dio.get(ApiEndpoints.systemInfo);
+      final dashboardFuture = dio.get(ApiEndpoints.dashboard);
+      // 辅助数据：只用来补面板标题和版本号。收紧 validateStatus 后它们的 4xx
+      // 会让 Future.wait 整体失败，导致「仅仅是拿不到面板标题」就把整个首页打空。
+      final panelFuture = _optional(dio.get(ApiEndpoints.panelSettings));
+      final versionFuture = _optional(dio.get(ApiEndpoints.systemVersion));
+
+      final sysData = extractData((await systemFuture).data);
+      final dashData = extractData((await dashboardFuture).data);
+      final panelData = await panelFuture;
+      final versionData = await versionFuture;
       final sysMap = sysData is Map<String, dynamic>
           ? Map<String, dynamic>.from(sysData)
           : <String, dynamic>{};

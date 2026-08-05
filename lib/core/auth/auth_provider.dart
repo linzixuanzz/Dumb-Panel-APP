@@ -188,8 +188,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
     } catch (_) {}
   }
 
-  void setUnauthenticated() {
-    state = const AuthState(status: AuthStatus.unauthenticated);
+  /// [reason] 会带到登录页显示。token 续期失败时必须给出原因，
+  /// 否则用户只会被静默弹回登录页，不知道发生了什么。
+  void setUnauthenticated({String? reason}) {
+    state = AuthState(status: AuthStatus.unauthenticated, error: reason);
   }
 
   String _extractErrorMessage(dynamic e) {

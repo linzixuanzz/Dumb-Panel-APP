@@ -518,11 +518,13 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
           context,
         ).showSnackBar(const SnackBar(content: Text('配置已保存')));
       }
-    } catch (_) {
+    } catch (error) {
+      // 收紧 validateStatus 之前，面板返回 400 也会走 try 分支弹「配置已保存」，
+      // 用户根本看不出保存失败。现在 4xx 会进到这里，直接把后端原文透出来。
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('保存失败')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(extractErrorMessage(error, '保存失败'))),
+        );
       }
     }
     setState(() => _savingConfigs = false);

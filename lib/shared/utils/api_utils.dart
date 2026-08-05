@@ -60,6 +60,75 @@ String extractErrorMessage(dynamic error, String fallback) {
   return fallback;
 }
 
+/// 列表页加载失败时用的错误文案。
+///
+/// 与 [extractErrorMessage] 的区别：后者在没有后端 error/message 字段时会退回
+/// `DioException.message`，那是一串英文（"The connection errored: Failed host
+/// lookup..." / "The request returned an invalid status code of 500."）。
+/// 列表页的错误态是直接摊在屏幕中央给用户看的，断网时不能甩一句英文。
+///
+/// 优先级：后端返回的 error/message 原文 > 按 DioException 类型给中文说明 > [fallback]。
+String extractListErrorMessage(dynamic error, String fallback) {
+  final backendMessage = _extractBackendMessage(error);
+  if (backendMessage != null) {
+    return backendMessage;
+  }
+
+  final status = _statusCode(error);
+  switch (_dioExceptionType(error)) {
+    case 'connectionTimeout':
+    case 'sendTimeout':
+    case 'receiveTimeout':
+      return '连接面板超时，请检查网络或面板地址';
+    case 'connectionError':
+      // dio 5.x 把断网的 SocketException 归到这一类。
+      return '无法连接到面板，请检查网络或面板是否在线';
+    case 'badCertificate':
+      return '面板证书校验失败，请检查 HTTPS 配置';
+    case 'cancel':
+      return '请求已取消';
+    case 'badResponse':
+      return status == null ? fallback : '面板返回错误（HTTP $status）';
+    default:
+      return fallback;
+  }
+}
+
+String? _extractBackendMessage(dynamic error) {
+  try {
+    final data = (error as dynamic).response?.data;
+    if (data is Map) {
+      final msg = data['error'] ?? data['message'];
+      if (msg != null && msg.toString().trim().isNotEmpty) {
+        return msg.toString().trim();
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+String? _dioExceptionType(dynamic error) {
+  try {
+    final type = (error as dynamic).type;
+    if (type == null) return null;
+    // 不 import dio，按名字比对即可（DioExceptionType.connectionError 之类）。
+    final text = type.toString();
+    final dot = text.lastIndexOf('.');
+    return dot >= 0 ? text.substring(dot + 1) : text;
+  } catch (_) {
+    return null;
+  }
+}
+
+int? _statusCode(dynamic error) {
+  try {
+    final status = (error as dynamic).response?.statusCode;
+    return status is int ? status : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 String extractScriptSaveErrorMessage(dynamic error, String fallback) {
   final raw = extractErrorMessage(error, fallback).trim();
   if (raw.isEmpty) {

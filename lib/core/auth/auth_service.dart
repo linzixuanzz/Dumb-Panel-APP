@@ -65,23 +65,11 @@ class AuthService {
       data['captcha'] = captcha;
     }
 
-    final response = await _dio.post(
-      ApiEndpoints.login,
-      data: data,
-      options: Options(
-        validateStatus: (status) => status != null && status < 500,
-      ),
-    );
-
-    // 登录接口只要返回 4xx，就先交给上层显示明确原因，避免后续误进入首页再变成“网络错误”。
-    final statusCode = response.statusCode ?? 0;
-    if (statusCode >= 400) {
-      throw DioException.badResponse(
-        statusCode: statusCode,
-        requestOptions: response.requestOptions,
-        response: response,
-      );
-    }
+    // 登录接口的 4xx 现在由 DioClient 的全局 validateStatus(< 400) 直接抛成
+    // DioException（带 response），语义与这里原先手工重建 DioException 完全一致，
+    // 所以那段绕行代码已删除。AuthInterceptor 把 /auth/login 放进了 _noRefreshPaths，
+    // 密码错误返回的 401 不会被误当成「token 过期」去续期。
+    final response = await _dio.post(ApiEndpoints.login, data: data);
 
     final result = _extractData(response.data);
     final Map<String, dynamic> map = result is Map<String, dynamic>
@@ -99,6 +87,9 @@ class AuthService {
   }
 
   Future<Map<String, dynamic>> captchaConfig({String? username}) async {
+    // 这里**故意**保留放宽的 validateStatus：老面板没有 /auth/captcha-config，
+    // 会返回 404。若跟着全局收紧成抛异常，登录流程会在取验证码配置这一步就中断，
+    // 老面板将无法登录。4xx 时按「没有配验证码」处理，返回空 map 继续走登录。
     final response = await _dio.get(
       ApiEndpoints.captchaConfig,
       queryParameters: username != null && username.trim().isNotEmpty
@@ -121,6 +112,10 @@ class AuthService {
   Future<void> logout() async {
     try {
       await _dio.post(ApiEndpoints.logout);
+    } catch (_) {
+      // 退出登录的语义是「清掉本地会话」，服务端调用失败不该阻断它。
+      // 收紧 validateStatus 后，token 已过期时这里会抛 401；如果继续往上抛，
+      // more_page 的退出流程会中断在 context.go 之前，用户点了退出却退不出去。
     } finally {
       await SecureStorage.clearAuthSession();
     }
