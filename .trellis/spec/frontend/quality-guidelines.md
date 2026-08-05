@@ -103,7 +103,8 @@ void main() {
 | 在页面里自己 `response.data['data']` | 后端有 3 种包裹形态 | 应用 `extractData` / `extractPaginated`（`api_utils.dart`） |
 | 编辑表单时用空 map 重建再整串覆盖 | **用户在 Web 配的字段会被静默清空** | `notification_list_page.dart:735-757` |
 | 后端已暴露的默认值写死在客户端 | 面板改配置后 APP 不跟随 | 参考已修正的 `task_form_page.dart:223-266` |
-| 裸 `Color(0xFF...)` | 绕过 `AppColors` / `ColorScheme`，主色切换时漏改 | |
+| 裸 `Color(0xFF...)` | 绕过 `AppColors` / `ColorScheme`，主色切换时漏改 | 已清零。历史反例：三处状态徽章写死 Emerald 深绿 `Color(0xFF047857)`，主色换蓝后成了深绿字配浅蓝底 |
+| 用 `AppColors.primary` / `blue500` 表达「成功 / 已启用」 | 主色本身就是蓝，会与「运行中 / 进行中」撞色 | 用 `AppColors.success` / `successDark` / `successLight` |
 | 新增第 12 种 `BorderRadius.circular` 取值 | 现已 11 种，正在收敛 | |
 | 给 provider 加 `.autoDispose` | 底部导航 tab 常驻，会丢状态并重复请求 | |
 | Notifier 的**写操作**里 try/catch 吞异常 | UI 的 `_showActionError` 拿不到错误，失败静默 | |

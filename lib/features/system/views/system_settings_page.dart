@@ -6,6 +6,8 @@ import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/utils/api_utils.dart';
+import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_section_title.dart';
 
 class SystemSettingsPage extends ConsumerStatefulWidget {
   const SystemSettingsPage({super.key});
@@ -576,9 +578,8 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                         children: [
                           // ── Version Info ──
                           if (_versionInfo != null) ...[
-                            _SectionTitle('版本信息'),
-                            _Card(
-                              isLight: isLight,
+                            const AppSectionTitle('版本信息'),
+                            AppCard(
                               child: Column(
                                 children: [
                                   _KVRow(
@@ -625,8 +626,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                             ),
                             if (_updateInfo != null) ...[
                               const SizedBox(height: 10),
-                              _Card(
-                                isLight: isLight,
+                              AppCard(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
@@ -683,10 +683,9 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                               (_updateStatus?['status']?.toString().trim().isNotEmpty ??
                                   false) &&
                               _updateStatus?['status'] != 'idle') ...[
-                            _SectionTitle('更新状态'),
+                            const AppSectionTitle('更新状态'),
                             const SizedBox(height: 8),
-                            _Card(
-                              isLight: isLight,
+                            AppCard(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
@@ -742,10 +741,9 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                           ],
 
                           // ── 任务运行 ──
-                          _SectionTitle('任务运行'),
+                          const AppSectionTitle('任务运行'),
                           const SizedBox(height: 8),
-                          _Card(
-                            isLight: isLight,
+                          AppCard(
                             child: Column(
                               children: [
                                 _ConfigField(
@@ -826,10 +824,9 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                           const SizedBox(height: 20),
 
                           // ── 面板外观 ──
-                          _SectionTitle('面板外观'),
+                          const AppSectionTitle('面板外观'),
                           const SizedBox(height: 8),
-                          _Card(
-                            isLight: isLight,
+                          AppCard(
                             child: _ConfigField(
                               label: '日志背景色',
                               hint: '#111827 或 rgba(...)，留空默认',
@@ -841,10 +838,9 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                           const SizedBox(height: 20),
 
                           // ── 代理设置 ──
-                          _SectionTitle('代理设置'),
+                          const AppSectionTitle('代理设置'),
                           const SizedBox(height: 8),
-                          _Card(
-                            isLight: isLight,
+                          AppCard(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -914,7 +910,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                           const SizedBox(height: 24),
 
                           // ── 系统操作 ──
-                          _SectionTitle('系统操作'),
+                          const AppSectionTitle('系统操作'),
                           const SizedBox(height: 8),
                           _ActionBtn(
                             icon: Icons.backup,
@@ -947,48 +943,6 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _SectionTitle extends StatelessWidget {
-  final String text;
-  const _SectionTitle(this.text);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 2, bottom: 4),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-          letterSpacing: 0.5,
-        ),
-      ),
-    );
-  }
-}
-
-class _Card extends StatelessWidget {
-  final bool isLight;
-  final Widget child;
-  const _Card({required this.isLight, required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: isLight ? Colors.white : AppColors.slate900,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isLight ? AppColors.slate200 : AppColors.slate800,
-        ),
-      ),
-      child: child,
     );
   }
 }

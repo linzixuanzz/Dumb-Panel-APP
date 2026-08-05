@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
-/// 设计系统色板 — 基于 Emerald + Slate
+/// 设计系统色板 — 基于面板主色（Element Plus 蓝）+ Slate
 class AppColors {
   // Primary
-  static const primary = Color(0xFF10B981); // Emerald-500
-  static const primaryLight = Color(0xFFD1FAE5); // Emerald-100
-  static const primaryDark = Color(0xFF059669); // Emerald-600
+  // 与呆呆面板 v3.0.0 的 --el-color-primary 对齐，APP 不再自成一套 Emerald 绿。
+  // 浅/深变体取 Element Plus 的 primary-light-9 / primary-dark-2。
+  static const primary = Color(0xFF409EFF); // Element Plus primary
+  static const primaryLight = Color(0xFFECF5FF); // primary-light-9
+  static const primaryDark = Color(0xFF337ECC); // primary-dark-2
 
   // Slate 体系
   static const slate50 = Color(0xFFF8FAFC);
@@ -32,6 +34,39 @@ class AppColors {
   static const red100 = Color(0xFFFEE2E2);
   static const red50 = Color(0xFFFEF2F2);
   static const amber500 = Color(0xFFF59E0B);
+
+  // ── 语义状态色 ────────────────────────────────────────
+  // 主色从 Emerald 绿换成 Element Plus 蓝之后，「成功 / 已启用」不能再借用 primary
+  // 表达，否则与「运行中 / 进行中」的蓝完全同色。这里给四态各自的专属色，
+  // 页面只引用这些语义名，不再直接挑 primary / blue500 当状态色。
+  //
+  // 绿色取面板 Element Plus 的 --el-color-success 全家桶，与主色同源；
+  // warning / danger 复用已有的 amber / red，只建立语义别名，避免无谓的视觉变动。
+
+  /// 成功 / 已启用 / 已安装。用作状态圆点与深色模式前景。
+  static const success = Color(0xFF67C23A); // el-color-success
+
+  /// 浅色模式下的成功前景（徽章文字）。
+  static const successDark = Color(0xFF529B2E); // el success-dark-2
+
+  /// 浅色模式下的成功淡底（徽章背景）。
+  static const successLight = Color(0xFFF0F9EB); // el success-light-9
+
+  /// 运行中 / 进行中 / 信息。蓝色语义就是主色语义，直接等同 primary。
+  static const info = primary;
+  static const infoDark = primaryDark;
+  static const infoLight = primaryLight;
+
+  /// 失败 / 危险。沿用既有 red，只给语义名。
+  static const danger = red500;
+  static const dangerDark = red600;
+  static const dangerLight = red100;
+
+  /// 排队中 / 警告。沿用既有 amber，只给语义名。
+  static const warning = amber500;
+
+  /// 已禁用 / 已取消等中性态前景。
+  static const neutral = slate500;
 
   // 日志终端
   static const termBg = Colors.white;
@@ -228,10 +263,9 @@ class AppTheme {
     );
   }
 
-  // 状态颜色
-  static const Color successColor = AppColors.primary;
-  static const Color errorColor = AppColors.red500;
-  static const Color warningColor = AppColors.amber500;
-  static const Color runningColor = AppColors.primary;
-  static const Color disabledColor = AppColors.slate300;
+  // 原先这里有一组 successColor / errorColor / warningColor / runningColor /
+  // disabledColor 常量，全库零引用，且主色换蓝之后 successColor 与 runningColor
+  // 双双等于 AppColors.primary —— 一组既没人用、语义又是错的假常量。
+  // 已删除，状态色统一由 AppColors.success / info / danger / warning / neutral 提供，
+  // 并在各状态判断处真正使用。
 }

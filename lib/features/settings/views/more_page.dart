@@ -7,6 +7,7 @@ import '../../../core/network/dio_client.dart';
 import '../../../core/services/app_update_service.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../shared/widgets/app_section_title.dart';
 
 class MorePage extends ConsumerStatefulWidget {
   const MorePage({super.key});
@@ -170,7 +171,10 @@ class _MorePageState extends ConsumerState<MorePage> {
           const SizedBox(height: 24),
 
           // App Settings Section
-          _SectionLabel('应用设置'),
+          const AppSectionTitle(
+            '应用设置',
+            padding: EdgeInsets.only(left: 2),
+          ),
           const SizedBox(height: 8),
           _SettingsItem(
             icon: Icons.dns_outlined,
@@ -199,7 +203,10 @@ class _MorePageState extends ConsumerState<MorePage> {
 
           if (user != null && user.isAdmin) ...[
             const SizedBox(height: 24),
-            _SectionLabel('系统管理'),
+            const AppSectionTitle(
+              '系统管理',
+              padding: EdgeInsets.only(left: 2),
+            ),
             const SizedBox(height: 8),
             _SettingsItem(
               icon: Icons.code,
@@ -252,7 +259,7 @@ class _MorePageState extends ConsumerState<MorePage> {
           ],
 
           const SizedBox(height: 24),
-          _SectionLabel('其他'),
+          const AppSectionTitle('其他', padding: EdgeInsets.only(left: 2)),
           const SizedBox(height: 8),
           _SettingsItem(
             icon: Icons.volunteer_activism_outlined,
@@ -500,27 +507,6 @@ class _MorePageState extends ConsumerState<MorePage> {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _SectionLabel extends StatelessWidget {
-  final String text;
-  const _SectionLabel(this.text);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 2),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-          letterSpacing: 0.5,
-        ),
       ),
     );
   }

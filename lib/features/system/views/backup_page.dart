@@ -12,6 +12,7 @@ import '../../../core/network/dio_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_snack.dart';
 
 class BackupPage extends ConsumerStatefulWidget {
   const BackupPage({super.key});
@@ -305,14 +306,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     }
   }
 
-  void _showMessage(String message) {
-    if (!mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _showMessage(String message) => AppSnack.show(context, message);
 
   void _ensureProgressPolling() {
     _progressTimer ??= Timer.periodic(
@@ -842,14 +836,16 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     return '空闲';
   }
 
+  // 恢复失败=红、已完成=绿、恢复中=蓝。改造前「已完成」用 primaryDark、
+  // 「恢复中」用 blue600，主色换蓝后两个状态是同一族蓝。
   Color _restoreStatusColor(bool isLight, _RestoreProgressState progress) {
     if (progress.failed) {
-      return isLight ? AppColors.red600 : AppColors.red500;
+      return isLight ? AppColors.dangerDark : AppColors.danger;
     }
     if (progress.completed) {
-      return isLight ? AppColors.primaryDark : AppColors.primary;
+      return isLight ? AppColors.successDark : AppColors.success;
     }
-    return isLight ? AppColors.blue600 : AppColors.blue500;
+    return isLight ? AppColors.infoDark : AppColors.info;
   }
 
   IconData _restoreStatusIcon(_RestoreProgressState progress) {

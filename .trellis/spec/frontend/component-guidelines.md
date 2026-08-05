@@ -102,18 +102,39 @@ decoration: BoxDecoration(
 
 ### 颜色来源：`AppColors` 静态常量，不是 `ColorScheme`
 
-`lib/core/theme/app_theme.dart:4-43` 定义了 Emerald + Slate 色板
-（`AppColors.primary = #10B981`、`slate50`…`slate950`、`red500`、`blue500`…）。
+`lib/core/theme/app_theme.dart` 定义了主色 + Slate 色板
+（`AppColors.primary = #409EFF`、`slate50`…`slate950`、`red500`、`blue500`…）。
+主色已在第 0 期 R4 与面板 v3.0.0 的 `--el-color-primary` 对齐，
+浅/深变体取 Element Plus 的 `primary-light-9` / `primary-dark-2`。
+
+> ⚠️ **主色现在是蓝色**，与 `AppColors.blue500 (#3B82F6)` / `blue600 (#2563EB)` 很接近。
+> 主色换蓝后，历史上那些用主色表达「成功 / 已启用」的地方与「运行中 / 进行中」撞了色，
+> 现已在 `AppColors` 里补上真实语义色并逐处改用：
+
+| 语义 | 常量 | 取值 | 用途 |
+|---|---|---|---|
+| 成功 / 已启用 / 已安装 | `success` / `successDark` / `successLight` | `#67C23A` / `#529B2E` / `#F0F9EB` | 状态圆点、深色前景 / 浅色前景 / 浅色淡底 |
+| 运行中 / 进行中 / 信息 | `info` / `infoDark` / `infoLight` | 等同 `primary` / `primaryDark` / `primaryLight` | 同上 |
+| 失败 / 危险 | `danger` / `dangerDark` / `dangerLight` | 等同 `red500` / `red600` / `red100` | 同上 |
+| 排队中 / 警告 | `warning` | 等同 `amber500` | — |
+| 已禁用 / 中性 | `neutral` | 等同 `slate500` | 徽章前景 |
+
+> 绿色三兄弟取面板 Element Plus 的 `--el-color-success` / `success-dark-2` / `success-light-9`，
+> 与主色同源；红 / 琥珀只建立语义别名，视觉不变。
+>
+> **状态判断处一律用上表的语义名**，不要再直接挑 `primary` / `blue500` 当状态色，
+> 也不要写裸 `Color(0xFF...)`。`primary` 只用于「品牌 / 选中 / 焦点 / 下拉刷新」这类主色语义。
 
 页面**直接引用 `AppColors.xxx`**，而不是 `Theme.of(context).colorScheme.xxx`。
 两种写法在同一个文件里混用，例如 `main_scaffold.dart:71` 用 `AppColors.slate900`，
 `:154` 用 `Theme.of(context).colorScheme.onSurfaceVariant`。
 
-> 第 0 期 R4 会把主色切到面板的 `#409eff` 并把设计令牌集中化。
-> **在共享组件层落地之前**，新代码请：
-> 1. 优先用 `Theme.of(context).colorScheme.*`；
-> 2. 必须用固定色时统一走 `AppColors`，**不要写裸 `Color(0xFF...)`**；
-> 3. 不要新增第 12 种圆角取值。
+> 设计令牌已落在 `lib/core/theme/design_tokens.dart`。新代码请：
+> 1. 圆角 / 间距 / 描边宽度走 `AppRadius` / `AppSpacing` / `AppBorderWidth`，**不写裸数值**；
+> 2. 明暗分支走 `AppSurfaces.of(context)`，**不再手写 `isLight ? A : B`**；
+> 3. 卡片用 `AppCard`，列表三态用 `AppLoadingView` / `AppEmptyView` / `AppErrorView`；
+> 4. 必须用固定色时统一走 `AppColors`，**不要写裸 `Color(0xFF...)`**；
+> 5. 不要新增第 12 种圆角取值。
 
 ---
 
@@ -126,22 +147,25 @@ decoration: BoxDecoration(
 
 ---
 
-## 用户提示：SnackBar，`_showMessage` 各写各的
+## 用户提示：统一走 `AppSnack`
 
-`ScaffoldMessenger.of(context).showSnackBar` 全库 35 处 / 10 文件。
-其中 7 个文件各自定义了**逐字相同**的私有 helper：
+改造前 7 个文件里各自定义了**逐字相同**的私有 `_showMessage`（8 份，含
+`script_list_page.dart` 里的两份）。第 0 期 R4 把它们收敛成
+`lib/shared/widgets/app_snack.dart`：
 
 ```dart
-// lib/features/tasks/views/task_list_page.dart:90-97
-// 同样的代码另见：log_list_page.dart:238、backup_page.dart:308、
-// script_list_page.dart:476、server_config_page.dart:98、dep_list_page.dart、app_lock_settings_page.dart
-void _showMessage(String message) {
-  if (!mounted) return;
-  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-}
+// 现在各页面只留一行委托，mounted 判断收进 AppSnack 内部（用 BuildContext.mounted）
+void _showMessage(String message) => AppSnack.show(context, message);
+
+// 需要覆盖上一条提示时（应用锁设置页）：
+AppSnack.show(context, message, replaceCurrent: true);
 ```
 
-**没有** 成功/失败/警告的视觉区分，全部是默认样式的 SnackBar。
+**没有** 成功/失败/警告的视觉区分，全部是默认样式的 SnackBar —— 这一点没变，
+`AppSnack` 只是把重复代码收了起来，视觉与行为与旧写法一致。
+
+> `main_scaffold.dart:38-45` 的「5 秒内再按一次返回键退出」提示**刻意没有迁移**，
+> 避免把 `PopScope` 逻辑卷进 UI 重构的 diff 里。
 
 错误文案统一经 `extractErrorMessage(error, fallback)`（`shared/utils/api_utils.dart:44`）提取后端 `error`/`message` 字段：
 

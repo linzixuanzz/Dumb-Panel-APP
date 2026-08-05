@@ -32,7 +32,7 @@ lib/
 | | `auth_interceptor.dart` (115) | Bearer 注入 + 401 续期排队重发 |
 | `storage/` | `secure_storage.dart` (327) | `FlutterSecureStorage`（token/user/panels）+ `SharedPreferences`（serverUrl/UI 状态） |
 | `router/` | `app_router.dart` (257) | `routerProvider`、全部 `GoRoute`、`redirect` 鉴权 |
-| `theme/` | `app_theme.dart` (237) | `AppColors` 色板 + `AppTheme.light()/dark()` |
+| `theme/` | `app_theme.dart` (272) | `AppColors` 色板（含 `success`/`info`/`danger`/`warning`/`neutral` 语义状态色）+ `AppTheme.light()/dark()` |
 | `services/` | `app_update_service.dart` (393) | APP 自身版本检查与更新对话框 |
 
 **约定**：`core/` 里的东西被多个 feature 依赖，且**不含业务语义**。
@@ -126,15 +126,24 @@ features/
 | `ansi_text.dart` (298) | 日志 ANSI 转义 → `TextSpan` | 日志与依赖页 |
 | `log_background.dart` (95) | 日志终端背景色 | 日志相关页 |
 
-### `shared/widgets/`（**只有 2 个**）
+### `shared/widgets/`
 
-| 文件 | 行数 | 内容 |
+| 文件 | 内容 | 状态 |
 |---|---|---|
-| `main_scaffold.dart` | 185 | 底部导航（自绘 `_NavItem`，未用 `NavigationBar`）+ **5 秒内双击返回退出**（`:29-50` `PopScope`） |
-| `task_cron_list.dart` | 139 | Cron 规则展示卡片 |
+| `main_scaffold.dart` | 底部导航（自绘 `_NavItem`，未用 `NavigationBar`）+ **5 秒内双击返回退出**（`:29-50` `PopScope`） | 既有 |
+| `task_cron_list.dart` | Cron 规则展示卡片 | 既有 |
+| `app_card.dart` | `AppCard`：统一卡片容器（底色/描边/圆角走令牌） | 第 0 期 R4 新增 |
+| `app_state_views.dart` | `AppLoadingView` / `AppEmptyView` / `AppErrorView`：列表三态 | 第 0 期 R4 新增 |
+| `app_snack.dart` | `AppSnack.show()`：替代 8 处逐字重复的 `_showMessage` | 第 0 期 R4 新增 |
+| `app_buttons.dart` | `AppChipButton` / `AppTintedActionButton`：头部 chip 与批量操作按钮 | 第 0 期 R4 新增 |
+| `app_section_title.dart` | `AppSectionTitle`：设置类页面的区块小标题 | 第 0 期 R4 新增 |
 
-**这就是「没有共享组件层」的直接证据**：卡片容器、空状态、错误态、chip、
-统计块等基元全部在各 feature 里各写一遍。第 0 期 R4 正在补这一层。
+配套令牌在 `lib/core/theme/design_tokens.dart`：`AppRadius` / `AppSpacing` /
+`AppBorderWidth` / `AppSurfaces`。**新代码写卡片、空态、错误态、提示条时先用这一层，
+不要再手写 `BoxDecoration` + `isLight` 三元。**
+
+第 0 期只做了示范迁移（任务 / 日志 / 环境变量 / 系统设置 / 更多 五个页面），
+其余页面仍是各写一遍的旧形态，第 1 期继续收敛。
 
 > ⚠️ 改造 `main_scaffold.dart` 时**不得丢掉双击返回退出**（`:29-50`）。
 

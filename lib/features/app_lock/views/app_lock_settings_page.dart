@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../shared/widgets/app_snack.dart';
 import '../providers/app_lock_provider.dart';
 import '../widgets/pattern_pad.dart';
 
@@ -21,12 +22,9 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
     Future.microtask(() => ref.read(appLockProvider.notifier).initialize());
   }
 
-  void _showMessage(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
+  // 这里保留 replaceCurrent：应用锁的提示连续弹出时要覆盖上一条，不排队。
+  void _showMessage(String message) =>
+      AppSnack.show(context, message, replaceCurrent: true);
 
   String _readError(Object error, String fallback) {
     if (error is StateError) {

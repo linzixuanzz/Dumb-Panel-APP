@@ -9,6 +9,8 @@ import '../../../core/theme/app_theme.dart';
 import '../../../shared/models/task_log.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_snack.dart';
+import '../../../shared/widgets/app_state_views.dart';
 
 final logListProvider = StateNotifierProvider<LogListNotifier, LogListState>((
   ref,
@@ -253,14 +255,7 @@ class _LogListPageState extends ConsumerState<LogListPage> {
     }
   }
 
-  void _showMessage(String message) {
-    if (!mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _showMessage(String message) => AppSnack.show(context, message);
 
   String _extractError(Object error, String fallback) {
     return extractErrorMessage(error, fallback);
@@ -408,41 +403,6 @@ class _LogListPageState extends ConsumerState<LogListPage> {
     } catch (e) {
       _showMessage(_extractError(e, '清理失败'));
     }
-  }
-
-  /// 请求失败时显示原因 + 重试，而不是伪装成「暂无日志」的空态。
-  Widget _buildLoadError(String message) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(32, 100, 32, 0),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.cloud_off_outlined,
-            size: 56,
-            color: AppColors.red500.withAlpha(120),
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            '日志加载失败',
-            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 13, color: AppColors.slate400),
-          ),
-          const SizedBox(height: 16),
-          OutlinedButton.icon(
-            onPressed: () =>
-                ref.read(logListProvider.notifier).load(refresh: true),
-            icon: const Icon(Icons.refresh, size: 16),
-            label: const Text('重试'),
-          ),
-        ],
-      ),
-    );
   }
 
   Future<void> _handleDelete(TaskLog log) async {
@@ -638,6 +598,7 @@ class _LogListPageState extends ConsumerState<LogListPage> {
                         _resetScroll();
                         ref.read(logListProvider.notifier).setStatusFilter(0);
                       },
+                      selectedColor: AppColors.success,
                     ),
                     _StatusFilterChip(
                       label: '失败',
@@ -646,7 +607,7 @@ class _LogListPageState extends ConsumerState<LogListPage> {
                         _resetScroll();
                         ref.read(logListProvider.notifier).setStatusFilter(1);
                       },
-                      selectedColor: AppColors.red500,
+                      selectedColor: AppColors.danger,
                     ),
                     _StatusFilterChip(
                       label: '运行中',
@@ -655,7 +616,7 @@ class _LogListPageState extends ConsumerState<LogListPage> {
                         _resetScroll();
                         ref.read(logListProvider.notifier).setStatusFilter(2);
                       },
-                      selectedColor: AppColors.blue500,
+                      selectedColor: AppColors.info,
                     ),
                   ],
                 ),
@@ -671,37 +632,29 @@ class _LogListPageState extends ConsumerState<LogListPage> {
                 child: state.loading && state.logs.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
-                          SizedBox(height: 120),
-                          Center(
-                            child: CircularProgressIndicator(
-                              color: AppColors.primary,
-                            ),
-                          ),
-                        ],
+                        children: const [AppLoadingView()],
                       )
                     // 拿不到数据和真的没有数据是两回事，必须先判 error。
                     : state.error != null && state.logs.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: [_buildLoadError(state.error!)],
+                        children: [
+                          AppErrorView(
+                            title: '日志加载失败',
+                            message: state.error!,
+                            onRetry: () => ref
+                                .read(logListProvider.notifier)
+                                .load(refresh: true),
+                          ),
+                        ],
                       )
                     : state.logs.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: [
-                          const SizedBox(height: 100),
-                          Icon(
-                            Icons.article_outlined,
-                            size: 56,
-                            color: AppColors.slate400.withAlpha(120),
-                          ),
-                          const SizedBox(height: 12),
-                          const Center(
-                            child: Text(
-                              '暂无日志',
-                              style: TextStyle(color: AppColors.slate400),
-                            ),
+                        children: const [
+                          AppEmptyView(
+                            icon: Icons.article_outlined,
+                            message: '暂无日志',
                           ),
                         ],
                       )
@@ -761,10 +714,13 @@ class _LogItem extends StatelessWidget {
     this.selected = false,
   });
 
+  // 日志列表最主要的状态区分就靠这个圆点：成功=绿、失败=红、运行中=蓝。
+  // 改造前成功取 primary(#409EFF)、运行中取 blue500(#3B82F6)，主色换蓝后
+  // 两者都是蓝、肉眼分不出。
   Color _statusColor() {
-    if (log.isSuccess) return AppColors.primary;
-    if (log.isFailed) return AppColors.red500;
-    return AppColors.blue500;
+    if (log.isSuccess) return AppColors.success;
+    if (log.isFailed) return AppColors.danger;
+    return AppColors.info;
   }
 
   @override
@@ -879,20 +835,28 @@ class _StatusFilterChip extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
-  final Color selectedColor;
+
+  /// 状态筛选 chip 的强调色。
+  ///
+  /// 传 null 表示「这不是某个状态，而是『全部』」，用中性强调色。
+  /// 原先默认值是 `AppColors.primary`，主色换蓝之后「全部」和「运行中」
+  /// 是同一族蓝，选中时分不清选的是哪个，所以默认改成中性色。
+  final Color? selectedColor;
 
   const _StatusFilterChip({
     required this.label,
     required this.selected,
     required this.onTap,
-    this.selectedColor = AppColors.primary,
+    this.selectedColor,
   });
 
   @override
   Widget build(BuildContext context) {
     final isLight = Theme.of(context).brightness == Brightness.light;
+    final accent =
+        selectedColor ?? (isLight ? AppColors.slate800 : AppColors.slate100);
     final foreground = selected
-        ? selectedColor
+        ? accent
         : (isLight ? AppColors.slate600 : AppColors.slate300);
     return Material(
       color: Colors.transparent,
@@ -903,12 +867,12 @@ class _StatusFilterChip extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
             color: selected
-                ? selectedColor.withAlpha(16)
+                ? accent.withAlpha(16)
                 : (isLight ? AppColors.slate50 : AppColors.slate950),
             borderRadius: BorderRadius.circular(999),
             border: Border.all(
               color: selected
-                  ? selectedColor.withAlpha(70)
+                  ? accent.withAlpha(70)
                   : (isLight ? AppColors.slate200 : AppColors.slate800),
             ),
           ),

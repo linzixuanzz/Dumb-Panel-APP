@@ -43,24 +43,27 @@ class TaskStatsCard extends StatelessWidget {
           ),
           child: Column(
             children: [
+              // 四个统计块必须互相区分：总任务是中性汇总数（不是状态，用强调文字色），
+              // 已启用=绿、运行中=蓝、已禁用=灰。改造前前三个分别是
+              // primary / primary / blue500，主色换蓝后全成了蓝色系。
               Row(
                 children: [
                   _StatItem(
                     label: '总任务',
                     value: '$total',
-                    color: AppColors.primary,
+                    color: isLight ? AppColors.slate800 : AppColors.slate100,
                     isLight: isLight,
                   ),
                   _StatItem(
                     label: '已启用',
                     value: '$enabled',
-                    color: AppColors.primary,
+                    color: AppColors.success,
                     isLight: isLight,
                   ),
                   _StatItem(
                     label: '运行中',
                     value: '$running',
-                    color: AppColors.blue500,
+                    color: AppColors.info,
                     isLight: isLight,
                   ),
                   _StatItem(
@@ -83,13 +86,13 @@ class TaskStatsCard extends StatelessWidget {
                   _StatItem(
                     label: '今日成功',
                     value: '$todaySuccess',
-                    color: AppColors.primary,
+                    color: AppColors.success,
                     isLight: isLight,
                   ),
                   _StatItem(
                     label: '今日失败',
                     value: '$todayFailed',
-                    color: AppColors.red500,
+                    color: AppColors.danger,
                     isLight: isLight,
                   ),
                 ],

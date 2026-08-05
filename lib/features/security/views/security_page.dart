@@ -1012,7 +1012,8 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
                 Icon(
                   Icons.security,
                   size: 24,
-                  color: _enabled ? AppColors.primary : AppColors.slate400,
+                  // 「已启用」统一走 success 绿。
+                  color: _enabled ? AppColors.success : AppColors.slate400,
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -1032,7 +1033,7 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
                         style: TextStyle(
                           fontSize: 12,
                           color: _enabled
-                              ? AppColors.primary
+                              ? AppColors.success
                               : AppColors.slate400,
                         ),
                       ),

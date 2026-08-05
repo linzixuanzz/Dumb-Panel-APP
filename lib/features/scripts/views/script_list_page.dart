@@ -16,6 +16,7 @@ import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_snack.dart';
 import '../../tasks/views/task_form_page.dart';
 
 final scriptProvider = StateNotifierProvider<ScriptNotifier, ScriptState>((
@@ -473,14 +474,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
     super.dispose();
   }
 
-  void _showMessage(String message) {
-    if (!mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _showMessage(String message) => AppSnack.show(context, message);
 
   String _extractScriptError(dynamic error, String fallback) =>
       extractScriptSaveErrorMessage(error, fallback);
@@ -1796,14 +1790,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
     super.dispose();
   }
 
-  void _showMessage(String message) {
-    if (!mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _showMessage(String message) => AppSnack.show(context, message);
 
   String _extractScriptError(dynamic error, String fallback) =>
       extractScriptSaveErrorMessage(error, fallback);

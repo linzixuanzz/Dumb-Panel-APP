@@ -673,8 +673,9 @@ class _UserCard extends StatelessWidget {
                   user.enabled ? '已启用' : '已禁用',
                   style: TextStyle(
                     fontSize: 12,
+                    // 「已启用」全库统一走 success 绿，与任务/订阅/依赖列表一致。
                     color: user.enabled
-                        ? AppColors.primary
+                        ? AppColors.success
                         : AppColors.slate400,
                   ),
                 ),

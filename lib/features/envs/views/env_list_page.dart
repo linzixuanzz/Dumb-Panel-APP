@@ -8,6 +8,8 @@ import '../../../core/network/api_endpoints.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/models/env_var.dart';
 import '../../../shared/utils/api_utils.dart';
+import '../../../shared/widgets/app_buttons.dart';
+import '../../../shared/widgets/app_state_views.dart';
 
 final envListProvider = StateNotifierProvider<EnvListNotifier, EnvListState>((
   ref,
@@ -747,40 +749,6 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     await ref.read(envListProvider.notifier).load();
   }
 
-  /// 请求失败时显示原因 + 重试，而不是伪装成「暂无环境变量」的空态。
-  Widget _buildLoadError(String message) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(32, 100, 32, 0),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.cloud_off_outlined,
-            size: 56,
-            color: AppColors.red500.withAlpha(120),
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            '环境变量加载失败',
-            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 13, color: AppColors.slate400),
-          ),
-          const SizedBox(height: 16),
-          OutlinedButton.icon(
-            onPressed: _refresh,
-            icon: const Icon(Icons.refresh, size: 16),
-            label: const Text('重试'),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(envListProvider);
@@ -807,18 +775,16 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                   Row(
                     children: [
                       if (!_sortMode)
-                        _HeaderChipButton(
+                        AppChipButton(
                           label: _selectionMode ? '取消' : '批量',
                           icon: _selectionMode ? Icons.close : Icons.done_all,
-                          isLight: isLight,
                           onTap: () => _setSelectionMode(!_selectionMode),
                         ),
                       if (!_selectionMode) ...[
                         const SizedBox(width: 8),
-                        _HeaderChipButton(
+                        AppChipButton(
                           label: _sortMode ? '完成' : '排序',
                           icon: _sortMode ? Icons.check : Icons.swap_vert,
-                          isLight: isLight,
                           onTap: () async {
                             if (_sortMode) {
                               try {
@@ -1087,37 +1053,33 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         spacing: 8,
                         runSpacing: 8,
                         children: [
-                          _BatchActionButton(
+                          AppTintedActionButton(
                             label: '批量分组',
                             icon: Icons.label_outline,
                             color: AppColors.blue500,
-                            isLight: isLight,
                             enabled: selectedCount > 0,
                             onTap: () => _showBatchGroupDialog(state.groups),
                           ),
-                          _BatchActionButton(
+                          AppTintedActionButton(
                             label: '批量启用',
                             icon: Icons.play_circle_outline,
                             color: AppColors.primary,
-                            isLight: isLight,
                             enabled: selectedCount > 0,
                             onTap: () =>
                                 _performBatchAction(_EnvBatchAction.enable),
                           ),
-                          _BatchActionButton(
+                          AppTintedActionButton(
                             label: '批量禁用',
                             icon: Icons.pause_circle_outline,
                             color: AppColors.slate500,
-                            isLight: isLight,
                             enabled: selectedCount > 0,
                             onTap: () =>
                                 _performBatchAction(_EnvBatchAction.disable),
                           ),
-                          _BatchActionButton(
+                          AppTintedActionButton(
                             label: '批量删除',
                             icon: Icons.delete_outline,
                             color: AppColors.red500,
-                            isLight: isLight,
                             enabled: selectedCount > 0,
                             onTap: () =>
                                 _performBatchAction(_EnvBatchAction.delete),
@@ -1176,37 +1138,27 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                 child: state.loading && state.envs.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
-                          SizedBox(height: 120),
-                          Center(
-                            child: CircularProgressIndicator(
-                              color: AppColors.primary,
-                            ),
-                          ),
-                        ],
+                        children: const [AppLoadingView()],
                       )
                     // 拿不到数据和真的没有数据是两回事，必须先判 error。
                     : state.error != null && state.envs.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: [_buildLoadError(state.error!)],
+                        children: [
+                          AppErrorView(
+                            title: '环境变量加载失败',
+                            message: state.error!,
+                            onRetry: _refresh,
+                          ),
+                        ],
                       )
                     : state.envs.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: [
-                          const SizedBox(height: 100),
-                          Icon(
-                            Icons.key_off,
-                            size: 56,
-                            color: AppColors.slate400.withAlpha(120),
-                          ),
-                          const SizedBox(height: 12),
-                          const Center(
-                            child: Text(
-                              '暂无环境变量',
-                              style: TextStyle(color: AppColors.slate400),
-                            ),
+                        children: const [
+                          AppEmptyView(
+                            icon: Icons.key_off,
+                            message: '暂无环境变量',
                           ),
                         ],
                       )
@@ -1859,107 +1811,6 @@ class _EnvValueSheetEditor extends StatelessWidget {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _HeaderChipButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool isLight;
-  final VoidCallback onTap;
-
-  const _HeaderChipButton({
-    required this.label,
-    required this.icon,
-    required this.isLight,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(
-          color: isLight ? Colors.white : AppColors.slate900,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: isLight ? AppColors.slate200 : AppColors.slate800,
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 16, color: AppColors.slate400),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _BatchActionButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final Color color;
-  final bool isLight;
-  final bool enabled;
-  final VoidCallback onTap;
-
-  const _BatchActionButton({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.isLight,
-    required this.enabled,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final backgroundColor = enabled
-        ? (isLight ? color.withAlpha(18) : color.withAlpha(24))
-        : (isLight ? AppColors.slate50 : AppColors.slate800);
-    final borderColor = enabled
-        ? color.withAlpha(isLight ? 60 : 90)
-        : (isLight ? AppColors.slate200 : AppColors.slate700);
-    final foregroundColor = enabled ? color : AppColors.slate400;
-
-    return GestureDetector(
-      onTap: enabled ? onTap : null,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: backgroundColor,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: borderColor),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 16, color: foregroundColor),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                color: foregroundColor,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
         ),
       ),
     );

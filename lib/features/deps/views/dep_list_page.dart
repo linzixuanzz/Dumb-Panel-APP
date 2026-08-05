@@ -11,6 +11,7 @@ import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_snack.dart';
 
 // ── Provider ──
 
@@ -375,14 +376,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     _selectedIds.removeWhere((id) => !validIds.contains(id));
   }
 
-  void _showMessage(String message) {
-    if (!mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _showMessage(String message) => AppSnack.show(context, message);
 
   String _extractError(Object error, String fallback) {
     return extractErrorMessage(error, fallback);
@@ -1223,7 +1217,9 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                     count: state.items.where((d) => d.isInstalled).length,
                     selected: _statusFilter == 'installed',
                     isLight: isLight,
-                    color: AppColors.primary,
+                    // 与下方「已安装」状态徽章同色；原先是 primary，
+                    // 和默认也是 primary 的「全部」chip 完全同色。
+                    color: AppColors.success,
                     onTap: () => setState(
                       () => _statusFilter = _statusFilter == 'installed'
                           ? null
@@ -1235,7 +1231,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                     count: state.items.where((d) => d.isFailed).length,
                     selected: _statusFilter == 'failed',
                     isLight: isLight,
-                    color: AppColors.red500,
+                    color: AppColors.danger,
                     onTap: () => setState(
                       () => _statusFilter = _statusFilter == 'failed'
                           ? null
@@ -1383,30 +1379,33 @@ class _DepCard extends StatelessWidget {
     required this.onForceDelete,
   });
 
+  // 安装中/排队中=蓝(info)、失败=红(danger)、已取消=灰、已安装=绿(success)。
+  // 「已安装」原先借用 primary 淡底 + 写死的 Emerald 深绿字，主色换蓝后就成了
+  // 深绿字配浅蓝底，这里换成成套的 success 色。
   Color _statusBg() {
     if (dep.isBusy) {
-      return isLight ? AppColors.blue100 : AppColors.blue500.withAlpha(25);
+      return isLight ? AppColors.infoLight : AppColors.info.withAlpha(25);
     }
     if (dep.isFailed) {
-      return isLight ? AppColors.red100 : AppColors.red500.withAlpha(25);
+      return isLight ? AppColors.dangerLight : AppColors.danger.withAlpha(25);
     }
     if (dep.isCancelled) {
       return isLight ? AppColors.slate100 : AppColors.slate700;
     }
-    return isLight ? AppColors.primaryLight : AppColors.primary.withAlpha(25);
+    return isLight ? AppColors.successLight : AppColors.success.withAlpha(25);
   }
 
   Color _statusFg() {
     if (dep.isBusy) {
-      return isLight ? AppColors.blue600 : AppColors.blue500;
+      return isLight ? AppColors.infoDark : AppColors.info;
     }
     if (dep.isFailed) {
-      return isLight ? AppColors.red600 : AppColors.red500;
+      return isLight ? AppColors.dangerDark : AppColors.danger;
     }
     if (dep.isCancelled) {
       return isLight ? AppColors.slate600 : AppColors.slate300;
     }
-    return isLight ? const Color(0xFF047857) : AppColors.primary;
+    return isLight ? AppColors.successDark : AppColors.success;
   }
 
   @override

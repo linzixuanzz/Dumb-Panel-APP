@@ -5,6 +5,7 @@ import '../../../core/auth/auth_provider.dart';
 import '../../../core/auth/auth_service.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/storage/secure_storage.dart';
+import '../../../shared/widgets/app_snack.dart';
 import '../../dashboard/providers/dashboard_provider.dart';
 
 class ServerConfigPage extends ConsumerStatefulWidget {
@@ -95,12 +96,7 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
     return '公网域名建议使用 HTTPS 以保证数据安全。';
   }
 
-  void _showMessage(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _showMessage(String message) => AppSnack.show(context, message);
 
   PanelConfig _panelForSave(String finalUrl, PanelConfig? existing) {
     final name = _nameController.text.trim();

@@ -15,6 +15,9 @@ import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/utils/log_background.dart';
+import '../../../shared/widgets/app_buttons.dart';
+import '../../../shared/widgets/app_snack.dart';
+import '../../../shared/widgets/app_state_views.dart';
 import '../../../shared/widgets/task_cron_list.dart';
 import '../providers/task_provider.dart';
 
@@ -87,14 +90,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     }
   }
 
-  void _showMessage(String message) {
-    if (!mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-  }
+  void _showMessage(String message) => AppSnack.show(context, message);
 
   Future<void> _showActionError(dynamic error, String fallback) async {
     _showMessage(_extractTaskError(error, fallback));
@@ -543,18 +539,16 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                   Row(
                     children: [
                       if (!_taskSortMode)
-                        _TaskHeaderChipButton(
+                        AppChipButton(
                           label: _selectionMode ? '取消' : '批量',
                           icon: _selectionMode ? Icons.close : Icons.done_all,
-                          isLight: isLight,
                           onTap: () => _setSelectionMode(!_selectionMode),
                         ),
                       if (!_selectionMode) ...[
                         const SizedBox(width: 8),
-                        _TaskHeaderChipButton(
+                        AppChipButton(
                           label: _taskSortMode ? '完成' : '排序',
                           icon: _taskSortMode ? Icons.check : Icons.swap_vert,
-                          isLight: isLight,
                           onTap: () async {
                             if (_taskSortMode) {
                               await _finishTaskSortMode(state.tasks);
@@ -736,50 +730,45 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                   scrollDirection: Axis.horizontal,
                   child: Row(
                     children: [
-                      _TaskBatchActionButton(
+                      AppTintedActionButton(
                         label: allSelected ? '取消全选' : '全选',
                         icon: allSelected ? Icons.deselect : Icons.select_all,
                         color: AppColors.slate500,
-                        isLight: isLight,
                         enabled: state.tasks.isNotEmpty,
                         onTap: () => _toggleSelectAllTasks(state.tasks),
                       ),
                       const SizedBox(width: 8),
-                      _TaskBatchActionButton(
+                      AppTintedActionButton(
                         label: '批量运行',
                         icon: Icons.play_circle_outline,
                         color: AppColors.primary,
-                        isLight: isLight,
                         enabled: selectedCount > 0,
                         onTap: () =>
                             _performBatchTaskAction(_TaskBatchAction.run),
                       ),
                       const SizedBox(width: 8),
-                      _TaskBatchActionButton(
+                      AppTintedActionButton(
                         label: '批量启用',
                         icon: Icons.toggle_on_outlined,
                         color: AppColors.primary,
-                        isLight: isLight,
                         enabled: selectedCount > 0,
                         onTap: () =>
                             _performBatchTaskAction(_TaskBatchAction.enable),
                       ),
                       const SizedBox(width: 8),
-                      _TaskBatchActionButton(
+                      AppTintedActionButton(
                         label: '批量禁用',
                         icon: Icons.toggle_off_outlined,
                         color: AppColors.slate500,
-                        isLight: isLight,
                         enabled: selectedCount > 0,
                         onTap: () =>
                             _performBatchTaskAction(_TaskBatchAction.disable),
                       ),
                       const SizedBox(width: 8),
-                      _TaskBatchActionButton(
+                      AppTintedActionButton(
                         label: '批量删除',
                         icon: Icons.delete_outline,
                         color: AppColors.red500,
-                        isLight: isLight,
                         enabled: selectedCount > 0,
                         onTap: () =>
                             _performBatchTaskAction(_TaskBatchAction.delete),
@@ -831,26 +820,34 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                 child: state.loading && state.tasks.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
-                          SizedBox(height: 120),
-                          Center(
-                            child: CircularProgressIndicator(
-                              color: AppColors.primary,
-                            ),
-                          ),
-                        ],
+                        children: const [AppLoadingView()],
                       )
                     // TaskListState 一直有 error 字段，但从来没有被渲染过：
                     // 拿不到数据和真的没有任务是两回事，必须先判 error。
                     : state.error != null && state.tasks.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: [_buildLoadError(state.error!)],
+                        children: [
+                          AppErrorView(
+                            title: '任务加载失败',
+                            message: state.error!,
+                            onRetry: () =>
+                                ref.read(taskProvider.notifier).load(
+                                  refresh: true,
+                                ),
+                          ),
+                        ],
                       )
                     : state.tasks.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: [_buildEmpty()],
+                        children: const [
+                          AppEmptyView(
+                            icon: Icons.inbox_outlined,
+                            message: '暂无任务',
+                            topPadding: 0,
+                          ),
+                        ],
                       )
                     : _taskSortMode
                     ? _buildTaskReorderView(state.tasks, isLight)
@@ -868,61 +865,6 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildEmpty() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.inbox_outlined,
-            size: 56,
-            color: AppColors.slate400.withAlpha(120),
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            '暂无任务',
-            style: TextStyle(color: AppColors.slate400, fontSize: 15),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 请求失败时显示原因 + 重试，而不是伪装成「暂无任务」的空态。
-  Widget _buildLoadError(String message) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(32, 100, 32, 0),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.cloud_off_outlined,
-            size: 56,
-            color: AppColors.red500.withAlpha(120),
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            '任务加载失败',
-            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 13, color: AppColors.slate400),
-          ),
-          const SizedBox(height: 16),
-          OutlinedButton.icon(
-            onPressed: () =>
-                ref.read(taskProvider.notifier).load(refresh: true),
-            icon: const Icon(Icons.refresh, size: 16),
-            label: const Text('重试'),
-          ),
-        ],
       ),
     );
   }
@@ -1641,18 +1583,21 @@ class _TaskCardState extends State<_TaskCard> {
     }
   }
 
+  // 四态配色：运行中=蓝(info/主色)、排队中=琥珀(warning)、失败=红(danger)、
+  // 已启用=绿(success)、已禁用=灰。改造前「运行中」与「已启用」都取 primary，
+  // 主色换蓝后两者彻底同色，这里把「已启用」还给绿色语义。
   Color _dotColor() {
     if (task.isRunning) {
-      return AppColors.primary;
+      return AppColors.info;
     }
     if (task.isQueued) {
-      return AppColors.amber500;
+      return AppColors.warning;
     }
     if (task.lastRunStatus == 1) {
-      return AppColors.red500;
+      return AppColors.danger;
     }
     if (task.isEnabled) {
-      return AppColors.primary;
+      return AppColors.success;
     }
     return AppColors.slate300;
   }
@@ -1673,31 +1618,31 @@ class _TaskCardState extends State<_TaskCard> {
   Color _statusBg() {
     if (task.isRunning) {
       return widget.isLight
-          ? AppColors.primaryLight
-          : AppColors.primary.withAlpha(25);
+          ? AppColors.infoLight
+          : AppColors.info.withAlpha(25);
     }
     if (task.isQueued) {
-      return AppColors.amber500.withAlpha(widget.isLight ? 18 : 25);
+      return AppColors.warning.withAlpha(widget.isLight ? 18 : 25);
     }
     if (task.isEnabled) {
       return widget.isLight
-          ? AppColors.blue100
-          : AppColors.blue500.withAlpha(25);
+          ? AppColors.successLight
+          : AppColors.success.withAlpha(25);
     }
     return widget.isLight ? AppColors.slate100 : AppColors.slate800;
   }
 
   Color _statusFg() {
     if (task.isRunning) {
-      return widget.isLight ? const Color(0xFF047857) : AppColors.primary;
+      return widget.isLight ? AppColors.infoDark : AppColors.info;
     }
     if (task.isQueued) {
-      return AppColors.amber500;
+      return AppColors.warning;
     }
     if (task.isEnabled) {
-      return widget.isLight ? AppColors.blue600 : AppColors.blue500;
+      return widget.isLight ? AppColors.successDark : AppColors.success;
     }
-    return AppColors.slate500;
+    return AppColors.neutral;
   }
 
   String _taskTypeLabel() {
@@ -2496,107 +2441,6 @@ class _MetaChip extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _TaskHeaderChipButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool isLight;
-  final VoidCallback onTap;
-
-  const _TaskHeaderChipButton({
-    required this.label,
-    required this.icon,
-    required this.isLight,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(
-          color: isLight ? Colors.white : AppColors.slate900,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: isLight ? AppColors.slate200 : AppColors.slate800,
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 16, color: AppColors.slate400),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _TaskBatchActionButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final Color color;
-  final bool isLight;
-  final bool enabled;
-  final VoidCallback onTap;
-
-  const _TaskBatchActionButton({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.isLight,
-    required this.enabled,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final backgroundColor = enabled
-        ? (isLight ? color.withAlpha(18) : color.withAlpha(24))
-        : (isLight ? AppColors.slate50 : AppColors.slate800);
-    final borderColor = enabled
-        ? color.withAlpha(isLight ? 60 : 90)
-        : (isLight ? AppColors.slate200 : AppColors.slate700);
-    final foregroundColor = enabled ? color : AppColors.slate400;
-
-    return GestureDetector(
-      onTap: enabled ? onTap : null,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: backgroundColor,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: borderColor),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 16, color: foregroundColor),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                color: foregroundColor,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

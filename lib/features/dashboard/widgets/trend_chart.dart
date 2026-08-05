@@ -48,9 +48,10 @@ class TrendChart extends StatelessWidget {
                 ),
               ),
               const Spacer(),
-              _LegendDot(color: AppColors.primary, label: '成功', isLight: isLight),
+              // 与同屏 TaskStatsCard 的「今日成功 / 今日失败」保持同一套语义色。
+              _LegendDot(color: AppColors.success, label: '成功', isLight: isLight),
               const SizedBox(width: 12),
-              _LegendDot(color: AppColors.red500, label: '失败', isLight: isLight),
+              _LegendDot(color: AppColors.danger, label: '失败', isLight: isLight),
             ],
           ),
           const SizedBox(height: 16),
@@ -122,8 +123,8 @@ class TrendChart extends StatelessWidget {
                 ),
                 borderData: FlBorderData(show: false),
                 lineBarsData: [
-                  _line(successSpots, AppColors.primary),
-                  _line(failSpots, AppColors.red500),
+                  _line(successSpots, AppColors.success),
+                  _line(failSpots, AppColors.danger),
                 ],
               ),
             ),

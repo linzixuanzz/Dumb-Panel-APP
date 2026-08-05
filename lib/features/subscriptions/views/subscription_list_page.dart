@@ -1078,24 +1078,26 @@ class _SubCard extends StatelessWidget {
     required this.onEdit,
   });
 
+  // 拉取中=蓝(info)、已启用=绿(success)、已禁用=灰。原先「已启用」是
+  // primary 淡底 + 写死的 Emerald 深绿字，主色换蓝后互相打架。
   Color _statusBg() {
     if (sub.isPulling) {
-      return isLight ? AppColors.blue100 : AppColors.blue500.withAlpha(25);
+      return isLight ? AppColors.infoLight : AppColors.info.withAlpha(25);
     }
     if (sub.enabled) {
-      return isLight ? AppColors.primaryLight : AppColors.primary.withAlpha(25);
+      return isLight ? AppColors.successLight : AppColors.success.withAlpha(25);
     }
     return isLight ? AppColors.slate100 : AppColors.slate800;
   }
 
   Color _statusFg() {
     if (sub.isPulling) {
-      return isLight ? AppColors.blue600 : AppColors.blue500;
+      return isLight ? AppColors.infoDark : AppColors.info;
     }
     if (sub.enabled) {
-      return isLight ? const Color(0xFF047857) : AppColors.primary;
+      return isLight ? AppColors.successDark : AppColors.success;
     }
-    return AppColors.slate500;
+    return AppColors.neutral;
   }
 
   @override
@@ -1489,8 +1491,8 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
                                       ),
                                       decoration: BoxDecoration(
                                         color: success
-                                            ? AppColors.primary.withAlpha(20)
-                                            : AppColors.red500.withAlpha(15),
+                                            ? AppColors.success.withAlpha(20)
+                                            : AppColors.danger.withAlpha(15),
                                         borderRadius: BorderRadius.circular(
                                           999,
                                         ),
@@ -1501,8 +1503,8 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
                                           fontSize: 11,
                                           fontWeight: FontWeight.w700,
                                           color: success
-                                              ? AppColors.primary
-                                              : AppColors.red500,
+                                              ? AppColors.success
+                                              : AppColors.danger,
                                         ),
                                       ),
                                     ),

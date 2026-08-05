@@ -43,7 +43,7 @@
 
 ## 读这些文档前必须知道的三件事
 
-### 1. 主题文件对界面几乎无效（反模式，第 0 期正在收敛）
+### 1. 主题文件对界面几乎无效（反模式，第 0 期已建杠杆、第 1 期继续收敛）
 
 `lib/core/theme/app_theme.dart` 定义了 `cardTheme` / `inputDecorationTheme` 等，但页面几乎不用：
 
@@ -53,6 +53,10 @@
 - `BorderRadius.circular(` **149 处 / 27 文件，11 种取值**（4/8/9/10/12/14/16/18/20/24/999）
 
 **后果**：把 `app_theme.dart` 的圆角全改成 0，界面上绝大多数卡片不会有任何变化。
+
+第 0 期 R4 已经补上 `lib/core/theme/design_tokens.dart`（令牌）
+与 `lib/shared/widgets/app_*.dart`（基元组件），并做了 5 个页面的示范迁移。
+**新代码必须走这一层**，否则第 1 期扁平化的杠杆会被继续稀释。
 详见 [component-guidelines.md](./component-guidelines.md#样式现状反模式)。
 
 ### 2. `validateStatus: status < 500` 让 4xx 变成「成功」
