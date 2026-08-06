@@ -910,12 +910,13 @@ class _ChannelCard extends StatelessWidget {
       ),
       child: Row(
         children: [
+          // 渠道图标底板：启用态 = success 绿。底板和图标是一对，必须同时改。
           Container(
             width: 36,
             height: 36,
             decoration: BoxDecoration(
               color: channel.enabled
-                  ? AppColors.primary.withAlpha(25)
+                  ? AppColors.success.withAlpha(25)
                   : AppColors.slate200.withAlpha(60),
               borderRadius: BorderRadius.circular(8),
             ),
@@ -924,7 +925,7 @@ class _ChannelCard extends StatelessWidget {
               size: 18,
               // 底板就是同色的 alpha=25 淡底，18px 图标按 UI 组件也要 3:1。
               color: context.surfaces.tintFg(
-                channel.enabled ? AppColors.primary : AppColors.slate400,
+                channel.enabled ? AppColors.success : AppColors.slate400,
               ),
             ),
           ),
@@ -975,10 +976,12 @@ class _ChannelCard extends StatelessWidget {
             onTap: onToggle,
             child: Padding(
               padding: const EdgeInsets.all(6),
+              // 开关图标：开 = 已启用 = success 绿。必须与同一行左侧的图标底板
+              // 一起改，否则同一张卡里「已启用」是一绿一蓝。
               child: Icon(
                 channel.enabled ? Icons.toggle_on : Icons.toggle_off,
                 size: 28,
-                color: channel.enabled ? AppColors.primary : AppColors.slate400,
+                color: channel.enabled ? AppColors.success : AppColors.slate400,
               ),
             ),
           ),

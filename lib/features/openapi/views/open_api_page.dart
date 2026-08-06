@@ -383,6 +383,8 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                           ),
                         ),
                         const SizedBox(width: 6),
+                        // 应用状态徽章：「启用」= success 绿。底色和前景是一对，
+                        // 必须同时改，否则会变成绿字压蓝底。
                         Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 6,
@@ -390,7 +392,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                           ),
                           decoration: BoxDecoration(
                             color: enabled
-                                ? AppColors.primary.withAlpha(25)
+                                ? AppColors.success.withAlpha(25)
                                 : AppColors.slate400.withAlpha(25),
                             borderRadius: BorderRadius.circular(4),
                           ),
@@ -402,7 +404,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                               // 底色是同一个色的 alpha=25 淡底。
                               color: context.surfaces.tintFg(
                                 enabled
-                                    ? AppColors.primary
+                                    ? AppColors.success
                                     : AppColors.slate400,
                               ),
                             ),
@@ -941,6 +943,9 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                           ),
                           child: Row(
                             children: [
+                              // 同上：HTTP 状态码徽章，2xx = success 绿。
+                              // 与页面下方那份调用日志徽章必须同色，否则同一个
+                              // 200 在两个入口是两种颜色。
                               Container(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 4,
@@ -948,7 +953,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                                 ),
                                 decoration: BoxDecoration(
                                   color: ok
-                                      ? AppColors.primary.withAlpha(25)
+                                      ? AppColors.success.withAlpha(25)
                                       : AppColors.red500.withAlpha(25),
                                   borderRadius: BorderRadius.circular(4),
                                 ),
@@ -961,7 +966,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                                     // 底色是同一个色的 alpha=25 淡底。
                                     color: AppSurfaces.of(ctx).tintFg(
                                       ok
-                                          ? AppColors.primary
+                                          ? AppColors.success
                                           : AppColors.red500,
                                     ),
                                   ),
@@ -1189,6 +1194,8 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
                             ),
                             child: Row(
                               children: [
+                                // HTTP 状态码徽章：2xx 是「成功」，走 success 绿，
+                                // 与失败的红成对。底色和前景是一对，必须同时改。
                                 Container(
                                   padding: const EdgeInsets.symmetric(
                                     horizontal: 5,
@@ -1196,7 +1203,7 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
                                   ),
                                   decoration: BoxDecoration(
                                     color: ok
-                                        ? AppColors.primary.withAlpha(25)
+                                        ? AppColors.success.withAlpha(25)
                                         : AppColors.red500.withAlpha(25),
                                     borderRadius: BorderRadius.circular(4),
                                   ),
@@ -1209,7 +1216,7 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
                                       // 底色是同一个色的 alpha=25 淡底。
                                       color: context.surfaces.tintFg(
                                         ok
-                                            ? AppColors.primary
+                                            ? AppColors.success
                                             : AppColors.red500,
                                       ),
                                     ),

@@ -441,11 +441,18 @@ class _ServerInfoCard extends StatelessWidget {
             children: [
               Row(
                 children: [
+                  // 主机名前的圆点语义是「在线」，属于 success 绿；primary 是品牌色
+                  // 与「运行中」，不承担「在线 / 健康」。
+                  //
+                  // ⚠️ 已知缺口（本期不修）：这个圆点**不绑定任何连接或健康状态**，
+                  // 面板不可达、接口报错时它同样常亮 —— 它现在只是个装饰。
+                  // 要真正表示在线，得接 dashboardProvider 的 error / 心跳状态，
+                  // 那是行为改动，不属于本期的配色语义修正。
                   Container(
                     width: 8,
                     height: 8,
                     decoration: const BoxDecoration(
-                      color: AppColors.primary,
+                      color: AppColors.success,
                       shape: BoxShape.circle,
                     ),
                   ),

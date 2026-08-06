@@ -1113,11 +1113,14 @@ class _SubCard extends StatelessWidget {
             // Top row: name + status
             Row(
               children: [
+                // 卡片圆点：「已启用」= success 绿。第 0 期已经把同一张卡右侧的
+                // 状态徽章（_statusBg/_statusFg）改成绿了，圆点却还留着蓝，
+                // 同一张卡里两个元件对「已启用」各说各话，这里补齐。
                 Container(
                   width: 8,
                   height: 8,
                   decoration: BoxDecoration(
-                    color: sub.enabled ? AppColors.primary : AppColors.slate300,
+                    color: sub.enabled ? AppColors.success : AppColors.slate300,
                     shape: BoxShape.circle,
                   ),
                 ),
@@ -1724,10 +1727,14 @@ class _SubscriptionPullStreamPageState
                 child: Text(
                   '拉取完成',
                   textAlign: TextAlign.center,
+                  // 「完成」是结果成功，不是「进行中」，所以走 success 而不是 primary。
+                  // 浅色分支取 successDark：这条 banner 压在 slate100 上，
+                  // 满强度 success 只有 2.1:1，加深一档才看得清。
+                  // 深色分支沿用日志前景色，不动。
                   style: TextStyle(
                     color: logTheme.brightness == Brightness.dark
                         ? logTheme.foreground
-                        : AppColors.primary,
+                        : AppColors.successDark,
                     fontSize: 13,
                   ),
                 ),

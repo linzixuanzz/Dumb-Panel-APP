@@ -1065,7 +1065,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                           AppTintedActionButton(
                             label: '批量启用',
                             icon: Icons.play_circle_outline,
-                            color: AppColors.primary,
+                            // 「启用」是 success 绿，与状态圆点/徽章同语义；
+                            // 原先是 primary，和「批量分组」的 blue500 同属蓝族，
+                            // 一条操作栏里两个蓝按钮分不清。
+                            color: AppColors.success,
                             enabled: selectedCount > 0,
                             onTap: () =>
                                 _performBatchAction(_EnvBatchAction.enable),
@@ -1250,12 +1253,14 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                     ],
                                   ),
                                 ),
+                                // 详情页圆点：「已启用」= success 绿。必须与列表卡
+                                // 圆点一起改，否则两个界面对同一个状态各说各话。
                                 Container(
                                   width: 8,
                                   height: 8,
                                   decoration: BoxDecoration(
                                     color: env.enabled
-                                        ? AppColors.primary
+                                        ? AppColors.success
                                         : AppColors.slate300,
                                     shape: BoxShape.circle,
                                   ),
@@ -1352,10 +1357,12 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         horizontal: 10,
                         vertical: 5,
                       ),
+                      // 「当前已启用」= success 绿。底色和前景是一对，必须同时改，
+                      // 只改一个就会变成绿字配蓝底（或反过来）。
                       decoration: BoxDecoration(
                         color:
                             (env.enabled
-                                    ? AppColors.primary
+                                    ? AppColors.success
                                     : AppColors.slate400)
                                 .withAlpha(18),
                         borderRadius: BorderRadius.circular(999),
@@ -1368,7 +1375,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                           // 底色就是这个色的 alpha=18 淡底，前景必须加深。
                           // 禁用态本来就换了 slate500，不属于同色叠同色。
                           color: env.enabled
-                              ? AppSurfaces.of(ctx).tintFg(AppColors.primary)
+                              ? AppSurfaces.of(ctx).tintFg(AppColors.success)
                               : AppColors.slate500,
                         ),
                       ),
@@ -1415,14 +1422,19 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         size: 16,
                       ),
                       label: Text(env.enabled ? '禁用' : '启用'),
+                      // 「启用」动作走 success 绿。这里用 tintFg 而不是满强度
+                      // success：按钮文字和描边直接压在弹层白底上，满强度 success
+                      // 只有 2.13:1，比换掉的 primary（2.78:1）还差 —— 换语义不能
+                      // 顺带把可读性换没了。tintFg 浅色下正好等于 successDark，
+                      // 与上方徽章同一族绿；深色下原样返回。
                       style: OutlinedButton.styleFrom(
                         foregroundColor: env.enabled
                             ? AppColors.slate600
-                            : AppColors.primary,
+                            : AppSurfaces.of(ctx).tintFg(AppColors.success),
                         side: BorderSide(
                           color: env.enabled
                               ? AppColors.slate300
-                              : AppColors.primary,
+                              : AppSurfaces.of(ctx).tintFg(AppColors.success),
                         ),
                       ),
                     ),
@@ -1906,7 +1918,9 @@ class _EnvCardState extends State<_EnvCard> {
                     _SwipeActionButton(
                       label: '启用',
                       icon: Icons.play_arrow_rounded,
-                      color: AppColors.primary,
+                      // 「启用」动作走 success 绿；淡底和前景（含 tintFg）都由
+                      // _SwipeActionButton 内部按这个 color 推导，改一处即可。
+                      color: AppColors.success,
                       enabled: !widget.env.enabled,
                       onTap: () => _runSwipeAction(widget.onEnable),
                     ),
@@ -2014,12 +2028,14 @@ class _EnvCardState extends State<_EnvCard> {
                           ),
                           const SizedBox(width: 8),
                         ],
+                        // 列表卡圆点：「已启用」= success 绿。必须与详情页的
+                        // 同义圆点一起改，否则同一个环境变量在两个界面是两种颜色。
                         Container(
                           width: 6,
                           height: 6,
                           decoration: BoxDecoration(
                             color: widget.env.enabled
-                                ? AppColors.primary
+                                ? AppColors.success
                                 : AppColors.slate300,
                             shape: BoxShape.circle,
                           ),

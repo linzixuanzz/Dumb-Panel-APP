@@ -293,11 +293,14 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
                       ),
                       child: Row(
                         children: [
+                          // 登录成功/失败图标：成功走 success 绿，与失败的红成对。
+                          // 原先成功是 primary —— 一个打勾图标用品牌蓝，
+                          // 和「失败 = 红」不属于同一套语义。
                           Icon(
                             success ? Icons.check_circle : Icons.cancel,
                             size: 18,
                             color: success
-                                ? AppColors.primary
+                                ? AppColors.success
                                 : AppColors.red500,
                           ),
                           const SizedBox(width: 10),

@@ -1046,8 +1046,10 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                           ),
                         ]
                       : runtimes.map((runtime) {
+                          // 「可用」是健康态，属 success 绿；primary 不表达可用。
+                          // 这一个变量同时驱动淡底、描边和 tintFg 前景，改一处即可。
                           final color = runtime.available
-                              ? AppColors.primary
+                              ? AppColors.success
                               : AppColors.amber500;
                           return Tooltip(
                             message: runtime.message,
@@ -1652,10 +1654,13 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
                 child: Text(
                   '安装完成',
                   textAlign: TextAlign.center,
+                  // 「完成」是结果成功，走 success；与列表卡「已安装」徽章同族。
+                  // 浅色分支取 successDark：banner 底是 slate100，
+                  // 满强度 success 只有 2.1:1。深色分支沿用日志前景色，不动。
                   style: TextStyle(
                     color: logTheme.brightness == Brightness.dark
                         ? logTheme.foreground
-                        : AppColors.primary,
+                        : AppColors.successDark,
                     fontSize: 13,
                   ),
                 ),

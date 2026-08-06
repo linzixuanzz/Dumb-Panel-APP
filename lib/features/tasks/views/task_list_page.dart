@@ -748,7 +748,9 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       AppTintedActionButton(
                         label: '批量启用',
                         icon: Icons.toggle_on_outlined,
-                        color: AppColors.primary,
+                        // 「启用」是 success 绿。原先它和左边的「批量运行」同为
+                        // primary，两个语义完全不同的动作长得一模一样。
+                        color: AppColors.success,
                         enabled: selectedCount > 0,
                         onTap: () =>
                             _performBatchTaskAction(_TaskBatchAction.enable),
@@ -1733,8 +1735,13 @@ class _TaskCardState extends State<_TaskCard> {
                       icon: task.isDisabled
                           ? Icons.play_circle_outline
                           : Icons.pause_circle_outline,
+                      // 「启用」是把任务切到已启用态，语义是 success 绿，
+                      // 和同卡状态圆点 / 徽章的「已启用」保持同色；
+                      // 原先取 primary，与「运行」类动作撞成同一个蓝。
+                      // 淡底与前景都由 _TaskSwipeActionButton 内部按这个 color
+                      // 推导（含 tintFg），这里改一处即可。
                       color: task.isDisabled
-                          ? AppColors.primary
+                          ? AppColors.success
                           : AppColors.slate500,
                       onTap: () => _runSwipeAction(widget.onToggleEnabled),
                     ),
