@@ -55,6 +55,14 @@ class _BackupFileRecord {
   bool get encrypted => filename.toLowerCase().endsWith('.enc');
 }
 
+/// 备份内容项，键必须与面板 `service.BackupSelection` 的 json tag 一一对应
+/// （server/service/backup_types.go:9-18，共 **8** 项）。
+///
+/// 少一项的后果不是「服务端补默认」而是「那一项被静默丢弃」：
+/// 面板的 `NormalizeDefaults()` 只在 `Any()` 为 false（一项都没选）时才整体置 true
+/// （backup_types.go:152-161）。APP 只要发了任意一个 true，`Any()` 就成立，
+/// 没发的键保持 Go 零值 false。task_views 缺失期间，**每一次从 APP 发起的备份都不含任务视图**，
+/// 恢复时自然也没有，而 UI 上完全看不出来。
 class _BackupSelection {
   final bool configs;
   final bool tasks;
@@ -63,6 +71,7 @@ class _BackupSelection {
   final bool logs;
   final bool scripts;
   final bool dependencies;
+  final bool taskViews;
 
   const _BackupSelection({
     required this.configs,
@@ -72,6 +81,7 @@ class _BackupSelection {
     required this.logs,
     required this.scripts,
     required this.dependencies,
+    required this.taskViews,
   });
 
   const _BackupSelection.defaults()
@@ -81,7 +91,8 @@ class _BackupSelection {
       envVars = true,
       logs = true,
       scripts = true,
-      dependencies = true;
+      dependencies = true,
+      taskViews = true;
 
   bool get any =>
       configs ||
@@ -90,7 +101,8 @@ class _BackupSelection {
       envVars ||
       logs ||
       scripts ||
-      dependencies;
+      dependencies ||
+      taskViews;
 
   _BackupSelection copyWith({
     bool? configs,
@@ -100,6 +112,7 @@ class _BackupSelection {
     bool? logs,
     bool? scripts,
     bool? dependencies,
+    bool? taskViews,
   }) {
     return _BackupSelection(
       configs: configs ?? this.configs,
@@ -109,6 +122,7 @@ class _BackupSelection {
       logs: logs ?? this.logs,
       scripts: scripts ?? this.scripts,
       dependencies: dependencies ?? this.dependencies,
+      taskViews: taskViews ?? this.taskViews,
     );
   }
 
@@ -121,6 +135,7 @@ class _BackupSelection {
       logs: json['logs'] != false,
       scripts: json['scripts'] != false,
       dependencies: json['dependencies'] != false,
+      taskViews: json['task_views'] != false,
     );
   }
 
@@ -132,6 +147,7 @@ class _BackupSelection {
     'logs': logs,
     'scripts': scripts,
     'dependencies': dependencies,
+    'task_views': taskViews,
   };
 
   List<String> labels() {
@@ -156,6 +172,9 @@ class _BackupSelection {
     }
     if (dependencies) {
       result.add('依赖记录');
+    }
+    if (taskViews) {
+      result.add('任务视图');
     }
     return result;
   }
@@ -235,6 +254,8 @@ const _backupSelectionOptions = [
   _BackupSelectionOption('logs', '日志文件', '任务日志记录、日志目录与面板运行日志'),
   _BackupSelectionOption('scripts', '脚本文件', '脚本目录内的源码、资源和可执行文件'),
   _BackupSelectionOption('dependencies', '依赖记录', '记录已安装依赖，恢复时按记录重新安装'),
+  // 文案对齐面板 Web 端 BackupManagementCard.vue:100-105。
+  _BackupSelectionOption('task_views', '任务视图', '分组视图与自定义筛选排序'),
 ];
 
 class _CreateBackupRequest {
@@ -866,6 +887,8 @@ class _BackupPageState extends ConsumerState<BackupPage> {
         return selection.scripts;
       case 'dependencies':
         return selection.dependencies;
+      case 'task_views':
+        return selection.taskViews;
       default:
         return false;
     }
@@ -891,6 +914,8 @@ class _BackupPageState extends ConsumerState<BackupPage> {
         return selection.copyWith(scripts: value);
       case 'dependencies':
         return selection.copyWith(dependencies: value);
+      case 'task_views':
+        return selection.copyWith(taskViews: value);
       default:
         return selection;
     }

@@ -620,7 +620,10 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
     final nameController = TextEditingController(text: channel?.name ?? '');
     final existingConfig = Map<String, dynamic>.from(channel?.config ?? {});
     final fieldControllers = <String, TextEditingController>{};
-    bool smtpSsl = _configBool(existingConfig['smtp_ssl']);
+    // SSL 是三态（自动 / 启用 / 关闭），不是开关：
+    // 面板在「auto 或键不存在」时按端口是否 465 自行判断，
+    // 用 bool 表达会把 auto 压成 false，等于替用户关掉 465 端口的 SSL。
+    String smtpSslMode = resolveSmtpSslMode(existingConfig);
 
     final availableTypes = ref.read(notificationListProvider).types.isNotEmpty
         ? ref.read(notificationListProvider).types
@@ -734,16 +737,36 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                         ),
                       ),
                       if (selectedType == 'email')
-                        SwitchListTile.adaptive(
-                          contentPadding: EdgeInsets.zero,
-                          title: const Text('启用 SMTP SSL'),
-                          subtitle: const Text(
-                            '465 端口通常需要开启，25/587 可按邮箱服务要求选择',
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          // 选项与文案对齐面板 Web 端
+                          // （web/src/views/notifications/index.vue:106-110）。
+                          child: DropdownButtonFormField<String>(
+                            initialValue: smtpSslMode,
+                            decoration: const InputDecoration(
+                              labelText: 'SSL 连接',
+                              helperText: '自动：465 端口启用',
+                            ),
+                            items: const [
+                              DropdownMenuItem(
+                                value: smtpSslModeAuto,
+                                child: Text('自动 (465 启用)'),
+                              ),
+                              DropdownMenuItem(
+                                value: smtpSslModeOn,
+                                child: Text('启用 SSL'),
+                              ),
+                              DropdownMenuItem(
+                                value: smtpSslModeOff,
+                                child: Text('关闭 SSL'),
+                              ),
+                            ],
+                            onChanged: (value) {
+                              if (value != null) {
+                                setSheetState(() => smtpSslMode = value);
+                              }
+                            },
                           ),
-                          value: smtpSsl,
-                          onChanged: (value) {
-                            setSheetState(() => smtpSsl = value);
-                          },
                         ),
                     ],
                     if (fields.isEmpty) ...[
@@ -785,7 +808,9 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                               for (final f in fields)
                                 f.key: getFieldController(f.key).text.trim(),
                             },
-                            smtpSsl: selectedType == 'email' ? smtpSsl : null,
+                            smtpSslMode: selectedType == 'email'
+                                ? smtpSslMode
+                                : null,
                           );
                         } else {
                           final raw = getFieldController(
@@ -1004,14 +1029,6 @@ String _typeName(List<NotificationTypeOption> types, String type) {
     }
   }
   return type;
-}
-
-bool _configBool(dynamic value) {
-  if (value is bool) {
-    return value;
-  }
-  final text = value?.toString().trim().toLowerCase() ?? '';
-  return text == 'true' || text == '1' || text == 'yes' || text == 'on';
 }
 
 String _extractMessage(dynamic error, String fallback) {
