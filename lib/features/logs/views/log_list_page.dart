@@ -265,6 +265,10 @@ class _LogListPageState extends ConsumerState<LogListPage> {
 
   void _showMessage(String message) => AppSnack.show(context, message);
 
+  void _showSuccess(String message) => AppSnack.success(context, message);
+
+  void _showError(String message) => AppSnack.error(context, message);
+
   String _extractError(Object error, String fallback) {
     return extractErrorMessage(error, fallback);
   }
@@ -335,9 +339,9 @@ class _LogListPageState extends ConsumerState<LogListPage> {
           .read(logListProvider.notifier)
           .batchDelete(_selectedIds.toList());
       _exitSelectionMode();
-      _showMessage('已删除 $count 条日志');
+      _showSuccess('已删除 $count 条日志');
     } catch (e) {
-      _showMessage(_extractError(e, '批量删除失败'));
+      _showError(_extractError(e, '批量删除失败'));
     }
   }
 
@@ -401,15 +405,20 @@ class _LogListPageState extends ConsumerState<LogListPage> {
             .read(logListProvider.notifier)
             .deleteAllMatching();
         _exitSelectionMode();
-        _showMessage(count == 0 ? '暂无可清理日志' : '已清理 $count 条日志');
+        // 一条都没清到不算成功，按中性提示，避免弹一条绿的却什么都没发生。
+        if (count == 0) {
+          _showMessage('暂无可清理日志');
+        } else {
+          _showSuccess('已清理 $count 条日志');
+        }
         return;
       }
 
       await ref.read(logListProvider.notifier).clean(days: days);
       _exitSelectionMode();
-      _showMessage('已清理 $days 天前的日志');
+      _showSuccess('已清理 $days 天前的日志');
     } catch (e) {
-      _showMessage(_extractError(e, '清理失败'));
+      _showError(_extractError(e, '清理失败'));
     }
   }
 
@@ -437,9 +446,9 @@ class _LogListPageState extends ConsumerState<LogListPage> {
     }
     try {
       await ref.read(logListProvider.notifier).deleteLog(log.id);
-      _showMessage('日志已删除');
+      _showSuccess('日志已删除');
     } catch (error) {
-      _showMessage(_extractError(error, '删除失败'));
+      _showError(_extractError(error, '删除失败'));
     }
   }
 

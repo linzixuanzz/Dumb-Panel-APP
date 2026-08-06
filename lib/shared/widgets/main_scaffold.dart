@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/theme/app_theme.dart';
+import 'app_snack.dart';
 
 class MainScaffold extends StatefulWidget {
   final Widget child;
@@ -35,14 +36,18 @@ class _MainScaffoldState extends State<MainScaffold> {
     if (_lastExitAttemptAt == null ||
         now.difference(_lastExitAttemptAt!) > const Duration(seconds: 5)) {
       _lastExitAttemptAt = now;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(
-            content: Text('5秒内再按一次返回键退出应用'),
-            duration: Duration(seconds: 5),
-          ),
-        );
+      // 走 AppSnack 而不是裸 showSnackBar：它是全 App 出现频率最高的提示条之一，
+      // 留在裸写法上会成为唯一一条还是通栏方块的提示，跟其余全部浮起圆角的对不上。
+      // 中性色调 —— 这是操作指引，不是成功也不是失败。
+      // replaceCurrent 等价于原来的 `..hideCurrentSnackBar()` 级联：AppSnack 内部
+      // 就是先 hideCurrentSnackBar 再 showSnackBar，顺序与关闭原因(hide)都一致。
+      AppSnack.show(
+        context,
+        '5秒内再按一次返回键退出应用',
+        replaceCurrent: true,
+        // 停留时长必须跟上面那个 5 秒判定窗口一致：提示消失即代表窗口关闭。
+        duration: const Duration(seconds: 5),
+      );
       return;
     }
 

@@ -153,26 +153,49 @@ decoration: BoxDecoration(
 `script_list_page.dart` 里的两份）。第 0 期 R4 把它们收敛成
 `lib/shared/widgets/app_snack.dart`：
 
+第 1 期提交 4 给它加了语义色调 `AppSnackTone{neutral, success, error, warning}`，
+各页面按语义留 2~4 行委托：
+
 ```dart
-// 现在各页面只留一行委托，mounted 判断收进 AppSnack 内部（用 BuildContext.mounted）
+// 中性告知（用户主动取消、空结果等），配色与第 0 期完全一致
 void _showMessage(String message) => AppSnack.show(context, message);
 
-// 需要覆盖上一条提示时（应用锁设置页）：
-AppSnack.show(context, message, replaceCurrent: true);
+// 成功 / 失败 / 警告
+void _showSuccess(String message) => AppSnack.success(context, message);
+void _showError(String message) => AppSnack.error(context, message);
+void _showWarning(String message) => AppSnack.warn(context, message);
+
+// 需要覆盖上一条提示时（应用锁设置页），三个快捷方法都支持：
+AppSnack.error(context, message, replaceCurrent: true);
 ```
 
-**没有** 成功/失败/警告的视觉区分，全部是默认样式的 SnackBar —— 这一点没变，
-`AppSnack` 只是把重复代码收了起来，视觉与行为与旧写法一致。
+规则：
 
-> `main_scaffold.dart:38-45` 的「5 秒内再按一次返回键退出」提示**刻意没有迁移**，
-> 避免把 `PopScope` 逻辑卷进 UI 重构的 diff 里。
+- **失败必须用 `error`**，不能再让「保存失败」和「保存成功」长得一样。
+- 用户主动取消、"暂无可清理内容" 这类**不表态**的提示留 `neutral`。
+- 校验没过 / 平台不支持 / 部分成功用 `warning`，不要一律报红。
+- 没有 `info`：蓝色已被 `AppColors.info` 占去表示「运行中」，提示条不再占用。
+- 底色前景一律走 `AppSurfaces.solidBg / solidFg`，禁止在调用点自己挑颜色。
+- 版式（`floating` + margin + 圆角）只在 `AppSnack` 里定，**不要**再加
+  `SnackBarThemeData`，两边同时配会互相盖。
+
+> `main_scaffold.dart` 的「5 秒内再按一次返回键退出」在提交 4 里**一并迁到了
+> `AppSnack.show(replaceCurrent: true, duration: 5s)`**。它本不在这一提交的范围内，
+> 但提交 4 把 `AppSnack` 的版式改成了 `floating`，不迁它就会变成全 App 唯一一条
+> 还是通栏方块的提示条 —— 而它恰恰是出现频率最高的之一。
+> **一般规则：本提交造成的不一致，在本提交里修掉，不推给 backlog。**
+>
+> 全库仍有 **115 处**裸 `showSnackBar(`（15 个文件，其中 `env_list_page`(18) /
+> `subscription_list_page`(12) 一次都没用过 `AppSnack`）没有迁移，单列 backlog。
+> 新代码一律走 `AppSnack`。
 
 错误文案统一经 `extractErrorMessage(error, fallback)`（`shared/utils/api_utils.dart:44`）提取后端 `error`/`message` 字段：
 
 ```dart
-// lib/features/tasks/views/task_list_page.dart:99-101, 3137
+// lib/features/tasks/views/task_list_page.dart —— 全部任务操作失败的漏斗，
+// 批量操作 / 排序保存 / 停止 / 启停 / 复制 / 置顶 / 删除七条路径共用
 Future<void> _showActionError(dynamic error, String fallback) async {
-  _showMessage(_extractTaskError(error, fallback));
+  _showError(_extractTaskError(error, fallback));
 }
 String _extractTaskError(dynamic error, String fallback) => extractErrorMessage(error, fallback);
 ```

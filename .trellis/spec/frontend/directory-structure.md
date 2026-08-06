@@ -137,11 +137,11 @@ features/
 
 | 文件 | 内容 | 状态 |
 |---|---|---|
-| `main_scaffold.dart` | 底部导航（自绘 `_NavItem`，未用 `NavigationBar`）+ **5 秒内双击返回退出**（`:29-50` `PopScope`） | 既有 |
+| `main_scaffold.dart` | 底部导航（自绘 `_NavItem`，未用 `NavigationBar`）+ **5 秒内双击返回退出**（`_handleBackPress` 里的 `PopScope`；提示条第 1 期已迁到 `AppSnack`） | 既有 |
 | `task_cron_list.dart` | Cron 规则展示卡片 | 既有 |
 | `app_card.dart` | `AppCard`：统一卡片容器（底色/描边/圆角走令牌） | 第 0 期 R4 新增 |
 | `app_state_views.dart` | `AppLoadingView` / `AppEmptyView` / `AppErrorView`：列表三态 | 第 0 期 R4 新增 |
-| `app_snack.dart` | `AppSnack.show()`：替代 8 处逐字重复的 `_showMessage` | 第 0 期 R4 新增 |
+| `app_snack.dart` | `AppSnack.show/success/error/warn()` + `AppSnackTone`：替代 8 处逐字重复的 `_showMessage`，并区分成功 / 失败 / 警告 | 第 0 期 R4 新增，第 1 期加 tone |
 | `app_buttons.dart` | `AppChipButton` / `AppTintedActionButton`：头部 chip 与批量操作按钮 | 第 0 期 R4 新增 |
 | `app_section_title.dart` | `AppSectionTitle`：设置类页面的区块小标题 | 第 0 期 R4 新增 |
 

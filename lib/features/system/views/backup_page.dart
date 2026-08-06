@@ -308,6 +308,12 @@ class _BackupPageState extends ConsumerState<BackupPage> {
 
   void _showMessage(String message) => AppSnack.show(context, message);
 
+  void _showSuccess(String message) => AppSnack.success(context, message);
+
+  void _showError(String message) => AppSnack.error(context, message);
+
+  void _showWarning(String message) => AppSnack.warn(context, message);
+
   void _ensureProgressPolling() {
     _progressTimer ??= Timer.periodic(
       const Duration(seconds: 1),
@@ -368,7 +374,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
       return;
     }
     if (!request.selection.any) {
-      _showMessage('请至少选择一个备份项');
+      _showWarning('请至少选择一个备份项');
       return;
     }
 
@@ -382,9 +388,9 @@ class _BackupPageState extends ConsumerState<BackupPage> {
         },
       );
       await _loadBackups();
-      _showMessage('备份创建成功');
+      _showSuccess('备份创建成功');
     } catch (error) {
-      _showMessage(_extractRequestError(error, '备份创建失败'));
+      _showError(_extractRequestError(error, '备份创建失败'));
     } finally {
       if (mounted) {
         setState(() => _creating = false);
@@ -494,7 +500,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     final file = result.files.first;
     final multipart = await _toMultipartFile(file);
     if (multipart == null) {
-      _showMessage('无法读取所选备份文件');
+      _showError('无法读取所选备份文件');
       return;
     }
 
@@ -508,9 +514,9 @@ class _BackupPageState extends ConsumerState<BackupPage> {
         options: Options(contentType: 'multipart/form-data'),
       );
       await _loadBackups();
-      _showMessage('备份导入成功');
+      _showSuccess('备份导入成功');
     } catch (error) {
-      _showMessage(_extractRequestError(error, '导入备份失败'));
+      _showError(_extractRequestError(error, '导入备份失败'));
     } finally {
       if (mounted) {
         setState(() => _uploading = false);
@@ -541,15 +547,17 @@ class _BackupPageState extends ConsumerState<BackupPage> {
         bytes: bytes,
       );
       if (savedPath == null) {
+        // 用户自己在系统保存框里按了取消，不是失败，保持中性。
         _showMessage('已取消保存');
         return;
       }
 
-      _showMessage('备份已保存');
+      _showSuccess('备份已保存');
     } on UnsupportedError {
-      _showMessage('当前平台暂不支持直接保存文件');
+      // 平台能力缺失而不是这次操作出错，用警告。
+      _showWarning('当前平台暂不支持直接保存文件');
     } catch (error) {
-      _showMessage(_extractRequestError(error, '下载备份失败'));
+      _showError(_extractRequestError(error, '下载备份失败'));
     } finally {
       if (mounted) {
         setState(() => _downloading.remove(filename));
@@ -592,15 +600,17 @@ class _BackupPageState extends ConsumerState<BackupPage> {
       );
       await _loadRestoreProgress();
       await _loadBackups();
-      _showMessage(
+      _showSuccess(
         _restoreProgress.completed ? '恢复完成，请等待面板状态稳定' : '恢复请求已提交，请关注进度卡片',
       );
     } catch (error) {
       await _loadRestoreProgress();
       if (_restoreProgress.visible || _restoreProgress.active) {
+        // 请求虽然抛了异常，但服务端确实已经在跑恢复了。既不能报红吓人，
+        // 也不能报绿说成功 —— 保持中性，把结论交给进度卡片。
         _showMessage('恢复请求已提交，请查看恢复进度');
       } else {
-        _showMessage(_extractRequestError(error, '恢复备份失败'));
+        _showError(_extractRequestError(error, '恢复备份失败'));
       }
     } finally {
       if (mounted) {
@@ -732,9 +742,9 @@ class _BackupPageState extends ConsumerState<BackupPage> {
         queryParameters: {'filename': filename},
       );
       await _loadBackups();
-      _showMessage('备份已删除');
+      _showSuccess('备份已删除');
     } catch (error) {
-      _showMessage(_extractRequestError(error, '删除备份失败'));
+      _showError(_extractRequestError(error, '删除备份失败'));
     } finally {
       if (mounted) {
         setState(() => _deleting.remove(filename));

@@ -377,7 +377,12 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     _selectedIds.removeWhere((id) => !validIds.contains(id));
   }
 
-  void _showMessage(String message) => AppSnack.show(context, message);
+  // 这个页面的每条提示都有明确成败，没有中性提示，所以不再保留 _showMessage。
+  void _showSuccess(String message) => AppSnack.success(context, message);
+
+  void _showError(String message) => AppSnack.error(context, message);
+
+  void _showWarning(String message) => AppSnack.warn(context, message);
 
   String _extractError(Object error, String fallback) {
     return extractErrorMessage(error, fallback);
@@ -435,9 +440,9 @@ class _DepListPageState extends ConsumerState<DepListPage> {
           .read(depListProvider.notifier)
           .setDefaultPythonRuntime(state.selectedPythonVersion);
       await _loadCounts();
-      _showMessage('已设置默认 Python 版本');
+      _showSuccess('已设置默认 Python 版本');
     } catch (error) {
-      _showMessage(_extractError(error, '设置默认 Python 版本失败'));
+      _showError(_extractError(error, '设置默认 Python 版本失败'));
     }
   }
 
@@ -451,13 +456,13 @@ class _DepListPageState extends ConsumerState<DepListPage> {
           .read(depListProvider.notifier)
           .create(type: request.type, names: request.names);
       await _loadCounts();
-      _showMessage(
+      _showSuccess(
         request.type == 'python'
             ? '已提交 Python 依赖安装，会同步到可用的 Python 版本'
             : '已提交 ${request.names.length} 个依赖安装',
       );
     } catch (error) {
-      _showMessage(_extractError(error, '提交安装失败'));
+      _showError(_extractError(error, '提交安装失败'));
     }
   }
 
@@ -582,9 +587,9 @@ class _DepListPageState extends ConsumerState<DepListPage> {
         return;
       }
       setState(() => _selectedIds.clear());
-      _showMessage('批量卸载已提交');
+      _showSuccess('批量卸载已提交');
     } catch (error) {
-      _showMessage(_extractError(error, '批量卸载失败'));
+      _showError(_extractError(error, '批量卸载失败'));
     }
   }
 
@@ -618,9 +623,9 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     try {
       await ref.read(depListProvider.notifier).delete(dep.id, force: force);
       await _loadCounts();
-      _showMessage(force ? '强制卸载中' : '卸载中');
+      _showSuccess(force ? '强制卸载中' : '卸载中');
     } catch (error) {
-      _showMessage(_extractError(error, force ? '强制卸载失败' : '卸载失败'));
+      _showError(_extractError(error, force ? '强制卸载失败' : '卸载失败'));
     }
   }
 
@@ -628,9 +633,9 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     try {
       await ref.read(depListProvider.notifier).reinstall(dep.id);
       await _loadCounts();
-      _showMessage('重新安装中');
+      _showSuccess('重新安装中');
     } catch (error) {
-      _showMessage(_extractError(error, '重新安装失败'));
+      _showError(_extractError(error, '重新安装失败'));
     }
   }
 
@@ -638,9 +643,9 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     try {
       await ref.read(depListProvider.notifier).cancel(dep.id);
       await _loadCounts();
-      _showMessage('取消请求已提交');
+      _showSuccess('取消请求已提交');
     } catch (error) {
-      _showMessage(_extractError(error, '取消失败'));
+      _showError(_extractError(error, '取消失败'));
     }
   }
 
@@ -687,7 +692,8 @@ class _DepListPageState extends ConsumerState<DepListPage> {
       }
       if (!nextConfig.linuxMirrorSupported &&
           nextConfig.linuxMirror.trim().isNotEmpty) {
-        _showMessage(
+        // 系统不支持而不是保存出错，用警告而不是失败。
+        _showWarning(
           nextConfig.linuxMirrorMessage.isNotEmpty
               ? nextConfig.linuxMirrorMessage
               : '当前系统暂不支持 Linux 镜像设置',
@@ -699,16 +705,16 @@ class _DepListPageState extends ConsumerState<DepListPage> {
       }
       try {
         await ref.read(depListProvider.notifier).setMirrors(nextConfig);
-        _showMessage('镜像源设置成功');
+        _showSuccess('镜像源设置成功');
       } catch (error) {
-        _showMessage(_extractError(error, '镜像源设置失败'));
+        _showError(_extractError(error, '镜像源设置失败'));
       } finally {
         if (mounted) {
           setState(() => _mirrorSaving = false);
         }
       }
     } catch (error) {
-      _showMessage(_extractError(error, '获取镜像源配置失败'));
+      _showError(_extractError(error, '获取镜像源配置失败'));
     } finally {
       if (mounted) {
         setState(() => _mirrorLoading = false);

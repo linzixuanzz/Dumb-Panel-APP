@@ -23,9 +23,16 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
     Future.microtask(() => ref.read(appLockProvider.notifier).initialize());
   }
 
-  // 这里保留 replaceCurrent：应用锁的提示连续弹出时要覆盖上一条，不排队。
-  void _showMessage(String message) =>
-      AppSnack.show(context, message, replaceCurrent: true);
+  // 三个包装器都保留 replaceCurrent：应用锁的提示连续弹出时要覆盖上一条，不排队。
+  // 这个页面每条提示都有明确成败，没有中性提示，所以不再保留 _showMessage。
+  void _showSuccess(String message) =>
+      AppSnack.success(context, message, replaceCurrent: true);
+
+  void _showError(String message) =>
+      AppSnack.error(context, message, replaceCurrent: true);
+
+  void _showWarning(String message) =>
+      AppSnack.warn(context, message, replaceCurrent: true);
 
   String _readError(Object error, String fallback) {
     if (error is StateError) {
@@ -38,12 +45,27 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
     return text.isEmpty ? fallback : text;
   }
 
+  /// 按错误类型挑色调，不要一律报红。
+  ///
+  /// `app_lock_provider` 只在**前置条件没满足**时抛 `StateError`
+  /// （`:153` 还没配任何验证方式、`:201` 设备没有指纹/人脸硬件）——
+  /// 那是拒绝执行，不是操作失败，报红属于误报。
+  /// 真正的失败来自安全存储与平台通道，走 error。
+  void _reportFailure(Object error, String fallback) {
+    final message = _readError(error, fallback);
+    if (error is StateError) {
+      _showWarning(message);
+    } else {
+      _showError(message);
+    }
+  }
+
   Future<void> _toggleEnabled(bool value) async {
     try {
       await ref.read(appLockProvider.notifier).setEnabled(value);
-      _showMessage(value ? '应用锁已开启' : '应用锁已关闭');
+      _showSuccess(value ? '应用锁已开启' : '应用锁已关闭');
     } catch (error) {
-      _showMessage(_readError(error, '应用锁状态更新失败'));
+      _reportFailure(error, '应用锁状态更新失败');
     }
   }
 
@@ -114,11 +136,11 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
                 final password = passwordController.text.trim();
                 final confirm = confirmController.text.trim();
                 if (password.length < 4) {
-                  _showMessage('应用锁密码至少需要 4 位');
+                  _showWarning('应用锁密码至少需要 4 位');
                   return;
                 }
                 if (password != confirm) {
-                  _showMessage('两次输入的密码不一致');
+                  _showWarning('两次输入的密码不一致');
                   return;
                 }
                 Navigator.pop(dialogCtx, password);
@@ -139,9 +161,9 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
 
     try {
       await ref.read(appLockProvider.notifier).savePassword(password);
-      _showMessage(changing ? '应用锁密码已更新' : '应用锁密码已设置');
+      _showSuccess(changing ? '应用锁密码已更新' : '应用锁密码已设置');
     } catch (error) {
-      _showMessage(_readError(error, '应用锁密码保存失败'));
+      _reportFailure(error, '应用锁密码保存失败');
     }
   }
 
@@ -149,7 +171,7 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
     final confirmed = await _confirmAction('移除密码', '移除后将不能再使用密码进行应用解锁，是否继续？');
     if (confirmed != true) return;
     await ref.read(appLockProvider.notifier).removePassword();
-    _showMessage('应用锁密码已移除');
+    _showSuccess('应用锁密码已移除');
   }
 
   Future<void> _configurePattern({required bool changing}) async {
@@ -163,9 +185,9 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
 
     try {
       await ref.read(appLockProvider.notifier).savePattern(pattern);
-      _showMessage(changing ? '应用锁图案已更新' : '应用锁图案已设置');
+      _showSuccess(changing ? '应用锁图案已更新' : '应用锁图案已设置');
     } catch (error) {
-      _showMessage(_readError(error, '应用锁图案保存失败'));
+      _reportFailure(error, '应用锁图案保存失败');
     }
   }
 
@@ -173,15 +195,15 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
     final confirmed = await _confirmAction('移除图案', '移除后将不能再使用图案进行应用解锁，是否继续？');
     if (confirmed != true) return;
     await ref.read(appLockProvider.notifier).removePattern();
-    _showMessage('应用锁图案已移除');
+    _showSuccess('应用锁图案已移除');
   }
 
   Future<void> _toggleBiometric(bool value) async {
     try {
       await ref.read(appLockProvider.notifier).setBiometricEnabled(value);
-      _showMessage(value ? '生物识别解锁已开启' : '生物识别解锁已关闭');
+      _showSuccess(value ? '生物识别解锁已开启' : '生物识别解锁已关闭');
     } catch (error) {
-      _showMessage(_readError(error, '生物识别设置失败'));
+      _reportFailure(error, '生物识别设置失败');
     }
   }
 
@@ -420,7 +442,7 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
                                   ref
                                       .read(appLockProvider.notifier)
                                       .lockIfEnabled();
-                                  _showMessage('应用已立即锁定，可直接验证体验');
+                                  _showSuccess('应用已立即锁定，可直接验证体验');
                                 }
                               : null,
                           icon: const Icon(Icons.lock_clock_outlined, size: 18),

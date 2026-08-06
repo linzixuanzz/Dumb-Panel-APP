@@ -96,7 +96,9 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
     return '公网域名建议使用 HTTPS 以保证数据安全。';
   }
 
-  void _showMessage(String message) => AppSnack.show(context, message);
+  void _showSuccess(String message) => AppSnack.success(context, message);
+
+  void _showWarning(String message) => AppSnack.warn(context, message);
 
   PanelConfig _panelForSave(String finalUrl, PanelConfig? existing) {
     final name = _nameController.text.trim();
@@ -174,7 +176,8 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
         : _panels.where((p) => p.url == url).firstOrNull;
 
     if (_isManageMode && url != null && url == _activeServerUrl) {
-      _showMessage('当前正在使用这个服务器');
+      // 拒绝执行而不是执行出错，用警告。
+      _showWarning('当前正在使用这个服务器');
       return;
     }
 
@@ -253,7 +256,7 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
       );
       if (!shouldSwitch) {
         if (url == null) {
-          _showMessage('服务器已保存，当前账号保持不变');
+          _showSuccess('服务器已保存，当前账号保持不变');
         }
         return;
       }
@@ -267,7 +270,7 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
     final isAuthenticated =
         ref.read(authProvider).status == AuthStatus.authenticated;
     if (_isManageMode && isAuthenticated && panel.url == _activeServerUrl) {
-      _showMessage('当前使用中的服务器暂时不能删除');
+      _showWarning('当前使用中的服务器暂时不能删除');
       return;
     }
 

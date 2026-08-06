@@ -93,8 +93,16 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
 
   void _showMessage(String message) => AppSnack.show(context, message);
 
+  void _showSuccess(String message) => AppSnack.success(context, message);
+
+  void _showError(String message) => AppSnack.error(context, message);
+
+  void _showWarning(String message) => AppSnack.warn(context, message);
+
+  /// 全部任务操作失败的漏斗：批量操作 / 排序保存 / 停止 / 启停 / 复制 / 置顶 / 删除
+  /// 七条路径都从这里出提示，所以着色只需要改这一处。
   Future<void> _showActionError(dynamic error, String fallback) async {
-    _showMessage(_extractTaskError(error, fallback));
+    _showError(_extractTaskError(error, fallback));
   }
 
   bool _isAllTasksSelected(List<Task> tasks) =>
@@ -186,7 +194,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     }
 
     if (action == _TaskBatchAction.run && ids.length > 10) {
-      _showMessage('批量运行最多选择 10 个任务');
+      _showWarning('批量运行最多选择 10 个任务');
       return;
     }
 
@@ -225,7 +233,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
         _TaskBatchAction.disable => '已批量禁用 ${ids.length} 个任务',
         _TaskBatchAction.delete => '已批量删除 ${ids.length} 个任务',
       };
-      _showMessage(message);
+      _showSuccess(message);
     } catch (error) {
       await _showActionError(error, '批量操作失败');
     }
@@ -246,7 +254,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
         _taskSortMode = false;
         _taskOrderDirty = false;
       });
-      _showMessage('任务排序已保存');
+      _showSuccess('任务排序已保存');
     } catch (error) {
       await _showActionError(error, '保存任务排序失败');
     }
@@ -270,7 +278,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       }
       context.push('/logs/${latestLog.id}/stream');
     } catch (_) {
-      _showMessage('打开日志失败');
+      _showError('打开日志失败');
     }
   }
 
@@ -294,14 +302,14 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
         _openLiveLog(task);
         return;
       }
-      _showMessage(message);
+      _showError(message);
     }
   }
 
   Future<void> _stopTask(Task task) async {
     try {
       await ref.read(taskProvider.notifier).stopTask(task.id);
-      _showMessage('任务已停止');
+      _showSuccess('任务已停止');
     } catch (error) {
       await _showActionError(error, '停止任务失败');
     }
@@ -311,10 +319,10 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     try {
       if (task.isDisabled) {
         await ref.read(taskProvider.notifier).enableTask(task.id);
-        _showMessage('任务已启用');
+        _showSuccess('任务已启用');
       } else {
         await ref.read(taskProvider.notifier).disableTask(task.id);
-        _showMessage(task.isRunning ? '任务已设置为完成后禁用' : '任务已禁用');
+        _showSuccess(task.isRunning ? '任务已设置为完成后禁用' : '任务已禁用');
       }
     } catch (error) {
       await _showActionError(error, '更新任务状态失败');
@@ -324,7 +332,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   Future<void> _copyTask(Task task) async {
     try {
       await ref.read(taskProvider.notifier).copyTask(task.id);
-      _showMessage('任务已复制');
+      _showSuccess('任务已复制');
     } catch (error) {
       await _showActionError(error, '复制任务失败');
     }
@@ -334,10 +342,10 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     try {
       if (task.isPinned) {
         await ref.read(taskProvider.notifier).unpinTask(task.id);
-        _showMessage('已取消置顶');
+        _showSuccess('已取消置顶');
       } else {
         await ref.read(taskProvider.notifier).pinTask(task.id);
-        _showMessage('已置顶任务');
+        _showSuccess('已置顶任务');
       }
     } catch (error) {
       await _showActionError(error, '更新置顶状态失败');
@@ -1511,15 +1519,16 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
             ApiEndpoints.scripts,
             queryParameters: {'path': scriptPath, 'type': 'file'},
           );
-          _showMessage('任务和关联脚本已删除');
+          _showSuccess('任务和关联脚本已删除');
         } catch (error) {
-          _showMessage(
+          // 部分成功：任务删掉了、脚本没删掉。既不能报绿也不能报红。
+          _showWarning(
             '任务已删除，但脚本删除失败：${extractErrorMessage(error, '请稍后手动删除脚本')}',
           );
         }
         return;
       }
-      _showMessage('任务已删除');
+      _showSuccess('任务已删除');
     } catch (error) {
       await _showActionError(error, '删除任务失败');
     }

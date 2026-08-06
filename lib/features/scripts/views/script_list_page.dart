@@ -477,6 +477,12 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
 
   void _showMessage(String message) => AppSnack.show(context, message);
 
+  void _showSuccess(String message) => AppSnack.success(context, message);
+
+  void _showError(String message) => AppSnack.error(context, message);
+
+  void _showWarning(String message) => AppSnack.warn(context, message);
+
   String _extractScriptError(dynamic error, String fallback) =>
       extractScriptSaveErrorMessage(error, fallback);
 
@@ -507,7 +513,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
     if (!mounted) {
       return;
     }
-    _showMessage(
+    _showSuccess(
       _favoriteScriptPaths.contains(file.path) ? '已置顶脚本' : '已取消置顶脚本',
     );
   }
@@ -1037,7 +1043,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     return;
                   }
                   navigator.pop();
-                  _showMessage('已重命名为 ${newPath.split('/').last}');
+                  _showSuccess('已重命名为 ${newPath.split('/').last}');
                 } catch (error) {
                   if (!mounted) {
                     return;
@@ -1087,9 +1093,9 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
       await ref
           .read(scriptProvider.notifier)
           .deletePath(file.path, isDirectory: file.isDirectory);
-      _showMessage(file.isDirectory ? '文件夹已删除' : '脚本已删除');
+      _showSuccess(file.isDirectory ? '文件夹已删除' : '脚本已删除');
     } catch (error) {
-      _showMessage(_extractRequestError(error, '删除失败'));
+      _showError(_extractRequestError(error, '删除失败'));
     }
   }
 
@@ -1113,15 +1119,17 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
         bytes: bytes,
       );
       if (savedPath == null) {
+        // 用户自己在系统保存框里按了取消，不是失败，保持中性。
         _showMessage('已取消保存');
         return;
       }
 
-      _showMessage('脚本已保存');
+      _showSuccess('脚本已保存');
     } on UnsupportedError {
-      _showMessage('当前平台暂不支持直接保存文件');
+      // 平台能力缺失而不是这次操作出错，用警告。
+      _showWarning('当前平台暂不支持直接保存文件');
     } catch (error) {
-      _showMessage(_extractScriptError(error, '下载脚本失败'));
+      _showError(_extractScriptError(error, '下载脚本失败'));
     }
   }
 
@@ -1182,7 +1190,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                       return;
                     }
                     navigator.pop();
-                    _showMessage('已移动到 ${newPath.split('/').last}');
+                    _showSuccess('已移动到 ${newPath.split('/').last}');
                   } catch (error) {
                     if (!mounted) {
                       return;
@@ -1281,7 +1289,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                       return;
                     }
                     navigator.pop();
-                    _showMessage('已复制到 ${newPath.split('/').last}');
+                    _showSuccess('已复制到 ${newPath.split('/').last}');
                   } catch (error) {
                     if (!mounted) {
                       return;
@@ -1477,7 +1485,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                       return;
                     }
                     navigator.pop();
-                    _showMessage('文件夹创建成功');
+                    _showSuccess('文件夹创建成功');
                   } catch (error) {
                     if (!mounted) {
                       return;
@@ -1604,7 +1612,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                       return;
                     }
                     navigator.pop();
-                    _showMessage(
+                    _showSuccess(
                       paths.length > 1 ? '成功上传 ${paths.length} 个文件' : '上传成功',
                     );
                     if (paths.length == 1) {
@@ -1786,6 +1794,12 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
 
   void _showMessage(String message) => AppSnack.show(context, message);
 
+  void _showSuccess(String message) => AppSnack.success(context, message);
+
+  void _showError(String message) => AppSnack.error(context, message);
+
+  void _showWarning(String message) => AppSnack.warn(context, message);
+
   String _extractScriptError(dynamic error, String fallback) =>
       extractScriptSaveErrorMessage(error, fallback);
 
@@ -1804,9 +1818,9 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
         return;
       }
       setState(() => _editing = false);
-      _showMessage('保存成功');
+      _showSuccess('保存成功');
     } catch (error) {
-      _showMessage(_extractScriptError(error, '保存失败'));
+      _showError(_extractScriptError(error, '保存失败'));
     }
   }
 
@@ -1822,12 +1836,12 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
       if (!_editing) {
         setState(() => _editing = true);
       }
-      _showMessage('格式化完成');
+      _showSuccess('格式化完成');
     } catch (error) {
       final message = error is StateError
           ? error.message
           : _extractRequestError(error, '格式化失败');
-      _showMessage(message);
+      _showError(message);
     }
   }
 
@@ -1882,7 +1896,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
             _ScriptDebugRunSheet(path: widget.path, runId: runId!),
       );
     } catch (error) {
-      _showMessage(_extractScriptError(error, '调试运行失败'));
+      _showError(_extractScriptError(error, '调试运行失败'));
     } finally {
       if (mounted) {
         setState(() => _debugRunning = false);
@@ -1984,13 +1998,13 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
   bool _findInContent(String rawQuery, {required bool forward}) {
     final query = rawQuery.trim();
     if (query.isEmpty) {
-      _showMessage('请输入要查找的内容');
+      _showWarning('请输入要查找的内容');
       return false;
     }
 
     final content = _contentController.text;
     if (content.isEmpty) {
-      _showMessage('当前脚本暂无可搜索内容');
+      _showWarning('当前脚本暂无可搜索内容');
       return false;
     }
 
@@ -2018,7 +2032,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
     }
 
     if (index == -1) {
-      _showMessage('未找到“$query”');
+      _showWarning('未找到“$query”');
       return false;
     }
 
@@ -2043,7 +2057,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
 
   Future<void> _showFindSheet() async {
     if (ref.read(scriptProvider).isBinary) {
-      _showMessage('当前文件暂不支持查找');
+      _showWarning('当前文件暂不支持查找');
       return;
     }
 

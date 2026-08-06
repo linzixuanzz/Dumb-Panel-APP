@@ -177,6 +177,30 @@ class AppSurfaces {
     }
     return Color.lerp(color, Colors.black, 0.2)!;
   }
+
+  // ── 强调色的实底 ──────────────────────────────────────
+
+  /// 强调色**实底**（满铺，不是 [tintBg] 那种 alpha=18 的淡底）。目前用于提示条。
+  ///
+  /// 为什么明暗两套方向相反，而不是像 [tintFg] 那样深色模式直接返回原色：
+  /// SnackBar 的默认底色是 `ColorScheme.inverseSurface`，语义就是「与页面相反」——
+  /// 浅色模式给深底浅字、深色模式给浅底深字。语义色必须跟上这个方向，否则
+  /// 深色模式下一条压深了的提示条会比页面还暗，边界糊掉：实测把浅色模式那支
+  /// 深绿 #3E7423 摆到 slate950 页面上只有 2.42:1，连非文字元素的 3:1 都不到。
+  ///
+  /// 浅色模式用 `mix(color, black, 40%)`，与 [tintFg] 的 20% 是同一套配方，
+  /// 只是压得更深 —— 因为这里白字压的是满强度实色，20% 不够：
+  /// success 压到 #529B2E 配白字只有 3.45:1、info 压到 #337ECC 只有 4.20:1，
+  /// 都过不了正文所需的 4.5:1。40% 之后 success 5.61 / danger 8.33 / warning 5.42。
+  Color solidBg(Color color) =>
+      isLight ? Color.lerp(color, Colors.black, 0.4)! : color;
+
+  /// 压在 [solidBg] 上的前景文字色。
+  ///
+  /// 深色模式配满强度底：success 8.99:1、danger 5.36:1、warning 9.39:1。
+  /// 这里用 slate950 而不是 slate900，是因为 danger #EF4444 是三支里**最暗**的底，
+  /// 配 slate900 只剩 4.74:1，刚压着 4.5 的线；换 slate950 拉回 5.36:1 才有余量。
+  Color get solidFg => isLight ? Colors.white : AppColors.slate950;
 }
 
 extension AppSurfacesContext on BuildContext {
