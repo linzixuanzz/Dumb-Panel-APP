@@ -5,6 +5,7 @@ import '../../../core/auth/auth_provider.dart';
 import '../../../core/auth/auth_service.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/storage/secure_storage.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../dashboard/providers/dashboard_provider.dart';
 
@@ -323,7 +324,8 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
             children: [
               SizedBox(height: _isManageMode ? 8 : 40),
               ClipRRect(
-                borderRadius: BorderRadius.circular(16),
+                // 64 的主视觉 logo，直接摆在页面上、内部不再套层，走 lg。
+                borderRadius: BorderRadius.circular(AppRadius.lg),
                 child: Image.asset('assets/icon.png', width: 64, height: 64),
               ),
               const SizedBox(height: 12),
@@ -386,7 +388,9 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
                               ),
                               decoration: BoxDecoration(
                                 color: theme.colorScheme.primaryContainer,
-                                borderRadius: BorderRadius.circular(999),
+                                borderRadius: BorderRadius.circular(
+                                  AppRadius.pill,
+                                ),
                               ),
                               child: Text(
                                 '当前',

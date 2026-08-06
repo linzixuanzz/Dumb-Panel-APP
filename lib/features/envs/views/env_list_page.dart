@@ -879,8 +879,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                           fillColor: isLight
                               ? Colors.white
                               : AppColors.slate900,
+                          // 逐字复制 app_theme 的三处 OutlineInputBorder：
+                          // 计划裁决只令牌化不删除。三处圆角同值是聚焦动画的硬要求。
                           border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(AppRadius.md),
                             borderSide: BorderSide(
                               color: isLight
                                   ? AppColors.slate200
@@ -888,7 +890,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                             ),
                           ),
                           enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(AppRadius.md),
                             borderSide: BorderSide(
                               color: isLight
                                   ? AppColors.slate200
@@ -896,7 +898,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                             ),
                           ),
                           focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(AppRadius.md),
                             borderSide: const BorderSide(
                               color: AppColors.primary,
                               width: 1.5,
@@ -982,7 +984,8 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       decoration: BoxDecoration(
                         color: isLight ? Colors.white : AppColors.slate900,
-                        borderRadius: BorderRadius.circular(12),
+                        // 与左边同一行、同为 44 高的搜索框成对，必须同档。
+                        borderRadius: BorderRadius.circular(AppRadius.md),
                         border: Border.all(
                           color: isLight
                               ? AppColors.slate200
@@ -1326,7 +1329,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                     ? AppColors.success
                                     : AppColors.slate400)
                                 .withAlpha(18),
-                        borderRadius: BorderRadius.circular(999),
+                        borderRadius: BorderRadius.circular(AppRadius.pill),
                       ),
                       child: Text(
                         env.enabled ? '当前已启用' : '当前已禁用',
@@ -1703,7 +1706,8 @@ class _EnvValueSheetEditor extends StatelessWidget {
                       height: 36,
                       decoration: BoxDecoration(
                         color: AppColors.primary.withAlpha(isLight ? 20 : 34),
-                        borderRadius: BorderRadius.circular(12),
+                        // 图标底板一律走 sm，不跟外层容器同档。
+                        borderRadius: BorderRadius.circular(AppRadius.sm),
                       ),
                       child: const Icon(
                         Icons.open_in_full,
@@ -1749,7 +1753,7 @@ class _EnvValueSheetEditor extends StatelessWidget {
                       filled: true,
                       fillColor: isLight ? Colors.white : AppColors.slate900,
                       border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
+                        borderRadius: BorderRadius.circular(AppRadius.md),
                       ),
                     ),
                   ),
@@ -1959,7 +1963,9 @@ class _EnvCardState extends State<_EnvCard> {
                 ),
                 decoration: BoxDecoration(
                   color: widget.isLight ? Colors.white : AppColors.slate900,
-                  borderRadius: BorderRadius.circular(12),
+                  // 列表项卡片。这一处没迁 AppCard（要 AnimatedContainer +
+                  // Matrix4 做左滑），但圆角必须与 AppCard 同档。
+                  borderRadius: BorderRadius.circular(AppRadius.lg),
                   border: Border.all(
                     color: widget.selected
                         ? AppColors.primary
@@ -2110,10 +2116,11 @@ class _SwipeActionButton extends StatelessWidget {
       width: _EnvCardState._actionWidth,
       child: Material(
         color: backgroundColor,
-        borderRadius: BorderRadius.circular(10),
+        // 左滑露出的操作按钮，走按钮档；底板与水波纹必须同值。
+        borderRadius: BorderRadius.circular(AppRadius.md),
         child: InkWell(
           onTap: enabled ? onTap : null,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(AppRadius.md),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -2152,7 +2159,7 @@ class _MiniBtn extends StatelessWidget {
         padding: const EdgeInsets.all(6),
         decoration: BoxDecoration(
           color: isLight ? AppColors.slate50 : AppColors.slate800,
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.sm),
         ),
         child: Icon(icon, size: 14, color: AppColors.slate400),
       ),

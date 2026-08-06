@@ -912,7 +912,8 @@ class _ChannelCard extends StatelessWidget {
               color: channel.enabled
                   ? AppColors.success.withAlpha(25)
                   : AppColors.slate200.withAlpha(60),
-              borderRadius: BorderRadius.circular(8),
+              // 图标底板一律走 sm，不跟外层 AppCard（lg）同档。
+              borderRadius: BorderRadius.circular(AppRadius.sm),
             ),
             child: Icon(
               _typeIcon(),

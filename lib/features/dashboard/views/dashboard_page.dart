@@ -417,7 +417,8 @@ class _ServerInfoCard extends StatelessWidget {
               ? [Colors.white, AppColors.slate50]
               : [AppColors.slate900, AppColors.slate800],
         ),
-        borderRadius: BorderRadius.circular(16),
+        // 区块级大卡片，与 AppCard / cardTheme 同档。
+        borderRadius: BorderRadius.circular(AppRadius.lg),
         border: Border.all(
           color: isLight ? AppColors.slate200 : AppColors.slate800,
         ),
@@ -553,7 +554,8 @@ class _StatCard extends StatelessWidget {
                 height: 32,
                 decoration: BoxDecoration(
                   color: isLight ? iconBg : iconBgDark,
-                  borderRadius: BorderRadius.circular(8),
+                  // 图标底板一律走 sm，不跟外层 AppCard（lg）同档。
+                  borderRadius: BorderRadius.circular(AppRadius.sm),
                 ),
                 child: Icon(
                   icon,
@@ -596,7 +598,9 @@ class _StatCard extends StatelessWidget {
             ),
           const SizedBox(height: 6),
           ClipRRect(
-            borderRadius: BorderRadius.circular(4),
+            // 零像素变化：进度条只有 6 高，圆角被 clamp 到 3，原写的 4 从未生效。
+            // 它渲染出来一直是胶囊，这里只是改成诚实的写法。
+            borderRadius: BorderRadius.circular(AppRadius.pill),
             child: LinearProgressIndicator(
               value: value == null ? null : (value! / 100).clamp(0.0, 1.0),
               minHeight: 6,

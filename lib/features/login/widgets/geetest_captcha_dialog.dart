@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 
 class GeeTestCaptchaDialog extends StatefulWidget {
   final String captchaId;
@@ -209,7 +210,8 @@ class _GeeTestCaptchaDialogState extends State<GeeTestCaptchaDialog> {
                     height: 34,
                     decoration: BoxDecoration(
                       color: AppColors.primary.withAlpha(20),
-                      borderRadius: BorderRadius.circular(10),
+                      // 图标底板一律走 sm，不跟外层弹窗（lg）同档。
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
                     ),
                     child: const Icon(
                       Icons.verified_user_outlined,
@@ -239,7 +241,9 @@ class _GeeTestCaptchaDialogState extends State<GeeTestCaptchaDialog> {
               const SizedBox(height: 12),
               Expanded(
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
+                  // ⚠️ 嵌套：外层 Dialog 走 lg(14)。WebView 面板是弹窗里的
+                  // 内嵌块，必须比外层小一档，否则内外两个角一样大。
+                  borderRadius: BorderRadius.circular(AppRadius.md),
                   child: Stack(
                     children: [
                       WebViewWidget(controller: _controller),

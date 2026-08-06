@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_notice.dart';
@@ -1012,7 +1013,11 @@ class _ConfigField extends StatelessWidget {
               horizontal: 12,
               vertical: 10,
             ),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            // 输入框统一走 md，与 inputDecorationTheme 同档。原值 8 是本页
+            // 自己开的第二种输入框圆角，本提交的目的就是消灭它。
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppRadius.md),
+            ),
           ),
           style: const TextStyle(fontSize: 13),
           keyboardType: TextInputType.text,
@@ -1082,7 +1087,10 @@ class _MirrorField extends StatelessWidget {
               horizontal: 12,
               vertical: 10,
             ),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            // 同上，与 inputDecorationTheme 同档。
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppRadius.md),
+            ),
           ),
           style: const TextStyle(fontSize: 13),
           keyboardType: TextInputType.url,

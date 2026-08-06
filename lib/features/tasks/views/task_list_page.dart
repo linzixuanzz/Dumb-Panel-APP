@@ -642,20 +642,22 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                   ),
                   filled: true,
                   fillColor: isLight ? Colors.white : AppColors.slate900,
+                  // 逐字复制 app_theme 的三处 OutlineInputBorder：
+                  // 计划裁决只令牌化不删除。三处圆角同值是聚焦动画的硬要求。
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(AppRadius.md),
                     borderSide: BorderSide(
                       color: isLight ? AppColors.slate200 : AppColors.slate800,
                     ),
                   ),
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(AppRadius.md),
                     borderSide: BorderSide(
                       color: isLight ? AppColors.slate200 : AppColors.slate800,
                     ),
                   ),
                   focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(AppRadius.md),
                     borderSide: const BorderSide(
                       color: AppColors.primary,
                       width: 1.5,
@@ -1851,7 +1853,9 @@ class _TaskCardState extends State<_TaskCard> {
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: widget.isLight ? Colors.white : AppColors.slate900,
-                  borderRadius: BorderRadius.circular(14),
+                  // 列表项卡片。这一处没迁 AppCard（要 AnimatedContainer +
+                  // Matrix4 做左滑），但圆角必须与 AppCard 同档。
+                  borderRadius: BorderRadius.circular(AppRadius.lg),
                   border: Border.all(
                     color: widget.selected
                         ? AppColors.primary
@@ -1917,7 +1921,7 @@ class _TaskCardState extends State<_TaskCard> {
                           ),
                           decoration: BoxDecoration(
                             color: _statusBg(),
-                            borderRadius: BorderRadius.circular(999),
+                            borderRadius: BorderRadius.circular(AppRadius.pill),
                           ),
                           child: Text(
                             _statusLabel(),
@@ -2013,10 +2017,11 @@ class _TaskPrimaryActionButton extends StatelessWidget {
     final fg = surfaces.tintFg(color);
     return Material(
       color: color.withAlpha(isLight ? 22 : 34),
-      borderRadius: BorderRadius.circular(999),
+      // 底板与水波纹必须同值，否则波纹会溢出胶囊的两个圆头。
+      borderRadius: BorderRadius.circular(AppRadius.pill),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           child: Row(
@@ -2063,10 +2068,11 @@ class _TaskSwipeActionButton extends StatelessWidget {
       width: _TaskCardState._actionWidth,
       child: Material(
         color: color.withAlpha(isLight ? 22 : 34),
-        borderRadius: BorderRadius.circular(10),
+        // 左滑露出的操作按钮，走按钮档；底板与水波纹必须同值。
+        borderRadius: BorderRadius.circular(AppRadius.md),
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(AppRadius.md),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -2143,7 +2149,8 @@ class _TaskScheduleSummary extends StatelessWidget {
             height: 28,
             decoration: BoxDecoration(
               color: color.withAlpha(isLight ? 22 : 36),
-              borderRadius: BorderRadius.circular(9),
+              // 图标底板一律走 sm，不跟外层任务卡（lg）同档。
+              borderRadius: BorderRadius.circular(AppRadius.sm),
             ),
             child: Icon(icon, size: 16, color: color),
           ),
@@ -2218,7 +2225,7 @@ class _TaskSubscriptionSummary extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 8),
             decoration: BoxDecoration(
               color: AppColors.blue500.withAlpha(isLight ? 18 : 30),
-              borderRadius: BorderRadius.circular(999),
+              borderRadius: BorderRadius.circular(AppRadius.pill),
             ),
             child: const Row(
               mainAxisSize: MainAxisSize.min,
@@ -2273,7 +2280,7 @@ class _TaskSubscriptionChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
         color: isLight ? AppColors.slate50 : AppColors.slate800,
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
         border: Border.all(
           color: isLight ? AppColors.slate200 : AppColors.slate700,
         ),
@@ -2304,7 +2311,7 @@ class _TaskMiniCountChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
         color: isLight ? AppColors.slate100 : AppColors.slate800,
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
       ),
       child: Text(
         label,
@@ -2448,7 +2455,7 @@ class _MetaChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: background,
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
         border: Border.all(
           color: isLight ? AppColors.slate200 : AppColors.slate800,
         ),

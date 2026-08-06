@@ -1037,7 +1037,9 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                               ),
                               decoration: BoxDecoration(
                                 color: color.withAlpha(18),
-                                borderRadius: BorderRadius.circular(999),
+                                borderRadius: BorderRadius.circular(
+                                  AppRadius.pill,
+                                ),
                                 border: Border.all(color: color.withAlpha(60)),
                               ),
                               child: Text(
@@ -1443,7 +1445,8 @@ class _DepCard extends StatelessWidget {
                       ),
                       decoration: BoxDecoration(
                         color: _statusBg(),
-                        borderRadius: BorderRadius.circular(4),
+                        // 9px 微徽章。原值 4，全库这一类共 6 处统一走 sm。
+                        borderRadius: BorderRadius.circular(AppRadius.sm),
                       ),
                       child: Text(
                         dep.statusText,
@@ -1678,7 +1681,9 @@ class _StatusFilterChip extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
           color: bg,
-          borderRadius: BorderRadius.circular(20),
+          // 零像素变化：这个筛选 chip 高约 31，原写的 20 早就被 clamp 成 15.5 —
+          // 它渲染出来一直是胶囊，这里只是改成诚实的写法。
+          borderRadius: BorderRadius.circular(AppRadius.pill),
           border: Border.all(
             color: selected
                 ? activeColor.withAlpha(60)
@@ -1703,7 +1708,10 @@ class _StatusFilterChip extends StatelessWidget {
                 color: selected
                     ? activeColor
                     : (isLight ? AppColors.slate200 : AppColors.slate800),
-                borderRadius: BorderRadius.circular(10),
+                // 同上，零像素变化：计数徽章高约 14，原写的 10 被 clamp 成 7。
+                // 它嵌在上面那个 chip 里，两层都是胶囊，内层半径 7 仍远小于
+                // 外层的 15.5，层级关系不会糊。
+                borderRadius: BorderRadius.circular(AppRadius.pill),
               ),
               child: Text(
                 '$count',

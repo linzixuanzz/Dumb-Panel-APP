@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'design_tokens.dart';
+
 /// 设计系统色板 — 基于面板主色（Element Plus 蓝）+ Slate
 class AppColors {
   // Primary
@@ -139,22 +141,27 @@ class AppTheme {
         elevation: 0,
         color: cardColor,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
+          // 区块级大卡片，与 AppCard 同档 —— 全库只有 6 处走 Flutter Card，
+          // 其中 3 处是 backup_page 的整页结构面板，这一档在那一页上是看得见的。
+          borderRadius: BorderRadius.circular(AppRadius.lg),
           side: BorderSide(color: borderColor, width: 1),
         ),
         margin: const EdgeInsets.only(bottom: 12),
       ),
+      // ⚠️ 下面 border / enabledBorder / focusedBorder 三处圆角**必须同值**。
+      // 聚焦是三个 border 之间的插值动画，任何一处不一致都会让动画中途出现
+      // 角忽大忽小的抖动 —— 静态截图看不出来，只有点进输入框的那一瞬间才有。
       inputDecorationTheme: InputDecorationTheme(
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(AppRadius.md),
           borderSide: BorderSide(color: borderColor),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(AppRadius.md),
           borderSide: BorderSide(color: borderColor),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(AppRadius.md),
           borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
         ),
         filled: true,
@@ -179,7 +186,7 @@ class AppTheme {
           foregroundColor: Colors.white,
           minimumSize: const Size(0, 48),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(AppRadius.md),
           ),
           elevation: 0,
           textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
@@ -189,7 +196,7 @@ class AppTheme {
         style: OutlinedButton.styleFrom(
           minimumSize: const Size(0, 44),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(AppRadius.md),
           ),
           side: BorderSide(color: borderColor),
         ),
@@ -216,13 +223,28 @@ class AppTheme {
         thickness: 1,
         space: 0,
       ),
-      chipTheme: ChipThemeData(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      // 零像素变化：Chip 默认高 32，圆角在绘制时会被 clamp 到高的一半（16），
+      // 原先写的 20 从来没有生效过 —— 它渲染出来本来就是胶囊，这里只是把
+      // 「实际是什么」写成「代码里说的是什么」。
+      chipTheme: const ChipThemeData(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(AppRadius.pill)),
+        ),
+      ),
+      // Checkbox 走**控件**档，不跟表面档一起收缩，理由见 AppRadius.control。
+      // 这一处同时收编两类站点：2 处本地写死 4 的（login / log_list）与
+      // 7 处走 Material 默认约 2dp 的，改完 9 个勾选框第一次是同一个圆角。
+      checkboxTheme: const CheckboxThemeData(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(AppRadius.control)),
+        ),
       ),
       bottomSheetTheme: BottomSheetThemeData(
         backgroundColor: cardColor,
         shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(AppRadius.lg),
+          ),
         ),
       ),
       popupMenuTheme: PopupMenuThemeData(
@@ -234,14 +256,18 @@ class AppTheme {
         elevation: 0,
         shadowColor: Colors.transparent,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(AppRadius.md),
           side: BorderSide(color: borderColor),
         ),
       ),
       dialogTheme: DialogThemeData(
         backgroundColor: cardColor,
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        // 弹窗与底部面板同为「浮在页面上的容器」，统一走 lg，不再一个 20 一个 20
+        // 却各写各的。
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+        ),
         actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
       ),
     );

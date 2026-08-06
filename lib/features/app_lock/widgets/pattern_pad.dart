@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 
 class PatternPad extends StatelessWidget {
   const PatternPad({
@@ -63,7 +64,8 @@ class PatternPad extends StatelessWidget {
               final isSelected = selectedIndex >= 0;
 
               return InkWell(
-                borderRadius: BorderRadius.circular(999),
+                // 底下是 BoxShape.circle 的圆点，水波纹必须同样是全圆。
+                borderRadius: BorderRadius.circular(AppRadius.pill),
                 onTap: () => onPointTap(point),
                 child: Container(
                   decoration: BoxDecoration(

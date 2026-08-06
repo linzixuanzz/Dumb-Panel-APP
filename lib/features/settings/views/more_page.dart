@@ -303,7 +303,9 @@ class _MorePageState extends ConsumerState<MorePage> {
                 color: isLight
                     ? AppColors.red50
                     : AppColors.red500.withAlpha(12),
-                borderRadius: BorderRadius.circular(12),
+                // 这是一个自己画底和边的按钮（48 高），与 filled/outlined
+                // button 同档，不是卡片。
+                borderRadius: BorderRadius.circular(AppRadius.md),
                 border: Border.all(
                   color: isLight
                       ? AppColors.red500.withAlpha(50)
@@ -443,7 +445,8 @@ class _MorePageState extends ConsumerState<MorePage> {
                   height: 42,
                   decoration: BoxDecoration(
                     color: AppColors.primary.withAlpha(20),
-                    borderRadius: BorderRadius.circular(12),
+                    // 图标底板一律走 sm，不跟外层弹窗（lg）同档。
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
                   ),
                   child: const Icon(
                     Icons.dashboard_customize_outlined,

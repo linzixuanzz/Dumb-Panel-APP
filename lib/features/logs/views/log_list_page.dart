@@ -542,20 +542,24 @@ class _LogListPageState extends ConsumerState<LogListPage> {
                   ),
                   filled: true,
                   fillColor: isLight ? Colors.white : AppColors.slate900,
+                  // 这三处逐字复制了 app_theme 的 OutlineInputBorder，
+                  // 只有 borderSide 可能与 theme 有别。计划裁决**只令牌化不删除**：
+                  // 「theme 已经供了同色」没有实证，删掉若颜色变了，排查成本
+                  // 远高于留着这几行。三处圆角同值是聚焦动画的硬要求。
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(AppRadius.md),
                     borderSide: BorderSide(
                       color: isLight ? AppColors.slate200 : AppColors.slate800,
                     ),
                   ),
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(AppRadius.md),
                     borderSide: BorderSide(
                       color: isLight ? AppColors.slate200 : AppColors.slate800,
                     ),
                   ),
                   focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(AppRadius.md),
                     borderSide: const BorderSide(
                       color: AppColors.primary,
                       width: 1.5,
@@ -768,9 +772,7 @@ class _LogItem extends StatelessWidget {
                 value: selected,
                 onChanged: (_) => onView(),
                 activeColor: AppColors.primary,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(4),
-                ),
+                // 圆角已由 checkboxTheme 统一供给（AppRadius.control，同为 4）。
               ),
             ),
             const SizedBox(width: 10),
@@ -872,14 +874,15 @@ class _StatusFilterChip extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
+        // 水波纹与底板必须同档，否则波纹会溢出胶囊的两个圆头。
+        borderRadius: BorderRadius.circular(AppRadius.pill),
         child: Ink(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
             color: selected
                 ? accent.withAlpha(16)
                 : (isLight ? AppColors.slate50 : AppColors.slate950),
-            borderRadius: BorderRadius.circular(999),
+            borderRadius: BorderRadius.circular(AppRadius.pill),
             border: Border.all(
               color: selected
                   ? accent.withAlpha(70)

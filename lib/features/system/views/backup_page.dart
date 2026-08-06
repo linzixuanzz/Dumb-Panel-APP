@@ -10,6 +10,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_notice.dart';
@@ -925,7 +926,9 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                   height: 44,
                   decoration: BoxDecoration(
                     color: AppColors.blue500.withAlpha(isLight ? 24 : 36),
-                    borderRadius: BorderRadius.circular(14),
+                    // ⚠️ 嵌套陷阱：外层是 Flutter Card，cardTheme 现在也是
+                    // lg(14)，原值 14 会与外层**相等**。图标底板一律走 sm。
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
                   ),
                   child: const Icon(
                     Icons.inventory_2_outlined,
@@ -1013,7 +1016,8 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                   height: 44,
                   decoration: BoxDecoration(
                     color: color.withAlpha(isLight ? 24 : 36),
-                    borderRadius: BorderRadius.circular(14),
+                    // 同上，嵌在 lg 的 Card 里 → 走 sm。
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
                   ),
                   child: Icon(_restoreStatusIcon(progress), color: color),
                 ),
@@ -1063,7 +1067,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                   ? null
                   : progress.percent.clamp(0, 100).toDouble() / 100,
               minHeight: 8,
-              borderRadius: BorderRadius.circular(999),
+              borderRadius: BorderRadius.circular(AppRadius.pill),
               color: color,
               backgroundColor: isLight
                   ? AppColors.slate100
@@ -1183,7 +1187,8 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                     color: record.encrypted
                         ? AppColors.amber500.withAlpha(isLight ? 18 : 28)
                         : AppColors.blue500.withAlpha(isLight ? 18 : 28),
-                    borderRadius: BorderRadius.circular(12),
+                    // 同上，嵌在 lg 的 Card 里 → 走 sm。
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
                   ),
                   child: Icon(
                     record.encrypted

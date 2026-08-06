@@ -2456,7 +2456,7 @@ class _ScriptVersionSheetState extends ConsumerState<_ScriptVersionSheet> {
                                       decoration: BoxDecoration(
                                         color: AppColors.primary.withAlpha(18),
                                         borderRadius: BorderRadius.circular(
-                                          999,
+                                          AppRadius.pill,
                                         ),
                                       ),
                                       child: Text(

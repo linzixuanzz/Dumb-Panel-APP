@@ -76,7 +76,10 @@ class TaskCronList extends StatelessWidget {
                   height: compact ? 26 : 30,
                   decoration: BoxDecoration(
                     color: AppColors.primary.withAlpha(isLight ? 22 : 36),
-                    borderRadius: BorderRadius.circular(compact ? 8 : 10),
+                    // 原来是 `compact ? 8 : 10` —— 正则扫不到的紧凑三元。
+                    // 序号/时钟底板是图标底板，两种密度下都走 sm；外层卡片是
+                    // md(12)，内层 8 仍小于外层。
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
                   ),
                   alignment: Alignment.center,
                   child: numbered && isMulti

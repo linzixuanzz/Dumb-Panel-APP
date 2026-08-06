@@ -221,8 +221,10 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                     ),
                     filled: true,
                     fillColor: isLight ? Colors.white : AppColors.slate900,
+                    // 逐字复制 app_theme 的三处 OutlineInputBorder：
+                    // 计划裁决只令牌化不删除。三处圆角同值是聚焦动画的硬要求。
                     border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(AppRadius.md),
                       borderSide: BorderSide(
                         color: isLight
                             ? AppColors.slate200
@@ -230,7 +232,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                       ),
                     ),
                     enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(AppRadius.md),
                       borderSide: BorderSide(
                         color: isLight
                             ? AppColors.slate200
@@ -238,7 +240,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                       ),
                     ),
                     focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(AppRadius.md),
                       borderSide: const BorderSide(
                         color: AppColors.primary,
                         width: 1.5,
@@ -1135,7 +1137,8 @@ class _SubCard extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
                   color: _statusBg(),
-                  borderRadius: BorderRadius.circular(4),
+                  // 10px 微徽章。原值 4，全库这一类统一走 sm。
+                  borderRadius: BorderRadius.circular(AppRadius.sm),
                 ),
                 child: Text(
                   sub.statusText,
@@ -1452,7 +1455,9 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
                                       color: success
                                           ? AppColors.success.withAlpha(20)
                                           : AppColors.danger.withAlpha(15),
-                                      borderRadius: BorderRadius.circular(999),
+                                      borderRadius: BorderRadius.circular(
+                                        AppRadius.pill,
+                                      ),
                                     ),
                                     child: Text(
                                       success ? '成功' : '失败',

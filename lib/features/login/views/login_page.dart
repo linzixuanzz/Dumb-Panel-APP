@@ -5,6 +5,7 @@ import '../../../core/auth/auth_provider.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/widgets/app_notice.dart';
 import '../../dashboard/providers/dashboard_provider.dart';
 import '../widgets/geetest_captcha_dialog.dart';
@@ -264,15 +265,19 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // Logo
+                      // ⚠️ 这是一对嵌套圆角：56 的底板包 40 的图标。
+                      // 底板走 lg、图标走 md，两档必须**不同**，否则内层的角会
+                      // 追上外层，看上去像图片没对齐。其它图标底板一律走 sm，
+                      // 这一处是唯一例外 —— 它内部还套着一层，sm 之下没有可用档。
                       Container(
                         width: 56,
                         height: 56,
                         decoration: BoxDecoration(
                           color: AppColors.primary.withAlpha(25),
-                          borderRadius: BorderRadius.circular(16),
+                          borderRadius: BorderRadius.circular(AppRadius.lg),
                         ),
                         child: ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(AppRadius.md),
                           child: Image.asset(
                             'assets/icon.png',
                             width: 40,
@@ -606,7 +611,9 @@ class _IconInput extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 14),
       decoration: BoxDecoration(
         color: isLight ? Colors.white : AppColors.slate900,
-        borderRadius: BorderRadius.circular(12),
+        // 这是一个自己画边框的输入框，必须与 inputDecorationTheme 同档，
+        // 否则同一屏里两种输入框会有两种角。
+        borderRadius: BorderRadius.circular(AppRadius.md),
         border: Border.all(color: borderColor),
       ),
       child: Row(
@@ -653,9 +660,8 @@ class _CompactCheck extends StatelessWidget {
               onChanged: enabled ? (v) => onChanged(v ?? false) : null,
               activeColor: AppColors.primary,
               checkColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(4),
-              ),
+              // 圆角已由 checkboxTheme 统一供给（AppRadius.control，同为 4），
+              // 本地覆盖删除，全库勾选框不再各写各的。
               side: BorderSide(color: AppColors.slate300, width: 1.5),
             ),
           ),

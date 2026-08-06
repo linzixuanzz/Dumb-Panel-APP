@@ -388,7 +388,8 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                             color: enabled
                                 ? AppColors.success.withAlpha(25)
                                 : AppColors.slate400.withAlpha(25),
-                            borderRadius: BorderRadius.circular(4),
+                            // 10px 微徽章。原值 4，全库这一类统一走 sm。
+                            borderRadius: BorderRadius.circular(AppRadius.sm),
                           ),
                           child: Text(
                             enabled ? '启用' : '禁用',
@@ -938,7 +939,10 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                                   color: ok
                                       ? AppColors.success.withAlpha(25)
                                       : AppColors.red500.withAlpha(25),
-                                  borderRadius: BorderRadius.circular(4),
+                                  // 10px 微徽章，嵌在 md 的日志卡里 → 走 sm。
+                                  borderRadius: BorderRadius.circular(
+                                    AppRadius.sm,
+                                  ),
                                 ),
                                 child: Text(
                                   '$status',
@@ -1026,7 +1030,8 @@ class _CopyableField extends StatelessWidget {
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
               color: AppColors.slate100,
-              borderRadius: BorderRadius.circular(8),
+              // 可复制的凭据代码块，嵌在卡片里的次级底块 → sm。
+              borderRadius: BorderRadius.circular(AppRadius.sm),
             ),
             child: Row(
               children: [
@@ -1177,7 +1182,10 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
                                     color: ok
                                         ? AppColors.success.withAlpha(25)
                                         : AppColors.red500.withAlpha(25),
-                                    borderRadius: BorderRadius.circular(4),
+                                    // 10px 微徽章，嵌在 lg 的日志卡里 → 走 sm。
+                                    borderRadius: BorderRadius.circular(
+                                      AppRadius.sm,
+                                    ),
                                   ),
                                   child: Text(
                                     '$status',

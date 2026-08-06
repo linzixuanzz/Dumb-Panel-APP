@@ -283,7 +283,12 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
                                     height: 46,
                                     decoration: BoxDecoration(
                                       color: AppColors.primary.withAlpha(18),
-                                      borderRadius: BorderRadius.circular(14),
+                                      // ⚠️ 嵌套陷阱：原值 14 与外层 AppCard 的
+                                      // lg(14) **相等**，46 的底板贴着卡片角看
+                                      // 就是错的。图标底板一律走 sm。
+                                      borderRadius: BorderRadius.circular(
+                                        AppRadius.sm,
+                                      ),
                                     ),
                                     child: const Icon(
                                       Icons.lock_person_outlined,
@@ -514,7 +519,7 @@ class _StatusChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: AppColors.primary.withAlpha(12),
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
         border: Border.all(color: AppColors.primary.withAlpha(24)),
       ),
       child: Text(

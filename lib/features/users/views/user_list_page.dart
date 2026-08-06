@@ -648,7 +648,8 @@ class _UserCard extends StatelessWidget {
                       ),
                       decoration: BoxDecoration(
                         color: roleColor.withAlpha(25),
-                        borderRadius: BorderRadius.circular(4),
+                        // 10px 微徽章。原值 4，全库这一类统一走 sm。
+                        borderRadius: BorderRadius.circular(AppRadius.sm),
                       ),
                       child: Text(
                         user.roleLabel,
