@@ -569,16 +569,9 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                           child: Container(
                             width: 32,
                             height: 32,
-                            decoration: BoxDecoration(
+                            decoration: const BoxDecoration(
                               color: AppColors.primary,
                               shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: AppColors.primary.withAlpha(80),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
                             ),
                             child: const Icon(
                               Icons.add,
@@ -1858,14 +1851,6 @@ class _TaskCardState extends State<_TaskCard> {
                           decoration: BoxDecoration(
                             color: dotColor,
                             shape: BoxShape.circle,
-                            boxShadow: task.isRunning || hasFailure
-                                ? [
-                                    BoxShadow(
-                                      color: dotColor.withAlpha(140),
-                                      blurRadius: 8,
-                                    ),
-                                  ]
-                                : null,
                           ),
                         ),
                         const SizedBox(width: 10),

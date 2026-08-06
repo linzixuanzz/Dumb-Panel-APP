@@ -750,15 +750,6 @@ class _LogItem extends StatelessWidget {
                 ? AppColors.primary.withAlpha(80)
                 : (isLight ? AppColors.slate200 : AppColors.slate800),
           ),
-          boxShadow: isLight
-              ? [
-                  BoxShadow(
-                    color: AppColors.slate900.withAlpha(8),
-                    blurRadius: 18,
-                    offset: const Offset(0, 6),
-                  ),
-                ]
-              : null,
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,

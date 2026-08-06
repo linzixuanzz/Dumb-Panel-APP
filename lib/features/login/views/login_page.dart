@@ -517,17 +517,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       SizedBox(
                         width: double.infinity,
                         height: 52,
+                        // 本地 style 整块删除：底色 / 前景色 / 圆角三项与
+                        // filledButtonTheme 完全一致，只多出 elevation 4 +
+                        // 主色辉光 shadowColor。删掉即走 theme（elevation 0）。
                         child: FilledButton(
                           onPressed: _loading ? null : _submit,
-                          style: FilledButton.styleFrom(
-                            backgroundColor: AppColors.primary,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            elevation: 4,
-                            shadowColor: AppColors.primary.withAlpha(80),
-                          ),
                           child: _loading
                               ? const SizedBox(
                                   height: 20,

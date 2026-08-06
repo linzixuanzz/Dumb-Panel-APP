@@ -228,7 +228,15 @@ class AppTheme {
       popupMenuTheme: PopupMenuThemeData(
         color: cardColor,
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        // 扁平化：去掉 M3 给弹出菜单的默认投影，改由 1px 边框做唯一分隔物。
+        // 菜单浮在页面之上、没有遮罩，去掉投影后必须补边框，否则与下方内容糊在一起。
+        // 这一处一次覆盖全库 7 个 PopupMenuButton。
+        elevation: 0,
+        shadowColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: borderColor),
+        ),
       ),
       dialogTheme: DialogThemeData(
         backgroundColor: cardColor,

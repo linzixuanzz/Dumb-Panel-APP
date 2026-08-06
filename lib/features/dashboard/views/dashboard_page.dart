@@ -442,15 +442,9 @@ class _ServerInfoCard extends StatelessWidget {
                   Container(
                     width: 8,
                     height: 8,
-                    decoration: BoxDecoration(
+                    decoration: const BoxDecoration(
                       color: AppColors.primary,
                       shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppColors.primary.withAlpha(180),
-                          blurRadius: 8,
-                        ),
-                      ],
                     ),
                   ),
                   const SizedBox(width: 10),

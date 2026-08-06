@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/env_var.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/widgets/app_buttons.dart';
@@ -324,8 +325,16 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
         return Align(
           alignment: Alignment.topLeft,
           child: Material(
-            elevation: 4,
-            borderRadius: BorderRadius.circular(12),
+            // 全库仅有的两处「阴影是唯一分隔物」之一：这层浮层直接盖在表单上，
+            // 去掉 elevation 必须同时补底色与边框，否则与下方表单糊在一起。
+            // 注意 shape 与 borderRadius 互斥（同时传会在运行时 assert），
+            // 所以原来那行 borderRadius 已删除，圆角改由 shape 承载。
+            elevation: 0,
+            color: context.surfaces.card,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppRadius.md),
+              side: BorderSide(color: context.surfaces.cardBorder),
+            ),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 220, maxWidth: 280),
               child: ListView.builder(
@@ -830,16 +839,9 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                           child: Container(
                             width: 32,
                             height: 32,
-                            decoration: BoxDecoration(
+                            decoration: const BoxDecoration(
                               color: AppColors.primary,
                               shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: AppColors.primary.withAlpha(80),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
                             ),
                             child: const Icon(
                               Icons.add,
