@@ -211,30 +211,6 @@ class AppTheme {
               : AppColors.slate600;
         }),
       ),
-      navigationBarTheme: NavigationBarThemeData(
-        elevation: 0,
-        height: 64,
-        backgroundColor: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        indicatorColor: Colors.transparent,
-        iconTheme: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) {
-            return const IconThemeData(color: AppColors.primary, size: 24);
-          }
-          return IconThemeData(color: cs.onSurfaceVariant, size: 24);
-        }),
-        labelTextStyle: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) {
-            return const TextStyle(
-              color: AppColors.primary,
-              fontSize: 10,
-              fontWeight: FontWeight.w600,
-            );
-          }
-          return TextStyle(color: cs.onSurfaceVariant, fontSize: 10);
-        }),
-      ),
       dividerTheme: DividerThemeData(
         color: borderColor,
         thickness: 1,
