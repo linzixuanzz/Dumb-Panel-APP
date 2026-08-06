@@ -18,8 +18,9 @@ import '../../core/theme/design_tokens.dart';
 /// ```
 ///
 /// 实测总规模 **60 处**，分成两类，不要混着看：
-/// - **48 个内容卡** —— 归本组件。已迁 45 处（提交 8 的 26 处无交互 +
-///   提交 9 的 19 处交互态 / `ReorderableListView` key / 零内边距）。
+/// - **48 个内容卡** —— 归本组件。已迁 46 处（提交 8 的 26 处无交互 +
+///   提交 9 的 19 处交互态 / `ReorderableListView` key / 零内边距 +
+///   提交 11 的仪表盘服务器信息卡 —— 它排到最后，是因为要先定渐变与装饰圆的去留）。
 ///   其余保持内联：`task_list` 任务卡与 `env_list` 环境卡那两处
 ///   `AnimatedContainer` + `Matrix4` transform（左滑露操作），
 ///   本组件既不接 `duration/curve` 也不接 `transform`，计划已裁决本期不动。

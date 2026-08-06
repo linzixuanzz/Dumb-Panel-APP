@@ -130,11 +130,17 @@ class TrendChart extends StatelessWidget {
   LineChartBarData _line(List<FlSpot> spots, Color color) {
     return LineChartBarData(
       spots: spots,
-      isCurved: true,
+      // 不做样条平滑：这里每个点都是「某一天执行了几次」的整数计数，
+      // 两天之间不存在中间值。样条会在相邻两点间鼓出一段弧，把 0 和 4 之间
+      // 画得像有个 2 点几；而 dotData 是关掉的，读者看不到真实测点落在哪，
+      // 只能相信那条曲线。折线不会说这个谎。
+      isCurved: false,
       color: color,
       barWidth: 2,
       dotData: const FlDotData(show: false),
-      belowBarData: BarAreaData(show: true, color: color.withAlpha(20)),
+      // 不填充线下面积：成功绿和失败红两块半透明面积在重叠区会混出第三种颜色，
+      // 而那个颜色不对应任何一条序列，图例里也没有它。只留两条线。
+      belowBarData: BarAreaData(show: false),
     );
   }
 }

@@ -7,6 +7,8 @@ import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_section_title.dart';
+import '../../../shared/widgets/app_state_views.dart';
 import '../providers/dashboard_provider.dart';
 import '../widgets/task_stats_card.dart';
 import '../widgets/trend_chart.dart';
@@ -170,13 +172,10 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
         onRefresh: () => ref.read(dashboardProvider.notifier).load(),
         child: data.loading && data.system.isEmpty
             ? ListView(
+                // 与任务 / 日志 / 环境变量三页用的是同一个加载态，
+                // 不再在本页复制一遍「SizedBox(120) + Center(转圈)」。
                 physics: const AlwaysScrollableScrollPhysics(),
-                children: const [
-                  SizedBox(height: 120),
-                  Center(
-                    child: CircularProgressIndicator(color: AppColors.primary),
-                  ),
-                ],
+                children: const [AppLoadingView()],
               )
             : ListView(
                 padding: EdgeInsets.only(
@@ -244,16 +243,10 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
                   const SizedBox(height: 24),
 
                   // System Stats
-                  Text(
-                    '系统状态',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: theme.colorScheme.onSurfaceVariant,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
+                  // 四个区块小标题原本各抄一份同样的 TextStyle，统一走 AppSectionTitle。
+                  // 它自带 bottom: 4，所以后随的间距要从 12 降到 8，否则总间距会变大。
+                  const AppSectionTitle('系统状态'),
+                  const SizedBox(height: 8),
 
                   // CPU + RAM
                   Row(
@@ -315,16 +308,8 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
 
                   // Task Stats
                   if (data.totalTasks > 0) ...[
-                    Text(
-                      '任务概览',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: theme.colorScheme.onSurfaceVariant,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
+                    const AppSectionTitle('任务概览'),
+                    const SizedBox(height: 8),
                     TaskStatsCard(
                       total: data.totalTasks,
                       enabled: data.enabledTasks,
@@ -339,31 +324,15 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
 
                   // Execution Trend
                   if (data.executionTrend.isNotEmpty) ...[
-                    Text(
-                      '执行趋势',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: theme.colorScheme.onSurfaceVariant,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
+                    const AppSectionTitle('执行趋势'),
+                    const SizedBox(height: 8),
                     TrendChart(data: data.executionTrend),
                     const SizedBox(height: 24),
                   ],
 
                   // Quick Actions
-                  Text(
-                    '快捷操作',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: theme.colorScheme.onSurfaceVariant,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
+                  const AppSectionTitle('快捷操作'),
+                  const SizedBox(height: 8),
                   Row(
                     children: List.generate(quickActions.length * 2 - 1, (
                       index,
@@ -407,104 +376,84 @@ class _ServerInfoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isLight
-              ? [Colors.white, AppColors.slate50]
-              : [AppColors.slate900, AppColors.slate800],
-        ),
-        // 区块级大卡片，与 AppCard / cardTheme 同档。
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-        border: Border.all(
-          color: isLight ? AppColors.slate200 : AppColors.slate800,
-        ),
-      ),
-      child: Stack(
+    // 这张卡原本是「渐变底 + 一个 Positioned 装饰圆 + 包住两者的 Stack」，三样都去掉了：
+    //
+    // 1. 渐变（浅色 #FFFFFF→#F8FAFC、深色 slate900→slate800）在手机屏幕上分辨不出来，
+    //    只是让全库唯一一张卡片走了和别人不一样的绘制路径。改用 AppCard 的纯色卡面，
+    //    取的正是渐变的起始色（白 / slate900），描边色也和原来逐字相同。
+    // 2. 装饰圆不只是多余，它是**渲染缺陷**：外层 Stack 没有声明 clipBehavior，
+    //    吃的是 Flutter 默认的 Clip.hardEdge；而 Stack 按非定位子节点（下面这个 Column）
+    //    定尺寸，Column 又活在 padding 20 + 描边 1 的内容盒里。于是 top:-30 / right:-30
+    //    的圆被沿内容盒硬裁成一块带两条直边的团块，停在离卡片圆角边框约 21dp 的位置，
+    //    而不是代码想要的「柔和地溢出到圆角之外」。删掉它同时删掉了这个缺陷。
+    // 3. 圆没了以后 Stack 只剩一个孩子，一并收掉。
+    //    Column 因此从 Stack 给的 loose 约束换成 padding 给的紧约束，但宽度不变 ——
+    //    下面两个 Row 都是默认的 mainAxisSize.max，原本就已经把 Column 撑满整行宽。
+    return AppCard(
+      // 原内边距 20，迁进 AppCard 参数时原样搬过来，不借机改成默认的 16。
+      padding: const EdgeInsets.all(AppSpacing.xl),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 装饰圆
-          Positioned(
-            top: -30,
-            right: -30,
-            child: Container(
-              width: 100,
-              height: 100,
-              decoration: BoxDecoration(
-                color: AppColors.primary.withAlpha(isLight ? 20 : 10),
-                shape: BoxShape.circle,
-              ),
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          Row(
             children: [
-              Row(
-                children: [
-                  // 主机名前的圆点语义是「在线」，属于 success 绿；primary 是品牌色
-                  // 与「运行中」，不承担「在线 / 健康」。
-                  //
-                  // ⚠️ 已知缺口（本期不修）：这个圆点**不绑定任何连接或健康状态**，
-                  // 面板不可达、接口报错时它同样常亮 —— 它现在只是个装饰。
-                  // 要真正表示在线，得接 dashboardProvider 的 error / 心跳状态，
-                  // 那是行为改动，不属于本期的配色语义修正。
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: AppColors.success,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    data.hostname,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: isLight ? AppColors.slate600 : AppColors.slate400,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              Text(
-                '${data.os} ${data.system['arch'] ?? ''}',
-                style: const TextStyle(
-                  fontSize: 26,
-                  fontWeight: FontWeight.w700,
+              // 主机名前的圆点语义是「在线」，属于 success 绿；primary 是品牌色
+              // 与「运行中」，不承担「在线 / 健康」。
+              //
+              // ⚠️ 已知缺口（本期不修）：这个圆点**不绑定任何连接或健康状态**，
+              // 面板不可达、接口报错时它同样常亮 —— 它现在只是个装饰。
+              // 要真正表示在线，得接 dashboardProvider 的 error / 心跳状态，
+              // 那是行为改动，不属于本期的配色语义修正。
+              Container(
+                width: 8,
+                height: 8,
+                decoration: const BoxDecoration(
+                  color: AppColors.success,
+                  shape: BoxShape.circle,
                 ),
               ),
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  Text(
-                    '已运行：${data.uptime}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: isLight ? AppColors.slate500 : AppColors.slate400,
-                    ),
-                  ),
-                  if (data.panelVersion.isNotEmpty) ...[
-                    Container(
-                      width: 1,
-                      height: 10,
-                      margin: const EdgeInsets.symmetric(horizontal: 10),
-                      color: isLight ? AppColors.slate300 : AppColors.slate700,
-                    ),
-                    Text(
-                      'v${data.panelVersion}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.primary,
-                      ),
-                    ),
-                  ],
-                ],
+              const SizedBox(width: 10),
+              Text(
+                data.hostname,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: isLight ? AppColors.slate600 : AppColors.slate400,
+                ),
               ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(
+            '${data.os} ${data.system['arch'] ?? ''}',
+            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Text(
+                '已运行：${data.uptime}',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: isLight ? AppColors.slate500 : AppColors.slate400,
+                ),
+              ),
+              if (data.panelVersion.isNotEmpty) ...[
+                Container(
+                  width: 1,
+                  height: 10,
+                  margin: const EdgeInsets.symmetric(horizontal: 10),
+                  color: isLight ? AppColors.slate300 : AppColors.slate700,
+                ),
+                Text(
+                  'v${data.panelVersion}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ],
             ],
           ),
         ],
@@ -602,7 +551,12 @@ class _StatCard extends StatelessWidget {
             // 它渲染出来一直是胶囊，这里只是改成诚实的写法。
             borderRadius: BorderRadius.circular(AppRadius.pill),
             child: LinearProgressIndicator(
-              value: value == null ? null : (value! / 100).clamp(0.0, 1.0),
+              // 内存采集不可用时 value 是 null。给 LinearProgressIndicator 传 null
+              // 会让它切到不确定态 —— 一条无限循环来回扫动的高亮，用「一直在动」
+              // 表达「没有数据」，而正上方的文字已经明确写了「不可用」。
+              // 退回 0：静止的空槽，不抢注意力，也不会像整块隐藏那样让内存卡
+              // 比同一行里的 CPU 卡矮一截。
+              value: ((value ?? 0.0) / 100).clamp(0.0, 1.0),
               minHeight: 6,
               backgroundColor: isLight
                   ? AppColors.slate100
