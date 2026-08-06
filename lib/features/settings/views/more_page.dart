@@ -524,43 +524,31 @@ class _SettingsItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return AppCard(
       onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        decoration: BoxDecoration(
-          color: isLight ? Colors.white : AppColors.slate900,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isLight ? AppColors.slate200 : AppColors.slate800,
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      child: Row(
+        children: [
+          Icon(
+            icon,
+            size: 20,
+            color: isLight ? AppColors.slate500 : AppColors.slate400,
           ),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              icon,
-              size: 20,
-              color: isLight ? AppColors.slate500 : AppColors.slate400,
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              title,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            if (trailing != null) ...[trailing!, const SizedBox(width: 8)],
-            Icon(
-              Icons.chevron_right,
-              size: 18,
-              color: isLight ? AppColors.slate400 : AppColors.slate600,
-            ),
-          ],
-        ),
+          ),
+          if (trailing != null) ...[trailing!, const SizedBox(width: 8)],
+          Icon(
+            Icons.chevron_right,
+            size: 18,
+            color: isLight ? AppColors.slate400 : AppColors.slate600,
+          ),
+        ],
       ),
     );
   }

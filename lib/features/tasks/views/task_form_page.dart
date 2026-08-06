@@ -402,10 +402,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
     final isNarrow = MediaQuery.of(context).size.width < 420;
-    final cardColor = isLight ? Colors.white : AppColors.slate900;
-    final borderColor = isLight ? AppColors.slate200 : AppColors.slate800;
 
     Widget section(String title, List<Widget> children) {
       return AppCard(
@@ -779,20 +776,20 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
               ]),
 
               // 钩子脚本（折叠）
-              Container(
+              AppCard(
                 width: double.infinity,
                 margin: const EdgeInsets.only(bottom: 14),
-                decoration: BoxDecoration(
-                  color: cardColor,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: borderColor),
-                ),
+                // 折叠头自带 16 内边距、展开区自带 fromLTRB(16,0,16,16)，
+                // 卡片本身不能再补一层，否则折叠头的点击区会缩水。
+                padding: EdgeInsets.zero,
                 child: Column(
                   children: [
                     InkWell(
+                      // 只有折叠头可点，不能提到 AppCard.onTap ——
+                      // 否则展开后点两个多行输入框也会把整块收起来。
                       onTap: () => setState(() => _showHooks = !_showHooks),
                       borderRadius: const BorderRadius.vertical(
-                        top: Radius.circular(14),
+                        top: Radius.circular(AppRadius.lg),
                       ),
                       child: Padding(
                         padding: const EdgeInsets.all(16),

@@ -1196,23 +1196,16 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         },
                         itemBuilder: (_, i) {
                           final env = state.envs[i];
-                          return Container(
+                          // ⚠️ key 必须挂在 ReorderableListView 的直接子 widget
+                          // 上（这里就是 AppCard 自己），挂到它的 child 上会在
+                          // 拖拽时抛「Every item of ReorderableListView must
+                          // have a key」。
+                          return AppCard(
                             key: ValueKey(env.id),
                             margin: const EdgeInsets.only(bottom: 8),
                             padding: const EdgeInsets.symmetric(
                               horizontal: 14,
                               vertical: 14,
-                            ),
-                            decoration: BoxDecoration(
-                              color: isLight
-                                  ? Colors.white
-                                  : AppColors.slate900,
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                color: isLight
-                                    ? AppColors.slate200
-                                    : AppColors.slate800,
-                              ),
                             ),
                             child: Row(
                               children: [

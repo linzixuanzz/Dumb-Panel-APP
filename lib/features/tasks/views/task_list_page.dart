@@ -17,6 +17,7 @@ import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/widgets/app_buttons.dart';
+import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
 import '../../../shared/widgets/task_cron_list.dart';
@@ -889,9 +890,9 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                         ],
                       )
                     : _taskSortMode
-                    ? _buildTaskReorderView(state.tasks, isLight)
+                    ? _buildTaskReorderView(state.tasks)
                     : _groupReorderMode
-                    ? _buildGroupReorderView(groupedTasks, isLight)
+                    ? _buildGroupReorderView(groupedTasks)
                     : ListView(
                         controller: _scrollController,
                         physics: const AlwaysScrollableScrollPhysics(),
@@ -1212,7 +1213,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     nameController.dispose();
   }
 
-  Widget _buildGroupReorderView(List<_TaskGroup> groups, bool isLight) {
+  Widget _buildGroupReorderView(List<_TaskGroup> groups) {
     return Column(
       children: [
         Padding(
@@ -1249,19 +1250,15 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
             },
             itemBuilder: (ctx, i) {
               final group = groups[i];
-              return Container(
+              // ⚠️ key 必须挂在 ReorderableListView 的直接子 widget 上（这里就是
+              // AppCard 自己），挂到它的 child 上会在拖拽时抛
+              // 「Every item of ReorderableListView must have a key」。
+              return AppCard(
                 key: ValueKey(group.key),
                 margin: const EdgeInsets.only(bottom: 8),
                 padding: const EdgeInsets.symmetric(
                   horizontal: 14,
                   vertical: 14,
-                ),
-                decoration: BoxDecoration(
-                  color: isLight ? Colors.white : AppColors.slate900,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: isLight ? AppColors.slate200 : AppColors.slate800,
-                  ),
                 ),
                 child: Row(
                   children: [
@@ -1297,7 +1294,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     );
   }
 
-  Widget _buildTaskReorderView(List<Task> tasks, bool isLight) {
+  Widget _buildTaskReorderView(List<Task> tasks) {
     return ReorderableListView.builder(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
       itemCount: tasks.length,
@@ -1308,17 +1305,13 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       },
       itemBuilder: (context, index) {
         final task = tasks[index];
-        return Container(
+        // ⚠️ key 必须挂在 ReorderableListView 的直接子 widget 上（这里就是
+        // AppCard 自己），挂到它的 child 上会在拖拽时抛
+        // 「Every item of ReorderableListView must have a key」。
+        return AppCard(
           key: ValueKey('task-sort-${task.id}'),
           margin: const EdgeInsets.only(bottom: 8),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-          decoration: BoxDecoration(
-            color: isLight ? Colors.white : AppColors.slate900,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: isLight ? AppColors.slate200 : AppColors.slate800,
-            ),
-          ),
           child: Row(
             children: [
               const Icon(
@@ -1384,95 +1377,80 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (showHeader)
-          Container(
+          AppCard(
             margin: const EdgeInsets.only(bottom: 6),
-            decoration: BoxDecoration(
-              color: isLight ? Colors.white : AppColors.slate900,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: isLight ? AppColors.slate200 : AppColors.slate800,
-              ),
-            ),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(14),
-              onTap: () {
-                setState(() {
-                  if (collapsed) {
-                    _collapsedGroups.remove(group.key);
-                  } else {
-                    _collapsedGroups.add(group.key);
-                  }
-                });
-                _persistCollapsedGroups();
-              },
-              onLongPress: () {
-                HapticFeedback.mediumImpact();
-                setState(() => _groupReorderMode = true);
-              },
-              // 纵向内边距只降到 10：整条分组头就是它自己的点击区，
-              // 再往下压（12→8）会让这个点击目标掉到 44.9dp，低于 48dp 下限。
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 10,
+            // 纵向内边距只降到 10：整条分组头就是它自己的点击区，
+            // 再往下压（12→8）会让这个点击目标掉到 44.9dp，低于 48dp 下限。
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            onTap: () {
+              setState(() {
+                if (collapsed) {
+                  _collapsedGroups.remove(group.key);
+                } else {
+                  _collapsedGroups.add(group.key);
+                }
+              });
+              _persistCollapsedGroups();
+            },
+            onLongPress: () {
+              HapticFeedback.mediumImpact();
+              setState(() => _groupReorderMode = true);
+            },
+            child: Row(
+              children: [
+                Icon(
+                  collapsed ? Icons.chevron_right : Icons.expand_more,
+                  size: 20,
+                  color: AppColors.slate400,
                 ),
-                child: Row(
-                  children: [
-                    Icon(
-                      collapsed ? Icons.chevron_right : Icons.expand_more,
-                      size: 20,
-                      color: AppColors.slate400,
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    group.title,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        group.title,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      '${group.tasks.length} 条',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    if (runningCount > 0)
-                      _MetaChip(label: '$runningCount 运行中', active: true)
-                    else
-                      _MetaChip(
-                        label: '$enabledCount 已启用',
-                        active: enabledCount > 0,
-                      ),
-                    const SizedBox(width: 4),
-                    _GroupPopupMenu(
-                      isUngrouped: isUngrouped,
-                      onRename: isUngrouped
-                          ? null
-                          : () => _renameGroup(group.key, group.tasks),
-                      onDelete: isUngrouped
-                          ? null
-                          : () => _deleteGroup(group.key, group.tasks),
-                      onAddTasks: () {
-                        final allTasks = ref.read(taskProvider).tasks;
-                        final ungrouped = allTasks
-                            .where((t) => (t.groupName ?? '').isEmpty)
-                            .toList();
-                        final targetGroup = isUngrouped ? null : group.key;
-                        if (targetGroup == null) {
-                          _showCreateGroupFromUngrouped(ungrouped);
-                        } else {
-                          _addTasksToGroup(targetGroup, ungrouped);
-                        }
-                      },
-                    ),
-                  ],
+                  ),
                 ),
-              ),
+                Text(
+                  '${group.tasks.length} 条',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                if (runningCount > 0)
+                  _MetaChip(label: '$runningCount 运行中', active: true)
+                else
+                  _MetaChip(
+                    label: '$enabledCount 已启用',
+                    active: enabledCount > 0,
+                  ),
+                const SizedBox(width: 4),
+                _GroupPopupMenu(
+                  isUngrouped: isUngrouped,
+                  onRename: isUngrouped
+                      ? null
+                      : () => _renameGroup(group.key, group.tasks),
+                  onDelete: isUngrouped
+                      ? null
+                      : () => _deleteGroup(group.key, group.tasks),
+                  onAddTasks: () {
+                    final allTasks = ref.read(taskProvider).tasks;
+                    final ungrouped = allTasks
+                        .where((t) => (t.groupName ?? '').isEmpty)
+                        .toList();
+                    final targetGroup = isUngrouped ? null : group.key;
+                    if (targetGroup == null) {
+                      _showCreateGroupFromUngrouped(ungrouped);
+                    } else {
+                      _addTasksToGroup(targetGroup, ungrouped);
+                    }
+                  },
+                ),
+              ],
             ),
           ),
         if (!collapsed)

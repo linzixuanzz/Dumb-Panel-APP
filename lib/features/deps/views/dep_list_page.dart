@@ -890,46 +890,36 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     bool isLight,
   ) {
     final count = _counts[type] ?? 0;
-    return GestureDetector(
+    return AppCard(
       onTap: () => _changeType(type),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: selected
-              ? AppColors.primary.withAlpha(isLight ? 18 : 24)
-              : (isLight ? Colors.white : AppColors.slate900),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: selected
-                ? AppColors.primary
-                : (isLight ? AppColors.slate200 : AppColors.slate800),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      // 选中态是淡底 + 实色边，必须显式传入，否则会落回 AppCard 的默认卡片配色。
+      color: selected ? AppColors.primary.withAlpha(isLight ? 18 : 24) : null,
+      borderColor: selected ? AppColors.primary : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              color: selected
+                  ? AppColors.primaryDark
+                  : (isLight ? AppColors.slate500 : AppColors.slate400),
+            ),
           ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                color: selected
-                    ? AppColors.primaryDark
-                    : (isLight ? AppColors.slate500 : AppColors.slate400),
-              ),
+          const SizedBox(height: 6),
+          Text(
+            _countLoading ? '--' : '$count',
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+              color: selected
+                  ? AppColors.primary
+                  : (isLight ? AppColors.slate900 : AppColors.slate50),
             ),
-            const SizedBox(height: 6),
-            Text(
-              _countLoading ? '--' : '$count',
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-                color: selected
-                    ? AppColors.primary
-                    : (isLight ? AppColors.slate900 : AppColors.slate50),
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

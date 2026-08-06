@@ -11,6 +11,7 @@ import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/task_log.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
 
@@ -743,101 +744,95 @@ class _LogItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = _statusColor();
-    return GestureDetector(
+    // 外层只接管长按（进入多选），点击进详情仍由内层 InkWell 负责 ——
+    // 两者是不同动作，不能折叠成同一个 onTap：内层的点击区只覆盖标题那一段，
+    // 提到外层会让「删除」按钮旁边的空白也变成进详情的热区。
+    return AppCard(
       onLongPress: onLongPress,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: BoxDecoration(
-          color: selected
-              ? (isLight
-                    ? AppColors.primary.withAlpha(12)
-                    : AppColors.primary.withAlpha(20))
-              : (isLight ? Colors.white : AppColors.slate900),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: selected
-                ? AppColors.primary.withAlpha(80)
-                : (isLight ? AppColors.slate200 : AppColors.slate800),
-          ),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            if (selectionMode) ...[
-              SizedBox(
-                width: 24,
-                height: 24,
-                child: Checkbox(
-                  value: selected,
-                  onChanged: (_) => onView(),
-                  activeColor: AppColors.primary,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-            ] else ...[
-              Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-              ),
-            ],
-            const SizedBox(width: 12),
-            Expanded(
-              child: InkWell(
-                onTap: onView,
-                borderRadius: BorderRadius.circular(12),
-                // 卡片的纵向内边距搬到这里来：整行的高度本来就由这个 InkWell 决定，
-                // 内边距放在外面时它白白撑高卡片，放进来则同时成为点击区。
-                // 结果是卡片矮了 20dp，而「点进日志详情」的点击目标反而
-                // 从 43.3dp 长到 55.3dp，越过了 48dp 下限。
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        log.taskName ?? '任务 #${log.taskId}',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: Theme.of(context).colorScheme.onSurface,
-                          height: 1.2,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        '运行时间 ${formatTimeCn(log.startedAt)} · ${log.durationText}',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: isLight
-                              ? AppColors.slate500
-                              : AppColors.slate400,
-                        ),
-                      ),
-                    ],
-                  ),
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      color: selected
+          ? (isLight
+                ? AppColors.primary.withAlpha(12)
+                : AppColors.primary.withAlpha(20))
+          : null,
+      borderColor: selected ? AppColors.primary.withAlpha(80) : null,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          if (selectionMode) ...[
+            SizedBox(
+              width: 24,
+              height: 24,
+              child: Checkbox(
+                value: selected,
+                onChanged: (_) => onView(),
+                activeColor: AppColors.primary,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(4),
                 ),
               ),
             ),
-            const SizedBox(width: 8),
-            IconButton(
-              tooltip: '删除日志',
-              onPressed: onDelete,
-              visualDensity: VisualDensity.compact,
-              splashRadius: 20,
-              icon: const Icon(Icons.delete_outline, size: 20),
-              color: AppColors.red500,
+            const SizedBox(width: 10),
+          ] else ...[
+            Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
             ),
           ],
-        ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: InkWell(
+              onTap: onView,
+              borderRadius: BorderRadius.circular(AppRadius.md),
+              // 卡片的纵向内边距搬到这里来：整行的高度本来就由这个 InkWell 决定，
+              // 内边距放在外面时它白白撑高卡片，放进来则同时成为点击区。
+              // 结果是卡片矮了 20dp，而「点进日志详情」的点击目标反而
+              // 从 43.3dp 长到 55.3dp，越过了 48dp 下限。
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      log.taskName ?? '任务 #${log.taskId}',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: Theme.of(context).colorScheme.onSurface,
+                        height: 1.2,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '运行时间 ${formatTimeCn(log.startedAt)} · ${log.durationText}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: isLight
+                            ? AppColors.slate500
+                            : AppColors.slate400,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            tooltip: '删除日志',
+            onPressed: onDelete,
+            visualDensity: VisualDensity.compact,
+            splashRadius: 20,
+            icon: const Icon(Icons.delete_outline, size: 20),
+            color: AppColors.red500,
+          ),
+        ],
       ),
     );
   }

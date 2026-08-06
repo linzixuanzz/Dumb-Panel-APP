@@ -7,6 +7,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
+import '../../../shared/widgets/app_card.dart';
 
 class PanelLogPage extends StatefulWidget {
   const PanelLogPage({super.key});
@@ -174,13 +175,14 @@ class _PanelLogPageState extends State<PanelLogPage> {
             ),
           ),
           Expanded(
-            child: Container(
+            child: AppCard(
               margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              decoration: BoxDecoration(
-                color: logTheme.background,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: borderColor),
-              ),
+              // 内容自带 14 的滚动内边距，卡片本身不能再补一层。
+              padding: EdgeInsets.zero,
+              // 日志底色跟随用户设置的日志主题，与页面明暗无关，
+              // 必须显式传入，不能落到 AppCard 的默认卡片底色。
+              color: logTheme.background,
+              borderColor: borderColor,
               child: _loading
                   ? const Center(
                       child: CircularProgressIndicator(

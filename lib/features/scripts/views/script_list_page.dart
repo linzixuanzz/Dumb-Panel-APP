@@ -1553,28 +1553,34 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  Container(
+                  // AppCard 没有 constraints 参数，限高交给外层 ConstrainedBox。
+                  ConstrainedBox(
                     constraints: const BoxConstraints(maxHeight: 160),
-                    decoration: BoxDecoration(
+                    child: AppCard(
+                      // 列表自带滚动内边距，卡片不再补一层。
+                      padding: EdgeInsets.zero,
+                      radius: AppRadius.md,
+                      // 弹窗里的次级块：浅色是 slate50、深色是 slate900，
+                      // 两边都无描边，必须显式传入。
+                      bordered: false,
                       color: Theme.of(context).brightness == Brightness.light
                           ? AppColors.slate50
                           : AppColors.slate900,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: ListView.separated(
-                      shrinkWrap: true,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      itemCount: files.length,
-                      separatorBuilder: (context, index) =>
-                          const Divider(height: 12, thickness: 0.6),
-                      itemBuilder: (_, index) => Text(
-                        files[index].name,
-                        style: const TextStyle(fontSize: 12),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        itemCount: files.length,
+                        separatorBuilder: (context, index) =>
+                            const Divider(height: 12, thickness: 0.6),
+                        itemBuilder: (_, index) => Text(
+                          files[index].name,
+                          style: const TextStyle(fontSize: 12),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                     ),
                   ),
@@ -1674,7 +1680,7 @@ class _FileTreeItemState extends State<_FileTreeItem> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        GestureDetector(
+        AppCard(
           onLongPress: () => widget.onAction(file),
           onTap: () {
             if (file.isDirectory) {
@@ -1683,64 +1689,59 @@ class _FileTreeItemState extends State<_FileTreeItem> {
               widget.onTap(file.path);
             }
           },
-          child: Container(
-            margin: const EdgeInsets.only(bottom: 2),
-            // 这一行的高度由右侧那个 40dp 的溢出按钮决定，不是由文字决定：
-            // 文字只有 15.2dp，纵向内边距压到 6 之后，图标周围观感上仍有 17dp 空白，
-            // 整行 52dp（含 margin 56dp）也还在 Material 密集列表的正常区间。
-            padding: EdgeInsets.only(
-              left: 12 + indent,
-              right: 8,
-              top: 6,
-              bottom: 6,
-            ),
-            decoration: BoxDecoration(
-              color: widget.isLight ? Colors.white : AppColors.slate900,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: widget.isLight ? AppColors.slate100 : AppColors.slate800,
+          margin: const EdgeInsets.only(bottom: 2),
+          // 这一行的高度由右侧那个 40dp 的溢出按钮决定，不是由文字决定：
+          // 文字只有 15.2dp，纵向内边距压到 6 之后，图标周围观感上仍有 17dp 空白，
+          // 整行 52dp（含 margin 56dp）也还在 Material 密集列表的正常区间。
+          padding: EdgeInsets.only(
+            left: 12 + indent,
+            right: 8,
+            top: 6,
+            bottom: 6,
+          ),
+          radius: AppRadius.sm,
+          // 文件树是嵌在卡片里的密集列表，浅色描边比常规卡片淡一档
+          // （slate100 而不是 slate200），必须显式传入。
+          borderColor: widget.isLight ? AppColors.slate100 : AppColors.slate800,
+          child: Row(
+            children: [
+              Icon(
+                file.isDirectory
+                    ? (_expanded ? Icons.folder_open : Icons.folder)
+                    : Icons.description_outlined,
+                size: 18,
+                color: file.isDirectory
+                    ? AppColors.amber500
+                    : AppColors.slate400,
               ),
-            ),
-            child: Row(
-              children: [
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  file.name,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: file.isDirectory
+                        ? FontWeight.w600
+                        : FontWeight.w400,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (file.isDirectory)
                 Icon(
-                  file.isDirectory
-                      ? (_expanded ? Icons.folder_open : Icons.folder)
-                      : Icons.description_outlined,
+                  _expanded ? Icons.expand_less : Icons.expand_more,
                   size: 18,
-                  color: file.isDirectory
-                      ? AppColors.amber500
-                      : AppColors.slate400,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    file.name,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: file.isDirectory
-                          ? FontWeight.w600
-                          : FontWeight.w400,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                if (file.isDirectory)
-                  Icon(
-                    _expanded ? Icons.expand_less : Icons.expand_more,
-                    size: 18,
-                    color: AppColors.slate400,
-                  ),
-                IconButton(
-                  onPressed: () => widget.onAction(file),
-                  icon: const Icon(Icons.more_vert, size: 18),
-                  visualDensity: VisualDensity.compact,
                   color: AppColors.slate400,
-                  splashRadius: 18,
                 ),
-              ],
-            ),
+              IconButton(
+                onPressed: () => widget.onAction(file),
+                icon: const Icon(Icons.more_vert, size: 18),
+                visualDensity: VisualDensity.compact,
+                color: AppColors.slate400,
+                splashRadius: 18,
+              ),
+            ],
           ),
         ),
         if (_expanded && file.isDirectory)
@@ -2264,44 +2265,38 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                   ),
                 ),
                 Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: editorBackground,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color:
-                              Theme.of(context).brightness == Brightness.light
-                              ? AppColors.slate200
-                              : AppColors.slate800,
-                        ),
+                  child: AppCard(
+                    margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    // 编辑器内边距由 InputDecoration.contentPadding 提供，
+                    // 卡片再补一层会让光标与描边之间多出 16 的空白。
+                    padding: EdgeInsets.zero,
+                    radius: AppRadius.md,
+                    // 编辑器底色跟随用户设置的日志/编辑器主题，与页面明暗无关。
+                    color: editorBackground,
+                    child: TextSelectionTheme(
+                      data: TextSelectionThemeData(
+                        selectionColor: _searchHighlightActive
+                            ? AppColors.amber500.withAlpha(120)
+                            : AppColors.primary.withAlpha(60),
                       ),
-                      child: TextSelectionTheme(
-                        data: TextSelectionThemeData(
-                          selectionColor: _searchHighlightActive
-                              ? AppColors.amber500.withAlpha(120)
-                              : AppColors.primary.withAlpha(60),
+                      child: TextField(
+                        controller: _contentController,
+                        focusNode: _contentFocusNode,
+                        scrollController: _contentScrollController,
+                        readOnly: !_editing,
+                        expands: true,
+                        maxLines: null,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontFamily: 'monospace',
+                          height: 1.5,
+                          color: editorForeground,
                         ),
-                        child: TextField(
-                          controller: _contentController,
-                          focusNode: _contentFocusNode,
-                          scrollController: _contentScrollController,
-                          readOnly: !_editing,
-                          expands: true,
-                          maxLines: null,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontFamily: 'monospace',
-                            height: 1.5,
-                            color: editorForeground,
-                          ),
-                          cursorColor: editorForeground,
-                          selectionHeightStyle: BoxHeightStyle.max,
-                          decoration: const InputDecoration(
-                            border: InputBorder.none,
-                            contentPadding: EdgeInsets.all(14),
-                          ),
+                        cursorColor: editorForeground,
+                        selectionHeightStyle: BoxHeightStyle.max,
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.all(14),
                         ),
                       ),
                     ),
@@ -2804,13 +2799,12 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
                 ],
               ),
               Expanded(
-                child: Container(
+                child: AppCard(
                   width: double.infinity,
                   padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: logTheme.background,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
+                  // 调试输出面板原本就没有描边，靠日志主题底色与页面区分。
+                  bordered: false,
+                  color: logTheme.background,
                   child: _loading
                       ? const Center(
                           child: CircularProgressIndicator(

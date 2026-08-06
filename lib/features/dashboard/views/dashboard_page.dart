@@ -628,32 +628,23 @@ class _QuickAction extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Expanded(
-      child: GestureDetector(
+      child: AppCard(
         onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          decoration: BoxDecoration(
-            color: isLight ? Colors.white : AppColors.slate900,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isLight ? AppColors.slate200 : AppColors.slate800,
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        child: Column(
+          children: [
+            Icon(
+              icon,
+              size: 22,
+              color: isLight ? AppColors.slate700 : AppColors.slate300,
             ),
-          ),
-          child: Column(
-            children: [
-              Icon(
-                icon,
-                size: 22,
-                color: isLight ? AppColors.slate700 : AppColors.slate300,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                label,
-                style: const TextStyle(fontSize: 10),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 10),
+              textAlign: TextAlign.center,
+            ),
+          ],
         ),
       ),
     );

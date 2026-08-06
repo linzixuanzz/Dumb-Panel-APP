@@ -1097,149 +1097,135 @@ class _SubCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return AppCard(
       onTap: onEdit,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        decoration: BoxDecoration(
-          color: isLight ? Colors.white : AppColors.slate900,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isLight ? AppColors.slate200 : AppColors.slate800,
-          ),
-        ),
-        child: Column(
-          children: [
-            // Top row: name + status
-            Row(
-              children: [
-                // 卡片圆点：「已启用」= success 绿。第 0 期已经把同一张卡右侧的
-                // 状态徽章（_statusBg/_statusFg）改成绿了，圆点却还留着蓝，
-                // 同一张卡里两个元件对「已启用」各说各话，这里补齐。
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: sub.enabled ? AppColors.success : AppColors.slate300,
-                    shape: BoxShape.circle,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Column(
+        children: [
+          // Top row: name + status
+          Row(
+            children: [
+              // 卡片圆点：「已启用」= success 绿。第 0 期已经把同一张卡右侧的
+              // 状态徽章（_statusBg/_statusFg）改成绿了，圆点却还留着蓝，
+              // 同一张卡里两个元件对「已启用」各说各话，这里补齐。
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: sub.enabled ? AppColors.success : AppColors.slate300,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  sub.name,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: _statusBg(),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  sub.statusText,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: _statusFg(),
                   ),
                 ),
-                const SizedBox(width: 10),
+              ),
+            ],
+          ),
+          // URL
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Row(
+              children: [
+                Text(
+                  '仓库：',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isLight ? AppColors.slate500 : AppColors.slate400,
+                  ),
+                ),
                 Expanded(
                   child: Text(
-                    sub.name,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
+                    sub.url.isNotEmpty ? sub.url : sub.typeLabel,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isLight ? AppColors.slate500 : AppColors.slate400,
+                      fontFamily: 'monospace',
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 3,
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
+
+          // Bottom: last pull + actions
+          Container(
+            padding: const EdgeInsets.only(top: 6),
+            decoration: BoxDecoration(
+              border: Border(
+                top: BorderSide(
+                  color: isLight
+                      ? AppColors.slate100
+                      : AppColors.slate800.withAlpha(120),
+                ),
+              ),
+            ),
+            child: Row(
+              children: [
+                Text(
+                  sub.lastPullAt != null
+                      ? '上次拉取：${formatTimeCn(sub.lastPullAt, short: true)}'
+                      : '尚未拉取',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isLight ? AppColors.slate500 : AppColors.slate400,
                   ),
-                  decoration: BoxDecoration(
-                    color: _statusBg(),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    sub.statusText,
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: _statusFg(),
-                    ),
-                  ),
+                ),
+                const Spacer(),
+                _SmallIconBtn(
+                  icon: sub.isPulling ? Icons.stop : Icons.sync,
+                  onTap: sub.isPulling ? onStopPull : onPull,
+                  color: sub.isPulling ? AppColors.red500 : AppColors.primary,
+                ),
+                const SizedBox(width: 4),
+                _SmallIconBtn(
+                  icon: Icons.receipt_long_outlined,
+                  onTap: onLogs,
+                  color: AppColors.blue500,
+                ),
+                const SizedBox(width: 4),
+                _SmallIconBtn(
+                  icon: sub.enabled ? Icons.pause : Icons.play_arrow,
+                  onTap: onToggle,
+                ),
+                const SizedBox(width: 4),
+                _SmallIconBtn(
+                  icon: Icons.delete_outline,
+                  onTap: onDelete,
+                  color: AppColors.red500,
                 ),
               ],
             ),
-            // URL
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Row(
-                children: [
-                  Text(
-                    '仓库：',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: isLight ? AppColors.slate500 : AppColors.slate400,
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      sub.url.isNotEmpty ? sub.url : sub.typeLabel,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isLight
-                            ? AppColors.slate500
-                            : AppColors.slate400,
-                        fontFamily: 'monospace',
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 6),
-
-            // Bottom: last pull + actions
-            Container(
-              padding: const EdgeInsets.only(top: 6),
-              decoration: BoxDecoration(
-                border: Border(
-                  top: BorderSide(
-                    color: isLight
-                        ? AppColors.slate100
-                        : AppColors.slate800.withAlpha(120),
-                  ),
-                ),
-              ),
-              child: Row(
-                children: [
-                  Text(
-                    sub.lastPullAt != null
-                        ? '上次拉取：${formatTimeCn(sub.lastPullAt, short: true)}'
-                        : '尚未拉取',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: isLight ? AppColors.slate500 : AppColors.slate400,
-                    ),
-                  ),
-                  const Spacer(),
-                  _SmallIconBtn(
-                    icon: sub.isPulling ? Icons.stop : Icons.sync,
-                    onTap: sub.isPulling ? onStopPull : onPull,
-                    color: sub.isPulling ? AppColors.red500 : AppColors.primary,
-                  ),
-                  const SizedBox(width: 4),
-                  _SmallIconBtn(
-                    icon: Icons.receipt_long_outlined,
-                    onTap: onLogs,
-                    color: AppColors.blue500,
-                  ),
-                  const SizedBox(width: 4),
-                  _SmallIconBtn(
-                    icon: sub.enabled ? Icons.pause : Icons.play_arrow,
-                    onTap: onToggle,
-                  ),
-                  const SizedBox(width: 4),
-                  _SmallIconBtn(
-                    icon: Icons.delete_outline,
-                    onTap: onDelete,
-                    color: AppColors.red500,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -1461,89 +1447,74 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
                         );
                         final preview = _subscriptionLogPreview(log);
 
-                        return GestureDetector(
+                        return AppCard(
                           onTap: () => _showLogDetail(log),
-                          child: Container(
-                            margin: const EdgeInsets.only(bottom: 10),
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(
-                              color: isLight
-                                  ? Colors.white
-                                  : AppColors.slate900,
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                color: isLight
-                                    ? AppColors.slate200
-                                    : AppColors.slate800,
-                              ),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: success
-                                            ? AppColors.success.withAlpha(20)
-                                            : AppColors.danger.withAlpha(15),
-                                        borderRadius: BorderRadius.circular(
-                                          999,
-                                        ),
-                                      ),
-                                      child: Text(
-                                        success ? '成功' : '失败',
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w700,
-                                          // 底色是同色淡底：success 2.13:1、
-                                          // danger 3.43:1，绿的那个尤其糊。
-                                          color: context.surfaces.tintFg(
-                                            success
-                                                ? AppColors.success
-                                                : AppColors.danger,
-                                          ),
-                                        ),
-                                      ),
+                          margin: const EdgeInsets.only(bottom: 10),
+                          padding: const EdgeInsets.all(14),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
                                     ),
-                                    const Spacer(),
-                                    Text(
-                                      '${(log['duration'] as num?)?.toStringAsFixed(1) ?? '0.0'}s',
+                                    decoration: BoxDecoration(
+                                      color: success
+                                          ? AppColors.success.withAlpha(20)
+                                          : AppColors.danger.withAlpha(15),
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                    child: Text(
+                                      success ? '成功' : '失败',
                                       style: TextStyle(
-                                        fontSize: 12,
-                                        color: isLight
-                                            ? AppColors.slate500
-                                            : AppColors.slate400,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        // 底色是同色淡底：success 2.13:1、
+                                        // danger 3.43:1，绿的那个尤其糊。
+                                        color: context.surfaces.tintFg(
+                                          success
+                                              ? AppColors.success
+                                              : AppColors.danger,
+                                        ),
                                       ),
                                     ),
-                                  ],
-                                ),
-                                const SizedBox(height: 10),
-                                Text(
-                                  preview,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
                                   ),
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  time != null ? formatTimeCn(time) : '',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: isLight
-                                        ? AppColors.slate400
-                                        : AppColors.slate500,
+                                  const Spacer(),
+                                  Text(
+                                    '${(log['duration'] as num?)?.toStringAsFixed(1) ?? '0.0'}s',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: isLight
+                                          ? AppColors.slate500
+                                          : AppColors.slate400,
+                                    ),
                                   ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              Text(
+                                preview,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
                                 ),
-                              ],
-                            ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                time != null ? formatTimeCn(time) : '',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: isLight
+                                      ? AppColors.slate400
+                                      : AppColors.slate500,
+                                ),
+                              ),
+                            ],
                           ),
                         );
                       },

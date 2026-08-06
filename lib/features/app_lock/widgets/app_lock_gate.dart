@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../shared/widgets/app_card.dart';
 import '../providers/app_lock_provider.dart';
 import 'pattern_pad.dart';
 
@@ -227,21 +228,20 @@ class _AppLockOverlayState extends State<_AppLockOverlay> {
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 420),
-              child: Container(
+              child: AppCard(
                 margin: const EdgeInsets.all(20),
                 padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: isLight ? Colors.white : AppColors.slate950,
-                  borderRadius: BorderRadius.circular(24),
-                  // 删掉全库最强的那道投影（blur 24 / offset 0,14）之后，这张卡片
-                  // 在深色模式下唯一的分隔物就只剩这条 1px 边：卡面 slate950 与它下方
-                  // 「黑色 alpha140 遮罩 + 14px 模糊」的背景几乎同色（约 1.0:1），
-                  // 原来的 slate800 边对该背景只有约 1.4:1，等于看不见。
-                  // 因此边框同步提到 slate700（约 2.0:1）——补边框，不恢复投影。
-                  border: Border.all(
-                    color: isLight ? AppColors.slate200 : AppColors.slate700,
-                  ),
-                ),
+                // 深色模式的卡面是 slate950（比常规卡片的 slate900 更深，
+                // 用来压住背后的模糊遮罩），必须显式传入。
+                color: isLight ? Colors.white : AppColors.slate950,
+                // 删掉全库最强的那道投影（blur 24 / offset 0,14）之后，这张卡片
+                // 在深色模式下唯一的分隔物就只剩这条 1px 边：卡面 slate950 与它下方
+                // 「黑色 alpha140 遮罩 + 14px 模糊」的背景几乎同色（约 1.0:1），
+                // 原来的 slate800 边对该背景只有约 1.4:1，等于看不见。
+                // 因此边框同步提到 slate700（约 2.0:1）——补边框，不恢复投影。
+                // 这里不能落到 AppCard 默认的 cardBorder（slate800），否则前一个
+                // 提交的补偿会被静默打回原状。
+                borderColor: isLight ? AppColors.slate200 : AppColors.slate700,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
