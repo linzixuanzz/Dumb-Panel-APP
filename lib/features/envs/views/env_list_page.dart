@@ -10,6 +10,7 @@ import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/env_var.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/widgets/app_buttons.dart';
+import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_state_views.dart';
 
 final envListProvider = StateNotifierProvider<EnvListNotifier, EnvListState>((
@@ -1022,16 +1023,9 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
               const SizedBox(height: 12),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Container(
+                child: AppCard(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: isLight ? Colors.white : AppColors.slate900,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: isLight ? AppColors.slate200 : AppColors.slate800,
-                    ),
-                  ),
+                  padding: const EdgeInsets.all(AppSpacing.md),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [

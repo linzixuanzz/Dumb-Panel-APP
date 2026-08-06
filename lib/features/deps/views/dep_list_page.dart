@@ -12,6 +12,7 @@ import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_snack.dart';
 
 // ── Provider ──
@@ -944,16 +945,9 @@ class _DepListPageState extends ConsumerState<DepListPage> {
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Container(
+      child: AppCard(
         width: double.infinity,
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: isLight ? Colors.white : AppColors.slate900,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: isLight ? AppColors.slate200 : AppColors.slate800,
-          ),
-        ),
+        padding: const EdgeInsets.all(AppSpacing.md),
         child: LayoutBuilder(
           builder: (context, constraints) {
             final isNarrow = constraints.maxWidth < 420;
@@ -1416,16 +1410,9 @@ class _DepCard extends StatelessWidget {
   Widget build(BuildContext context) {
     // 这张卡已经贴着地板：78dp 里有 48dp 是右侧 PopupMenuButton 的点击区，
     // 那 48dp 一动不能动。可削的只有内边距与外边距，合计 −10dp 到头了。
-    return Container(
+    return AppCard(
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: isLight ? Colors.white : AppColors.slate900,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isLight ? AppColors.slate200 : AppColors.slate800,
-        ),
-      ),
       child: Row(
         children: [
           SizedBox(

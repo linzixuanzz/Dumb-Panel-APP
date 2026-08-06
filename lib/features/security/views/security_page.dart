@@ -6,6 +6,7 @@ import '../../../core/network/api_endpoints.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_card.dart';
 
 // ── Security Page (Tabbed) ──
 
@@ -274,22 +275,11 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
                     final time = DateTime.tryParse(
                       log['created_at']?.toString() ?? '',
                     );
-                    return Container(
+                    return AppCard(
                       margin: const EdgeInsets.only(bottom: 8),
                       padding: const EdgeInsets.symmetric(
                         horizontal: 14,
                         vertical: 12,
-                      ),
-                      decoration: BoxDecoration(
-                        color: widget.isLight
-                            ? Colors.white
-                            : AppColors.slate900,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: widget.isLight
-                              ? AppColors.slate200
-                              : AppColors.slate800,
-                        ),
                       ),
                       child: Row(
                         children: [
@@ -553,20 +543,11 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
                 final expires = DateTime.tryParse(
                   s['expires_at']?.toString() ?? '',
                 );
-                return Container(
+                return AppCard(
                   margin: const EdgeInsets.only(bottom: 8),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 14,
                     vertical: 12,
-                  ),
-                  decoration: BoxDecoration(
-                    color: widget.isLight ? Colors.white : AppColors.slate900,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: widget.isLight
-                          ? AppColors.slate200
-                          : AppColors.slate800,
-                    ),
                   ),
                   child: Row(
                     children: [
@@ -800,20 +781,11 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
                   );
                 }
                 final item = _items[i - 1];
-                return Container(
+                return AppCard(
                   margin: const EdgeInsets.only(bottom: 8),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 14,
                     vertical: 12,
-                  ),
-                  decoration: BoxDecoration(
-                    color: widget.isLight ? Colors.white : AppColors.slate900,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: widget.isLight
-                          ? AppColors.slate200
-                          : AppColors.slate800,
-                    ),
                   ),
                   child: Row(
                     children: [
@@ -1001,15 +973,7 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: widget.isLight ? Colors.white : AppColors.slate900,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: widget.isLight ? AppColors.slate200 : AppColors.slate800,
-              ),
-            ),
+          AppCard(
             child: Row(
               children: [
                 Icon(
@@ -1066,17 +1030,7 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
           ),
           if (_secret != null) ...[
             const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: widget.isLight ? Colors.white : AppColors.slate900,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: widget.isLight
-                      ? AppColors.slate200
-                      : AppColors.slate800,
-                ),
-              ),
+            AppCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [

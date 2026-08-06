@@ -8,6 +8,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_card.dart';
 
 // ── Provider ──
 
@@ -602,16 +603,9 @@ class _UserCard extends StatelessWidget {
     final roleFg = AppSurfaces.of(ctx).tintFg(roleColor);
     final isSelf = currentUsername == user.username;
 
-    return Container(
+    return AppCard(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: isLight ? Colors.white : AppColors.slate900,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isLight ? AppColors.slate200 : AppColors.slate800,
-        ),
-      ),
       child: Row(
         children: [
           Container(

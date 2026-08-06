@@ -8,6 +8,7 @@ import '../../../core/services/app_update_service.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
+import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_section_title.dart';
 
 class MorePage extends ConsumerStatefulWidget {
@@ -95,15 +96,7 @@ class _MorePageState extends ConsumerState<MorePage> {
 
           // User Card
           if (user != null)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: isLight ? Colors.white : AppColors.slate900,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: isLight ? AppColors.slate200 : AppColors.slate800,
-                ),
-              ),
+            AppCard(
               child: Column(
                 children: [
                   Row(

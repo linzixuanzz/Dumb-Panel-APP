@@ -7,6 +7,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_card.dart';
 
 class SponsorPage extends StatefulWidget {
   const SponsorPage({super.key});
@@ -112,17 +113,7 @@ class _SponsorPageState extends State<SponsorPage> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: isLight ? Colors.white : AppColors.slate900,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: isLight
-                            ? AppColors.slate200
-                            : AppColors.slate800,
-                      ),
-                    ),
+                  AppCard(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -158,17 +149,8 @@ class _SponsorPageState extends State<SponsorPage> {
                   ),
                   const SizedBox(height: 16),
                   if (_sponsors.isEmpty)
-                    Container(
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: isLight ? Colors.white : AppColors.slate900,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: isLight
-                              ? AppColors.slate200
-                              : AppColors.slate800,
-                        ),
-                      ),
+                    AppCard(
+                      padding: const EdgeInsets.all(AppSpacing.xl),
                       child: Column(
                         children: [
                           Icon(
@@ -258,16 +240,9 @@ class _SponsorCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final avatarUrl = sponsor.avatarUrl.trim();
-    return Container(
+    return AppCard(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: isLight ? Colors.white : AppColors.slate900,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isLight ? AppColors.slate200 : AppColors.slate800,
-        ),
-      ),
       child: Row(
         children: [
           avatarUrl.isNotEmpty

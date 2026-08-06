@@ -13,6 +13,7 @@ import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_card.dart';
 
 // ── Provider ──
 
@@ -1371,13 +1372,13 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
                 ),
                 const SizedBox(height: 12),
                 Expanded(
-                  child: Container(
+                  child: AppCard(
                     padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: logTheme.background,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: borderColor),
-                    ),
+                    radius: AppRadius.md,
+                    // 日志底色跟随用户设置的日志主题，与页面明暗无关，
+                    // 必须显式传入，不能落到 AppCard 的默认卡片底色。
+                    color: logTheme.background,
+                    borderColor: borderColor,
                     child: SingleChildScrollView(
                       child: SelectionArea(
                         child: RichText(

@@ -2245,16 +2245,15 @@ class _TaskSubscriptionSummary extends StatelessWidget {
   Widget build(BuildContext context) {
     final visibleLabels = labels.take(3).toList();
 
-    return Container(
+    // 与上方排期块同一处理：任务卡自身已有 1px 边框，这里原本再套一层
+    // 「白底 + slate200 边」，等于把边框画在同色底上 —— 浅色是白压白、
+    // 深色是 slate900 压 slate900，全靠一条发丝线撑出一个盒子。
+    // 也不能改走 subtle 淡底：里面的订阅标签本身就是 slate50 / slate800 底，
+    // 外层一旦用同一档淡底，标签就会和外层糊成一片，等于把「同色套同色」
+    // 往下挪一层。直接去框，让标签自己完成分组，纵向再省 18dp
+    //（上下各 8dp 内边距 + 2dp 边框），并与排期块左对齐。
+    return SizedBox(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: isLight ? Colors.white : AppColors.slate900,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isLight ? AppColors.slate200 : AppColors.slate800,
-        ),
-      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

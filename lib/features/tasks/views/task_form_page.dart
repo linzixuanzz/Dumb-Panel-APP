@@ -9,6 +9,7 @@ import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/python_runtime_info.dart';
 import '../../../shared/models/task.dart';
 import '../../../shared/utils/api_utils.dart';
+import '../../../shared/widgets/app_card.dart';
 import '../providers/task_provider.dart';
 
 class TaskFormPrefill {
@@ -407,15 +408,9 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
     final borderColor = isLight ? AppColors.slate200 : AppColors.slate800;
 
     Widget section(String title, List<Widget> children) {
-      return Container(
+      return AppCard(
         width: double.infinity,
         margin: const EdgeInsets.only(bottom: 14),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: cardColor,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: borderColor),
-        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

@@ -17,6 +17,7 @@ import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../tasks/views/task_form_page.dart';
 
@@ -2445,23 +2446,8 @@ class _ScriptVersionSheetState extends ConsumerState<_ScriptVersionSheet> {
                           final message = version.message.trim().isEmpty
                               ? 'v${version.version}'
                               : version.message;
-                          return Container(
+                          return AppCard(
                             padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(
-                              color:
-                                  Theme.of(context).brightness ==
-                                      Brightness.light
-                                  ? Colors.white
-                                  : AppColors.slate900,
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                color:
-                                    Theme.of(context).brightness ==
-                                        Brightness.light
-                                    ? AppColors.slate200
-                                    : AppColors.slate800,
-                              ),
-                            ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [

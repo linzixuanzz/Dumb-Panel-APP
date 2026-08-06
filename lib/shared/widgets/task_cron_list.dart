@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/design_tokens.dart';
+import 'app_card.dart';
 
 class TaskCronList extends StatelessWidget {
   final List<String> expressions;
@@ -24,22 +25,19 @@ class TaskCronList extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isLight = theme.brightness == Brightness.light;
+    final surfaces = AppSurfaces.of(context);
     final items = _normalized;
 
     if (items.isEmpty) {
-      return Container(
+      return AppCard(
         width: double.infinity,
         padding: EdgeInsets.symmetric(
           horizontal: compact ? 8 : 10,
           vertical: compact ? 6 : 9,
         ),
-        decoration: BoxDecoration(
-          color: isLight ? AppColors.slate50 : AppColors.slate800,
-          borderRadius: BorderRadius.circular(compact ? 8 : 10),
-          border: Border.all(
-            color: isLight ? AppColors.slate200 : AppColors.slate700,
-          ),
-        ),
+        radius: AppRadius.md,
+        color: surfaces.subtle,
+        borderColor: surfaces.subtleBorder,
         child: Text(
           '暂无定时规则',
           style: TextStyle(
@@ -51,27 +49,25 @@ class TaskCronList extends StatelessWidget {
     }
 
     final isMulti = items.length > 1;
-    final cardBg = isLight ? AppColors.slate50 : AppColors.slate800;
-    final cardBorder = isLight ? AppColors.slate200 : AppColors.slate700;
+    final cardBg = surfaces.subtle;
+    final cardBorder = surfaces.subtleBorder;
     // 序号 / 时钟图标压在 primary 淡底上，满强度 primary 只有 2.6:1。
-    final badgeFg = AppSurfaces.of(context).tintFg(AppColors.primary);
+    final badgeFg = surfaces.tintFg(AppColors.primary);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         for (var i = 0; i < items.length; i++) ...[
           if (i > 0) SizedBox(height: compact ? 6 : 8),
-          Container(
+          AppCard(
             width: double.infinity,
             padding: EdgeInsets.symmetric(
               horizontal: compact ? 9 : 11,
               vertical: compact ? 7 : 10,
             ),
-            decoration: BoxDecoration(
-              color: cardBg,
-              borderRadius: BorderRadius.circular(compact ? 10 : 12),
-              border: Border.all(color: cardBorder),
-            ),
+            radius: AppRadius.md,
+            color: cardBg,
+            borderColor: cardBorder,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [

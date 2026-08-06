@@ -8,6 +8,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_card.dart';
 
 class _ApiScopeOption {
   final String value;
@@ -354,16 +355,9 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
     final scopes = app['scopes']?.toString() ?? '';
     final rateLimit = (app['rate_limit'] as num?)?.toInt() ?? 0;
 
-    return Container(
+    return AppCard(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: isLight ? Colors.white : AppColors.slate900,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isLight ? AppColors.slate200 : AppColors.slate800,
-        ),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -923,24 +917,13 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                         );
                         final duration =
                             (log['duration'] as num?)?.toDouble() ?? 0;
-                        return Container(
+                        return AppCard(
                           margin: const EdgeInsets.only(bottom: 6),
                           padding: const EdgeInsets.symmetric(
                             horizontal: 12,
                             vertical: 10,
                           ),
-                          decoration: BoxDecoration(
-                            color: Theme.of(ctx).brightness == Brightness.light
-                                ? Colors.white
-                                : AppColors.slate900,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color:
-                                  Theme.of(ctx).brightness == Brightness.light
-                                  ? AppColors.slate200
-                                  : AppColors.slate800,
-                            ),
-                          ),
+                          radius: AppRadius.md,
                           child: Row(
                             children: [
                               // 同上：HTTP 状态码徽章，2xx = success 绿。
@@ -1175,22 +1158,11 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
                           );
                           final duration =
                               (log['duration'] as num?)?.toDouble() ?? 0;
-                          return Container(
+                          return AppCard(
                             margin: const EdgeInsets.only(bottom: 8),
                             padding: const EdgeInsets.symmetric(
                               horizontal: 14,
                               vertical: 12,
-                            ),
-                            decoration: BoxDecoration(
-                              color: isLight
-                                  ? Colors.white
-                                  : AppColors.slate900,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: isLight
-                                    ? AppColors.slate200
-                                    : AppColors.slate800,
-                              ),
                             ),
                             child: Row(
                               children: [
