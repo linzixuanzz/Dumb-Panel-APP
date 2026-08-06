@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
 
@@ -336,10 +337,11 @@ class _FallbackAvatar extends StatelessWidget {
       alignment: Alignment.center,
       child: Text(
         initial,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 18,
           fontWeight: FontWeight.w700,
-          color: AppColors.primary,
+          // 圆底就是 primary 的 alpha=22 淡底，首字母用满强度同色只有 2.6:1。
+          color: context.surfaces.tintFg(AppColors.primary),
         ),
       ),
     );

@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
 
@@ -398,9 +399,12 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                             style: TextStyle(
                               fontSize: 10,
                               fontWeight: FontWeight.w700,
-                              color: enabled
-                                  ? AppColors.primary
-                                  : AppColors.slate400,
+                              // 底色是同一个色的 alpha=25 淡底。
+                              color: context.surfaces.tintFg(
+                                enabled
+                                    ? AppColors.primary
+                                    : AppColors.slate400,
+                              ),
                             ),
                           ),
                         ),
@@ -954,9 +958,12 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                                     fontSize: 10,
                                     fontWeight: FontWeight.w700,
                                     fontFamily: 'monospace',
-                                    color: ok
-                                        ? AppColors.primary
-                                        : AppColors.red500,
+                                    // 底色是同一个色的 alpha=25 淡底。
+                                    color: AppSurfaces.of(ctx).tintFg(
+                                      ok
+                                          ? AppColors.primary
+                                          : AppColors.red500,
+                                    ),
                                   ),
                                 ),
                               ),
@@ -1199,9 +1206,12 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
                                       fontSize: 10,
                                       fontWeight: FontWeight.w700,
                                       fontFamily: 'monospace',
-                                      color: ok
-                                          ? AppColors.primary
-                                          : AppColors.red500,
+                                      // 底色是同一个色的 alpha=25 淡底。
+                                      color: context.surfaces.tintFg(
+                                        ok
+                                            ? AppColors.primary
+                                            : AppColors.red500,
+                                      ),
                                     ),
                                   ),
                                 ),

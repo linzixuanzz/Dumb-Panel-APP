@@ -7,6 +7,7 @@ import '../../../core/network/dio_client.dart';
 import '../../../core/services/app_update_service.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/widgets/app_section_title.dart';
 
 class MorePage extends ConsumerStatefulWidget {
@@ -379,7 +380,8 @@ class _MorePageState extends ConsumerState<MorePage> {
           style: TextStyle(
             fontSize: size * 0.38,
             fontWeight: FontWeight.w700,
-            color: AppColors.primary,
+            // 圆底就是 primary 的 alpha=25 淡底，首字母用满强度同色只有 2.6:1。
+            color: context.surfaces.tintFg(AppColors.primary),
           ),
         ),
       ),

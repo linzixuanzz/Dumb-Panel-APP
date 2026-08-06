@@ -12,6 +12,7 @@ import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
@@ -2462,8 +2463,11 @@ class _ScriptVersionSheetState extends ConsumerState<_ScriptVersionSheet> {
                                       ),
                                       child: Text(
                                         'v${version.version}',
-                                        style: const TextStyle(
-                                          color: AppColors.primary,
+                                        style: TextStyle(
+                                          // 底色是 primary 的 alpha=18 淡底。
+                                          color: context.surfaces.tintFg(
+                                            AppColors.primary,
+                                          ),
                                           fontWeight: FontWeight.w700,
                                         ),
                                       ),

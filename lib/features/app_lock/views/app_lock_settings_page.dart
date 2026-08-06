@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../providers/app_lock_provider.dart';
 import '../widgets/pattern_pad.dart';
@@ -512,10 +513,12 @@ class _StatusChip extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.w600,
-          color: AppColors.primary,
+          // 底色只有 alpha=12，比全库标准的 18 还淡，满强度 primary 在上面
+          // 只有 2.66:1。
+          color: context.surfaces.tintFg(AppColors.primary),
         ),
       ),
     );

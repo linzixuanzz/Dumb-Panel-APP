@@ -5,6 +5,7 @@ import '../../../core/auth/auth_provider.dart';
 import '../../../core/services/app_update_service.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../providers/dashboard_provider.dart';
 import '../widgets/task_stats_card.dart';
 import '../widgets/trend_chart.dart';
@@ -101,7 +102,8 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
           style: TextStyle(
             fontSize: size * 0.4,
             fontWeight: FontWeight.w700,
-            color: AppColors.primary,
+            // 圆底就是 primary 的 alpha=25 淡底，首字母用满强度同色只有 2.6:1。
+            color: context.surfaces.tintFg(AppColors.primary),
           ),
         ),
       ),

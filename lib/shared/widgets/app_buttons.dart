@@ -93,7 +93,11 @@ class AppTintedActionButton extends StatelessWidget {
     final borderColor = enabled
         ? surfaces.tintBorder(color)
         : surfaces.disabledBorder;
-    final foregroundColor = enabled ? color : surfaces.disabledFg;
+    // 前景走 tintFg：底色是同一个 color 的 alpha=18 淡底，前景再用满强度色
+    // 就是同色相叠同色相，浅色模式下最高只有 2.6:1。
+    final foregroundColor = enabled
+        ? surfaces.tintFg(color)
+        : surfaces.disabledFg;
 
     return GestureDetector(
       onTap: enabled ? onTap : null,

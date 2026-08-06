@@ -143,6 +143,40 @@ class AppSurfaces {
 
   /// 更实一档的强调色淡底（滑动操作按钮等）。
   Color tintBgStrong(Color color) => color.withAlpha(isLight ? 24 : 34);
+
+  /// 压在 [tintBg] / [tintBgStrong] 上的**前景**（徽章文字、状态图标）。
+  ///
+  /// 为什么需要它：淡底只有 alpha=18，调用方却拿**同一个满强度色**当前景，
+  /// 于是前景和背景是同一个色相、只差透明度 —— 数学上封顶就那么高。
+  /// 白底实测：primary 2.60:1、danger 3.43:1、success 2.13:1、warning 2.04:1。
+  /// 错的不是淡底，是前景没跟着加深。
+  ///
+  /// 为什么选「向黑混 20%」而不是 HSL 压亮度、也不是按目标对比度反解：
+  /// 1. 它**逐字节复现** [AppColors.primaryDark] 与 [AppColors.successDark]。
+  ///    这两个常量取自 Element Plus 的 `dark-2`，而 `dark-2` 的定义就是
+  ///    `mix(color, black, 20%)`：0.8×#409EFF=#337ECC、0.8×#67C23A=#529B2E。
+  ///    于是已经手写 `*Dark` 的那批徽章（任务 / 依赖 / 订阅的 `_statusFg`）
+  ///    与走本函数的徽章**不会分裂成两种蓝、两种绿**，也不必回头去改它们。
+  /// 2. 加深规则与面板 Web 端同源，不是 APP 自造的第三套。
+  /// 3. HSL 压亮度会保留 S=1.0，primary 会掉到 #005FC2 这种全饱和深蓝，
+  ///    比面板深一大截；按对比度反解要在每帧迭代，产出的颜色还无法预测。
+  ///
+  /// 加深后（白底 + alpha=18，全库最坏情况）：
+  ///   primary/info #409EFF → #337ECC   2.60:1 → 3.93:1
+  ///   success      #67C23A → #529B2E   2.13:1 → 3.27:1
+  ///   danger       #EF4444 → #BF3636   3.43:1 → 5.03:1
+  ///   warning      #F59E0B → #C47E09   2.04:1 → 3.14:1
+  /// 五个语义色全部越过 3:1，但只有 danger 越过 4.5:1。10px 加粗按 WCAG
+  /// 不算大字，严格说该要 4.5:1 —— warning 是最短板，补齐要动全局常量，不在本次范围。
+  ///
+  /// 深色模式**原样返回**：那边淡底是 alpha=24 叠在 slate900/950 上，
+  /// 满强度前景本来就有 5.6:1（primary）/ 6.9:1（success），再压只会更糊。
+  Color tintFg(Color color) {
+    if (!isLight) {
+      return color;
+    }
+    return Color.lerp(color, Colors.black, 0.2)!;
+  }
 }
 
 extension AppSurfacesContext on BuildContext {

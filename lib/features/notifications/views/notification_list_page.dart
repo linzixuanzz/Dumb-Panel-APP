@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/notify_channel.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../utils/channel_config.dart';
@@ -921,7 +922,10 @@ class _ChannelCard extends StatelessWidget {
             child: Icon(
               _typeIcon(),
               size: 18,
-              color: channel.enabled ? AppColors.primary : AppColors.slate400,
+              // 底板就是同色的 alpha=25 淡底，18px 图标按 UI 组件也要 3:1。
+              color: context.surfaces.tintFg(
+                channel.enabled ? AppColors.primary : AppColors.slate400,
+              ),
             ),
           ),
           const SizedBox(width: 12),

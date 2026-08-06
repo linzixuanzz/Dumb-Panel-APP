@@ -1365,8 +1365,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
+                          // 底色就是这个色的 alpha=18 淡底，前景必须加深。
+                          // 禁用态本来就换了 slate500，不属于同色叠同色。
                           color: env.enabled
-                              ? AppColors.primary
+                              ? AppSurfaces.of(ctx).tintFg(AppColors.primary)
                               : AppColors.slate500,
                         ),
                       ),
@@ -2117,11 +2119,15 @@ class _SwipeActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isLight = Theme.of(context).brightness == Brightness.light;
+    final surfaces = AppSurfaces.of(context);
+    final isLight = surfaces.isLight;
     final backgroundColor = enabled
         ? (isLight ? color.withAlpha(24) : color.withAlpha(34))
         : (isLight ? AppColors.slate50 : AppColors.slate800);
-    final foregroundColor = enabled ? color : AppColors.slate400;
+    // 底色是同色淡底，前景走 tintFg 才够看；禁用态另有中性灰，不受影响。
+    final foregroundColor = enabled
+        ? surfaces.tintFg(color)
+        : AppColors.slate400;
 
     return SizedBox(
       width: _EnvCardState._actionWidth,

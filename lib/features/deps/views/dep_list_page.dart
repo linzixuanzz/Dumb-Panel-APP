@@ -5,6 +5,7 @@ import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/sse_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/dependency.dart';
 import '../../../shared/models/python_runtime_info.dart';
 import '../../../shared/utils/api_utils.dart';
@@ -1065,7 +1066,9 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                                 style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.w600,
-                                  color: color,
+                                  // 「需安装」用的是 amber，压在自己的淡底上
+                                  // 只有 2.04:1，是这一批里最看不清的。
+                                  color: context.surfaces.tintFg(color),
                                 ),
                               ),
                             ),
@@ -1687,8 +1690,9 @@ class _StatusFilterChip extends StatelessWidget {
     final bg = selected
         ? activeColor.withAlpha(20)
         : (isLight ? AppColors.slate50 : AppColors.slate900);
+    // 选中态底色是 activeColor 的 alpha=20 淡底，标签再用满强度同色就贴在一起了。
     final fg = selected
-        ? activeColor
+        ? context.surfaces.tintFg(activeColor)
         : (isLight ? AppColors.slate600 : AppColors.slate400);
 
     return GestureDetector(

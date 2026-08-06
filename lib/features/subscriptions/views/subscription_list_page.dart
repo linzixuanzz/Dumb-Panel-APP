@@ -7,6 +7,7 @@ import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/sse_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/subscription.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
@@ -1495,9 +1496,13 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
                                         style: TextStyle(
                                           fontSize: 11,
                                           fontWeight: FontWeight.w700,
-                                          color: success
-                                              ? AppColors.success
-                                              : AppColors.danger,
+                                          // 底色是同色淡底：success 2.13:1、
+                                          // danger 3.43:1，绿的那个尤其糊。
+                                          color: context.surfaces.tintFg(
+                                            success
+                                                ? AppColors.success
+                                                : AppColors.danger,
+                                          ),
                                         ),
                                       ),
                                     ),

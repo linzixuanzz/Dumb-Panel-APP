@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_theme.dart';
+import '../../core/theme/design_tokens.dart';
 
 class TaskCronList extends StatelessWidget {
   final List<String> expressions;
@@ -52,6 +53,8 @@ class TaskCronList extends StatelessWidget {
     final isMulti = items.length > 1;
     final cardBg = isLight ? AppColors.slate50 : AppColors.slate800;
     final cardBorder = isLight ? AppColors.slate200 : AppColors.slate700;
+    // 序号 / 时钟图标压在 primary 淡底上，满强度 primary 只有 2.6:1。
+    final badgeFg = AppSurfaces.of(context).tintFg(AppColors.primary);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -86,13 +89,13 @@ class TaskCronList extends StatelessWidget {
                           style: TextStyle(
                             fontSize: compact ? 10 : 11,
                             fontWeight: FontWeight.w800,
-                            color: AppColors.primary,
+                            color: badgeFg,
                           ),
                         )
-                      : const Icon(
+                      : Icon(
                           Icons.schedule_rounded,
                           size: 16,
-                          color: AppColors.primary,
+                          color: badgeFg,
                         ),
                 ),
                 const SizedBox(width: 9),

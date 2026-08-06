@@ -10,6 +10,7 @@ import '../../../core/network/dio_client.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/network/sse_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/task.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/api_utils.dart';
@@ -671,7 +672,11 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                     ),
                     labelStyle: TextStyle(
                       fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                      color: selected ? AppColors.primary : null,
+                      // selectedColor 就是同一个 primary 的 alpha=18 淡底，
+                      // 标签再用满强度 primary 会和底色贴在一起。
+                      color: selected
+                          ? context.surfaces.tintFg(AppColors.primary)
+                          : null,
                     ),
                     visualDensity: VisualDensity.compact,
                   );
@@ -1630,7 +1635,10 @@ class _TaskCardState extends State<_TaskCard> {
       return widget.isLight ? AppColors.infoDark : AppColors.info;
     }
     if (task.isQueued) {
-      return AppColors.warning;
+      // 「排队中」是全部徽章里最淡的一个：琥珀色压在自己的 alpha=18 淡底上
+      // 只有 2.04:1。另外三个分支浅色下已经各自用了 *Dark，这里补齐。
+      return (widget.isLight ? AppSurfaces.light : AppSurfaces.dark)
+          .tintFg(AppColors.warning);
     }
     if (task.isEnabled) {
       return widget.isLight ? AppColors.successDark : AppColors.success;
@@ -1970,7 +1978,11 @@ class _TaskPrimaryActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isLight = Theme.of(context).brightness == Brightness.light;
+    final surfaces = AppSurfaces.of(context);
+    final isLight = surfaces.isLight;
+    // 底色就是同一个 color 的淡底，前景必须加深，否则「运行 / 停止」两个
+    // 主操作按钮在浅色下最高只有 2.6:1。
+    final fg = surfaces.tintFg(color);
     return Material(
       color: color.withAlpha(isLight ? 22 : 34),
       borderRadius: BorderRadius.circular(999),
@@ -1982,14 +1994,14 @@ class _TaskPrimaryActionButton extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 16, color: color),
+              Icon(icon, size: 16, color: fg),
               const SizedBox(width: 4),
               Text(
                 label,
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
-                  color: color,
+                  color: fg,
                 ),
               ),
             ],
@@ -2015,7 +2027,10 @@ class _TaskSwipeActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isLight = Theme.of(context).brightness == Brightness.light;
+    final surfaces = AppSurfaces.of(context);
+    final isLight = surfaces.isLight;
+    // 侧滑按钮的 10px 文字压在同色淡底上，是全库最小的那一档文字。
+    final fg = surfaces.tintFg(color);
     return SizedBox(
       width: _TaskCardState._actionWidth,
       child: Material(
@@ -2027,7 +2042,7 @@ class _TaskSwipeActionButton extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 17, color: color),
+              Icon(icon, size: 17, color: fg),
               const SizedBox(height: 4),
               Text(
                 label,
@@ -2036,7 +2051,7 @@ class _TaskSwipeActionButton extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w700,
-                  color: color,
+                  color: fg,
                 ),
               ),
             ],

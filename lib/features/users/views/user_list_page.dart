@@ -5,6 +5,7 @@ import '../../../core/auth/auth_provider.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
 
@@ -587,13 +588,18 @@ class _UserCard extends StatelessWidget {
     required this.showDelete,
   });
 
+  // 形参不叫 context，是因为本类有一个同名字段（页面级 context）要留给
+  // 下面的 mounted 判断和 SnackBar 用。
   @override
-  Widget build(BuildContext _) {
+  Widget build(BuildContext ctx) {
     final roleColor = user.role == 'admin'
         ? AppColors.red500
         : user.role == 'operator'
         ? AppColors.amber500
         : AppColors.primary;
+    // 首字母头像和角色徽章都压在 roleColor 的 alpha=25 淡底上，
+    // 管理员红 3.43:1、操作员琥珀 2.04:1、普通用户蓝 2.60:1。
+    final roleFg = AppSurfaces.of(ctx).tintFg(roleColor);
     final isSelf = currentUsername == user.username;
 
     return Container(
@@ -621,7 +627,7 @@ class _UserCard extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w700,
-                  color: roleColor,
+                  color: roleFg,
                 ),
               ),
             ),
@@ -655,7 +661,7 @@ class _UserCard extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
-                          color: roleColor,
+                          color: roleFg,
                         ),
                       ),
                     ),

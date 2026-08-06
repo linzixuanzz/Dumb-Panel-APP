@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/task_log.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
@@ -850,11 +851,14 @@ class _StatusFilterChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isLight = Theme.of(context).brightness == Brightness.light;
+    final surfaces = AppSurfaces.of(context);
+    final isLight = surfaces.isLight;
     final accent =
         selectedColor ?? (isLight ? AppColors.slate800 : AppColors.slate100);
+    // 选中态底色是 accent 的 alpha=16 淡底。三个筛选项传的是
+    // success / danger / info，其中 success 在淡底上只有 2.13:1。
     final foreground = selected
-        ? accent
+        ? surfaces.tintFg(accent)
         : (isLight ? AppColors.slate600 : AppColors.slate300);
     return Material(
       color: Colors.transparent,
