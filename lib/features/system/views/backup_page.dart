@@ -12,6 +12,7 @@ import '../../../core/network/dio_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_notice.dart';
 import '../../../shared/widgets/app_snack.dart';
 
 class BackupPage extends ConsumerStatefulWidget {
@@ -661,30 +662,10 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                 ),
               ],
               const SizedBox(height: 14),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: AppColors.amber500.withAlpha(18),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.amber500.withAlpha(50)),
-                ),
-                child: const Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      Icons.warning_amber_rounded,
-                      size: 18,
-                      color: AppColors.amber500,
-                    ),
-                    SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        '恢复期间不要重复提交恢复请求，也不要立刻切换账号或清理缓存。',
-                        style: TextStyle(fontSize: 12.5),
-                      ),
-                    ),
-                  ],
-                ),
+              const AppNotice(
+                color: AppColors.warning,
+                icon: Icons.warning_amber_rounded,
+                text: '恢复期间不要重复提交恢复请求，也不要立刻切换账号或清理缓存。',
               ),
             ],
           ),
@@ -998,23 +979,9 @@ class _BackupPageState extends ConsumerState<BackupPage> {
               ],
             ),
             const SizedBox(height: 14),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: AppColors.primary.withAlpha(isLight ? 16 : 26),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: AppColors.primary.withAlpha(isLight ? 40 : 56),
-                ),
-              ),
-              child: Text(
-                '恢复过程中会轮询显示实时进度；加密备份恢复时需要输入备份密码。',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                  height: 1.5,
-                ),
-              ),
+            const AppNotice(
+              color: AppColors.primary,
+              text: '恢复过程中会轮询显示实时进度；加密备份恢复时需要输入备份密码。',
             ),
             if (_loading && _backups.isNotEmpty) ...[
               const SizedBox(height: 12),
@@ -1130,23 +1097,10 @@ class _BackupPageState extends ConsumerState<BackupPage> {
             ],
             if (progress.error.trim().isNotEmpty) ...[
               const SizedBox(height: 12),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: AppColors.red500.withAlpha(isLight ? 14 : 24),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: AppColors.red500.withAlpha(isLight ? 36 : 48),
-                  ),
-                ),
-                child: Text(
-                  progress.error.trim(),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: isLight ? AppColors.red600 : AppColors.red100,
-                    height: 1.5,
-                  ),
-                ),
+              AppNotice(
+                color: AppColors.danger,
+                text: progress.error.trim(),
+                accentText: true,
               ),
             ],
             const SizedBox(height: 14),

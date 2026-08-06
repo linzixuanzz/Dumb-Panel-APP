@@ -14,6 +14,7 @@ import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_notice.dart';
 
 // ── Provider ──
 
@@ -1255,23 +1256,9 @@ class _HookScriptHint extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isLight = Theme.of(context).brightness == Brightness.light;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: AppColors.blue500.withAlpha(12),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.blue500.withAlpha(30)),
-      ),
-      child: Text(
-        '钩子会在订阅拉取成功后执行，适合安装依赖、移动文件或触发通知；这里填写的是 Shell 命令，留空则不执行。',
-        style: TextStyle(
-          fontSize: 12,
-          height: 1.5,
-          color: isLight ? AppColors.slate600 : AppColors.slate300,
-        ),
-      ),
+    return const AppNotice(
+      color: AppColors.blue500,
+      text: '钩子会在订阅拉取成功后执行，适合安装依赖、移动文件或触发通知；这里填写的是 Shell 命令，留空则不执行。',
     );
   }
 }

@@ -5,6 +5,7 @@ import '../../../core/auth/auth_provider.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../shared/widgets/app_notice.dart';
 import '../../dashboard/providers/dashboard_provider.dart';
 import '../widgets/geetest_captcha_dialog.dart';
 
@@ -488,27 +489,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       // Error
                       if (_error != null) ...[
                         const SizedBox(height: 12),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppColors.red500.withAlpha(15),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: AppColors.red500.withAlpha(40),
-                            ),
-                          ),
-                          child: Text(
-                            _error!,
-                            style: const TextStyle(
-                              color: AppColors.red500,
-                              fontSize: 13,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
+                        AppNotice(
+                          color: AppColors.danger,
+                          text: _error!,
+                          accentText: true,
+                          textAlign: TextAlign.center,
                         ),
                       ],
 

@@ -13,6 +13,7 @@ import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_notice.dart';
 import '../../../shared/widgets/app_snack.dart';
 
 // ── Provider ──
@@ -499,9 +500,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                   ),
                   if (createType == 'python') ...[
                     const SizedBox(height: 12),
-                    _PythonInstallHint(
-                      isLight: Theme.of(context).brightness == Brightness.light,
-                    ),
+                    const _PythonInstallHint(),
                   ],
                   const SizedBox(height: 16),
                   TextField(
@@ -836,24 +835,12 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                     }).toList(),
                   ),
                   const SizedBox(height: 12),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: AppColors.blue500.withAlpha(12),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: AppColors.blue500.withAlpha(30),
-                      ),
-                    ),
-                    child: Text(
-                      '当前检测：${initial.linuxPackageManager.isEmpty ? '未识别' : initial.linuxPackageManager}'
-                      '${initial.linuxDistribution.isEmpty ? '' : ' / ${initial.linuxDistribution}'}'
-                      '${initial.linuxMirrorMessage.isEmpty ? '' : '。${initial.linuxMirrorMessage}'}',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodySmall?.copyWith(height: 1.5),
-                    ),
+                  AppNotice(
+                    color: AppColors.blue500,
+                    text:
+                        '当前检测：${initial.linuxPackageManager.isEmpty ? '未识别' : initial.linuxPackageManager}'
+                        '${initial.linuxDistribution.isEmpty ? '' : ' / ${initial.linuxDistribution}'}'
+                        '${initial.linuxMirrorMessage.isEmpty ? '' : '。${initial.linuxMirrorMessage}'}',
                   ),
                 ],
               ),
@@ -1016,7 +1003,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                     ],
                   ),
                 const SizedBox(height: 10),
-                _PythonInstallHint(isLight: isLight),
+                const _PythonInstallHint(),
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 8,
@@ -1735,28 +1722,15 @@ class _StatusFilterChip extends StatelessWidget {
 }
 
 class _PythonInstallHint extends StatelessWidget {
-  final bool isLight;
-
-  const _PythonInstallHint({required this.isLight});
+  // 明暗差异已经由 AppNotice 内部的 AppSurfaces 解析，不再需要调用方传 isLight。
+  const _PythonInstallHint();
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: AppColors.blue500.withAlpha(12),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.blue500.withAlpha(30)),
-      ),
-      child: Text(
-        'Python 多版本说明：二进制部署不会内置三个 Python，只需在服务器安装实际要用的版本；安装 Python 依赖时会同步提交到可用的 Python 3.10、3.11、3.12 环境。',
-        style: TextStyle(
-          fontSize: 12,
-          height: 1.5,
-          color: isLight ? AppColors.slate600 : AppColors.slate300,
-        ),
-      ),
+    return const AppNotice(
+      color: AppColors.blue500,
+      text:
+          'Python 多版本说明：二进制部署不会内置三个 Python，只需在服务器安装实际要用的版本；安装 Python 依赖时会同步提交到可用的 Python 3.10、3.11、3.12 环境。',
     );
   }
 }

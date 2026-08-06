@@ -5,7 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_notice.dart';
 import '../providers/app_lock_provider.dart';
 import 'pattern_pad.dart';
 
@@ -309,26 +311,11 @@ class _AppLockOverlayState extends State<_AppLockOverlay> {
                       _buildBiometricView(context),
                     if (_error != null) ...[
                       const SizedBox(height: 14),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppColors.red500.withAlpha(14),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: AppColors.red500.withAlpha(36),
-                          ),
-                        ),
-                        child: Text(
-                          _error!,
-                          style: const TextStyle(
-                            color: AppColors.red500,
-                            fontSize: 13,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
+                      AppNotice(
+                        color: AppColors.danger,
+                        text: _error!,
+                        accentText: true,
+                        textAlign: TextAlign.center,
                       ),
                     ],
                   ],
@@ -395,19 +382,26 @@ class _AppLockOverlayState extends State<_AppLockOverlay> {
   }
 
   Widget _buildBiometricView(BuildContext context) {
+    final surfaces = AppSurfaces.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: AppColors.primary.withAlpha(12),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.primary.withAlpha(28)),
-          ),
+        // 这一块是 42px 大图标 + 居中标题 + 居中描述的竖排主视觉，不是提示条，
+        // 所以不走 AppNotice，直接用 AppCard 配淡底/淡边。
+        AppCard(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          radius: AppRadius.md,
+          color: surfaces.tintBg(AppColors.primary),
+          borderColor: surfaces.tintBorder(AppColors.primary),
           child: Column(
             children: [
-              const Icon(Icons.fingerprint, size: 42, color: AppColors.primary),
+              // 图标压在同色 alpha=18 淡底上，满强度只有 2.60:1，
+              // 连非文字元素要求的 3:1 都不到，必须走 tintFg。
+              Icon(
+                Icons.fingerprint,
+                size: 42,
+                color: surfaces.tintFg(AppColors.primary),
+              ),
               const SizedBox(height: 12),
               Text(
                 '使用${widget.state.biometricLabel}解锁',

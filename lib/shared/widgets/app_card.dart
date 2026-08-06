@@ -23,9 +23,12 @@ import '../../core/theme/design_tokens.dart';
 ///   其余保持内联：`task_list` 任务卡与 `env_list` 环境卡那两处
 ///   `AnimatedContainer` + `Matrix4` transform（左滑露操作），
 ///   本组件既不接 `duration/curve` 也不接 `transform`，计划已裁决本期不动。
-/// - **12 处淡底提示条** —— **不归本组件**，由 `AppNotice`（提交 10 新增，
-///   内部基于 AppCard）承接。它们用 `color:` / `borderColor:` 虽然也能表达，
-///   但手写 12 遍等于把本组件想消灭的重复原样搬家。
+/// - **12 处淡底提示条** —— 提交 10 实际拆成了 11 + 1：
+///   其中 **11 处**是真提示条，归 `AppNotice`（内部仍基于本组件）。它们用
+///   `color:` / `borderColor:` 虽然也能表达，但手写 11 遍等于把本组件想消灭的
+///   重复原样搬家。剩下 **1 处**（`app_lock_gate` 的生物识别面板）是 42px 大图标
+///   + 居中标题 + 居中描述的竖排主视觉块，不是提示条，直接用本组件配
+///   `AppSurfaces.tintBg/tintBorder`。
 ///
 /// 明暗色由 [AppSurfaces] 解析，圆角走 [AppRadius]。
 /// 第 1 期扁平化时改 [AppRadius] 即可，不必回到每个页面。

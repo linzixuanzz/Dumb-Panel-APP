@@ -11,6 +11,7 @@ import '../../../shared/models/env_var.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/widgets/app_buttons.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_notice.dart';
 import '../../../shared/widgets/app_state_views.dart';
 
 final envListProvider = StateNotifierProvider<EnvListNotifier, EnvListState>((
@@ -1092,40 +1093,13 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
             ],
             if (_sortMode) ...[
               const SizedBox(height: 8),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    color: isLight
-                        ? AppColors.primary.withAlpha(12)
-                        : AppColors.primary.withAlpha(20),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: AppColors.primary.withAlpha(40)),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.swap_vert,
-                        size: 16,
-                        color: AppColors.primary,
-                      ),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text(
-                          '长按拖拽调整顺序，点击「完成」保存',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.primary,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20),
+                child: AppNotice(
+                  color: AppColors.primary,
+                  icon: Icons.swap_vert,
+                  text: '长按拖拽调整顺序，点击「完成」保存',
+                  accentText: true,
                 ),
               ),
             ],

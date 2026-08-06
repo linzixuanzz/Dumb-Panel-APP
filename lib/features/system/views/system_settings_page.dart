@@ -7,6 +7,7 @@ import '../../../core/network/api_endpoints.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_notice.dart';
 import '../../../shared/widgets/app_section_title.dart';
 
 class SystemSettingsPage extends ConsumerStatefulWidget {
@@ -851,8 +852,9 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                   isLight: isLight,
                                 ),
                                 const SizedBox(height: 10),
-                                _InlineHint(
-                                  isLight: isLight,
+                                const AppNotice(
+                                  color: AppColors.blue500,
+                                  icon: Icons.info_outline,
                                   text:
                                       '仅当服务器访问 GitHub、npm、pip、Docker 镜像等外部网络需要代理时填写；留空表示面板直连，不影响局域网访问面板。',
                                 ),
@@ -942,43 +944,6 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _InlineHint extends StatelessWidget {
-  final bool isLight;
-  final String text;
-
-  const _InlineHint({required this.isLight, required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.blue500.withAlpha(12),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.blue500.withAlpha(30)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.info_outline, size: 16, color: AppColors.blue500),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              text,
-              style: TextStyle(
-                fontSize: 12,
-                height: 1.5,
-                color: isLight ? AppColors.slate600 : AppColors.slate300,
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }

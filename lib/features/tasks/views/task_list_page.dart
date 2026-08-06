@@ -18,6 +18,7 @@ import '../../../shared/utils/time_utils.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/widgets/app_buttons.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_notice.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
 import '../../../shared/widgets/task_cron_list.dart';
@@ -819,36 +820,13 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
               ),
             ],
             if (_taskSortMode) ...[
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    color: isLight
-                        ? AppColors.primary.withAlpha(12)
-                        : AppColors.primary.withAlpha(20),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: AppColors.primary.withAlpha(40)),
-                  ),
-                  child: const Row(
-                    children: [
-                      Icon(Icons.swap_vert, size: 16, color: AppColors.primary),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '长按拖拽调整当前任务列表顺序，点击「完成」保存',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.primary,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
+                child: AppNotice(
+                  color: AppColors.primary,
+                  icon: Icons.swap_vert,
+                  text: '长按拖拽调整当前任务列表顺序，点击「完成」保存',
+                  accentText: true,
                 ),
               ),
             ],
