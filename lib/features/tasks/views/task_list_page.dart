@@ -477,6 +477,12 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       ..addAll(groups);
   }
 
+  /// 「新建分组」在分组选择面板里的返回哨兵值。
+  ///
+  /// 分组名是用户输入的自由文本，理论上可能撞任何字面量，
+  /// 所以用一个不可能出现在合法分组名里的前后缀标记。
+  static const String _createGroupSentinel = '#dp:create-group#';
+
   Future<void> _showGroupPicker() async {
     final options = [..._knownGroups];
     final selected = await showModalBottomSheet<String>(
@@ -502,12 +508,32 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                 onTap: () => Navigator.pop(sheetContext, group),
               ),
             ),
+            const Divider(height: 1),
+            // 「新建分组」原先只挂在分组头右侧那个 18dp 的溢出菜单里。
+            // 一个分组都没有时分组头已经不渲染，这个入口必须搬到常驻位置，
+            // 否则用户就再也建不出第一个分组了。放这里同时也更好找。
+            ListTile(
+              leading: const Icon(Icons.create_new_folder_outlined),
+              title: const Text('新建分组'),
+              subtitle: const Text('从未分组的任务中挑选'),
+              onTap: () => Navigator.pop(sheetContext, _createGroupSentinel),
+            ),
           ],
         ),
       ),
     );
 
     if (!mounted || selected == null) {
+      return;
+    }
+
+    if (selected == _createGroupSentinel) {
+      final ungrouped = ref
+          .read(taskProvider)
+          .tasks
+          .where((task) => (task.groupName ?? '').isEmpty)
+          .toList();
+      await _showCreateGroupFromUngrouped(ungrouped);
       return;
     }
 
@@ -527,6 +553,11 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     final isLight = theme.brightness == Brightness.light;
     _collectKnownGroups(state.tasks);
     final groupedTasks = _sortGroupsByOrder(_groupTasks(state.tasks));
+    // 一个分组都没建过（或筛选后只剩「未分组」）时，那条分组头没有任何信息量：
+    // 标题恒为「未分组」、条数与头部的「共 N 个任务」重复、折叠它等于清空整页。
+    // 这种情况直接不渲染，省下 60.9dp——这是任务列表最大的一笔密度收益。
+    final onlyUngrouped =
+        groupedTasks.length == 1 && groupedTasks.first.key.isEmpty;
     final selectedCount = _selectedTaskIds.length;
     final allSelected = _isAllTasksSelected(state.tasks);
     _restoreScrollOffsetIfNeeded();
@@ -866,7 +897,13 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                         physics: const AlwaysScrollableScrollPhysics(),
                         padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
                         children: groupedTasks
-                            .map((group) => _buildTaskGroup(group, isLight))
+                            .map(
+                              (group) => _buildTaskGroup(
+                                group,
+                                isLight,
+                                showHeader: !onlyUngrouped,
+                              ),
+                            )
                             .toList(),
                       ),
               ),
@@ -1324,8 +1361,21 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     );
   }
 
-  Widget _buildTaskGroup(_TaskGroup group, bool isLight) {
-    final collapsed = _collapsedGroups.contains(group.key);
+  /// [showHeader] 为 false 时不渲染可折叠分组头。
+  ///
+  /// `_groupTasks` 永远至少产出一个桶（没设分组的任务全部落进 key 为空的
+  /// 「未分组」桶），所以分组头以前是**无条件**渲染的：一个从来没用过分组功能的
+  /// 用户，屏幕顶部固定被一条 60.9dp 的「未分组 · N 条」占掉，而这条信息与头部
+  /// 已有的「共 N 个任务」完全重复，且折叠它等于把整页任务藏起来，毫无用处。
+  /// 这是任务列表每屏只能完整显示 1 张卡的首要原因，比卡片内边距重要得多。
+  Widget _buildTaskGroup(
+    _TaskGroup group,
+    bool isLight, {
+    bool showHeader = true,
+  }) {
+    // 分组头被隐藏时必须忽略折叠状态：此时没有任何入口可以再展开，
+    // 上一次会话遗留在 _collapsedGroups 里的空 key 会让整页任务凭空消失。
+    final collapsed = showHeader && _collapsedGroups.contains(group.key);
     final enabledCount = group.tasks.where((task) => task.isEnabled).length;
     final runningCount = group.tasks.where((task) => task.isRunning).length;
     final isUngrouped = group.key.isEmpty;
@@ -1333,92 +1383,98 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Container(
-          margin: const EdgeInsets.only(bottom: 8),
-          decoration: BoxDecoration(
-            color: isLight ? Colors.white : AppColors.slate900,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: isLight ? AppColors.slate200 : AppColors.slate800,
+        if (showHeader)
+          Container(
+            margin: const EdgeInsets.only(bottom: 6),
+            decoration: BoxDecoration(
+              color: isLight ? Colors.white : AppColors.slate900,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: isLight ? AppColors.slate200 : AppColors.slate800,
+              ),
             ),
-          ),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(14),
-            onTap: () {
-              setState(() {
-                if (collapsed) {
-                  _collapsedGroups.remove(group.key);
-                } else {
-                  _collapsedGroups.add(group.key);
-                }
-              });
-              _persistCollapsedGroups();
-            },
-            onLongPress: () {
-              HapticFeedback.mediumImpact();
-              setState(() => _groupReorderMode = true);
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              child: Row(
-                children: [
-                  Icon(
-                    collapsed ? Icons.chevron_right : Icons.expand_more,
-                    size: 20,
-                    color: AppColors.slate400,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      group.title,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () {
+                setState(() {
+                  if (collapsed) {
+                    _collapsedGroups.remove(group.key);
+                  } else {
+                    _collapsedGroups.add(group.key);
+                  }
+                });
+                _persistCollapsedGroups();
+              },
+              onLongPress: () {
+                HapticFeedback.mediumImpact();
+                setState(() => _groupReorderMode = true);
+              },
+              // 纵向内边距只降到 10：整条分组头就是它自己的点击区，
+              // 再往下压（12→8）会让这个点击目标掉到 44.9dp，低于 48dp 下限。
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      collapsed ? Icons.chevron_right : Icons.expand_more,
+                      size: 20,
+                      color: AppColors.slate400,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        group.title,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
-                  ),
-                  Text(
-                    '${group.tasks.length} 条',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    Text(
+                      '${group.tasks.length} 条',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  if (runningCount > 0)
-                    _MetaChip(label: '$runningCount 运行中', active: true)
-                  else
-                    _MetaChip(
-                      label: '$enabledCount 已启用',
-                      active: enabledCount > 0,
+                    const SizedBox(width: 10),
+                    if (runningCount > 0)
+                      _MetaChip(label: '$runningCount 运行中', active: true)
+                    else
+                      _MetaChip(
+                        label: '$enabledCount 已启用',
+                        active: enabledCount > 0,
+                      ),
+                    const SizedBox(width: 4),
+                    _GroupPopupMenu(
+                      isUngrouped: isUngrouped,
+                      onRename: isUngrouped
+                          ? null
+                          : () => _renameGroup(group.key, group.tasks),
+                      onDelete: isUngrouped
+                          ? null
+                          : () => _deleteGroup(group.key, group.tasks),
+                      onAddTasks: () {
+                        final allTasks = ref.read(taskProvider).tasks;
+                        final ungrouped = allTasks
+                            .where((t) => (t.groupName ?? '').isEmpty)
+                            .toList();
+                        final targetGroup = isUngrouped ? null : group.key;
+                        if (targetGroup == null) {
+                          _showCreateGroupFromUngrouped(ungrouped);
+                        } else {
+                          _addTasksToGroup(targetGroup, ungrouped);
+                        }
+                      },
                     ),
-                  const SizedBox(width: 4),
-                  _GroupPopupMenu(
-                    isUngrouped: isUngrouped,
-                    onRename: isUngrouped
-                        ? null
-                        : () => _renameGroup(group.key, group.tasks),
-                    onDelete: isUngrouped
-                        ? null
-                        : () => _deleteGroup(group.key, group.tasks),
-                    onAddTasks: () {
-                      final allTasks = ref.read(taskProvider).tasks;
-                      final ungrouped = allTasks
-                          .where((t) => (t.groupName ?? '').isEmpty)
-                          .toList();
-                      final targetGroup = isUngrouped ? null : group.key;
-                      if (targetGroup == null) {
-                        _showCreateGroupFromUngrouped(ungrouped);
-                      } else {
-                        _addTasksToGroup(targetGroup, ungrouped);
-                      }
-                    },
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
-        ),
         if (!collapsed)
           ...group.tasks.map(
             (task) => _TaskCard(
@@ -1729,7 +1785,7 @@ class _TaskCardState extends State<_TaskCard> {
         _closeActions();
       },
       child: Container(
-        margin: const EdgeInsets.only(bottom: 10),
+        margin: const EdgeInsets.only(bottom: 8),
         child: Stack(
           clipBehavior: Clip.none,
           children: [
@@ -1836,7 +1892,7 @@ class _TaskCardState extends State<_TaskCard> {
                     : const Duration(milliseconds: 160),
                 curve: Curves.easeOutCubic,
                 transform: Matrix4.translationValues(_dragOffset, 0, 0),
-                padding: const EdgeInsets.all(14),
+                padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: widget.isLight ? Colors.white : AppColors.slate900,
                   borderRadius: BorderRadius.circular(14),
@@ -1918,7 +1974,7 @@ class _TaskCardState extends State<_TaskCard> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     _TaskScheduleSummary(
                       taskType: task.taskType,
                       taskTypeLabel: _taskTypeLabel(),
@@ -1932,7 +1988,7 @@ class _TaskCardState extends State<_TaskCard> {
                         isLight: widget.isLight,
                       ),
                     ],
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     Row(
                       children: [
                         Expanded(
@@ -2117,16 +2173,13 @@ class _TaskScheduleSummary extends StatelessWidget {
         ? AppColors.blue500
         : AppColors.amber500;
 
-    return Container(
+    // 这里原本是「带边框的盒子套在带边框的卡片里」：任务卡自己已经有 1px 边框，
+    // 里面再套一层 slate50 底 + slate200 边 + 12 圆角，只为了圈住两行排期文字。
+    // 去掉这层框之后，左侧 28dp 的着色图标块仍然是足够强的分区锚点，
+    // 「标题 + 值」的两级排版也没变，信息一条没少；卡片纵向省下 20dp
+    //（上下各 9dp 内边距 + 2dp 边框），并且图标块从此与上下两行左对齐。
+    return SizedBox(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-      decoration: BoxDecoration(
-        color: isLight ? AppColors.slate50 : AppColors.slate800,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isLight ? AppColors.slate200 : AppColors.slate700,
-        ),
-      ),
       child: Row(
         children: [
           Container(

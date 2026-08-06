@@ -746,8 +746,8 @@ class _LogItem extends StatelessWidget {
     return GestureDetector(
       onLongPress: onLongPress,
       child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
           color: selected
               ? (isLight
@@ -790,8 +790,12 @@ class _LogItem extends StatelessWidget {
               child: InkWell(
                 onTap: onView,
                 borderRadius: BorderRadius.circular(12),
+                // 卡片的纵向内边距搬到这里来：整行的高度本来就由这个 InkWell 决定，
+                // 内边距放在外面时它白白撑高卡片，放进来则同时成为点击区。
+                // 结果是卡片矮了 20dp，而「点进日志详情」的点击目标反而
+                // 从 43.3dp 长到 55.3dp，越过了 48dp 下限。
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,

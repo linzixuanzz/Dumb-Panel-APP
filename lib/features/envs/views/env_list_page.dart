@@ -1905,7 +1905,7 @@ class _EnvCardState extends State<_EnvCard> {
         _closeActions();
       },
       child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
+        margin: const EdgeInsets.only(bottom: 6),
         child: Stack(
           clipBehavior: Clip.none,
           children: [
@@ -1994,7 +1994,7 @@ class _EnvCardState extends State<_EnvCard> {
                 transform: Matrix4.translationValues(_dragOffset, 0, 0),
                 padding: const EdgeInsets.symmetric(
                   horizontal: 14,
-                  vertical: 12,
+                  vertical: 10,
                 ),
                 decoration: BoxDecoration(
                   color: widget.isLight ? Colors.white : AppColors.slate900,
@@ -2076,7 +2076,7 @@ class _EnvCardState extends State<_EnvCard> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const SizedBox(height: 4),
+                          const SizedBox(height: 2),
                           Text(
                             widget.env.value.replaceAll('\n', ' '),
                             style: TextStyle(

@@ -1684,11 +1684,14 @@ class _FileTreeItemState extends State<_FileTreeItem> {
           },
           child: Container(
             margin: const EdgeInsets.only(bottom: 2),
+            // 这一行的高度由右侧那个 40dp 的溢出按钮决定，不是由文字决定：
+            // 文字只有 15.2dp，纵向内边距压到 6 之后，图标周围观感上仍有 17dp 空白，
+            // 整行 52dp（含 margin 56dp）也还在 Material 密集列表的正常区间。
             padding: EdgeInsets.only(
               left: 12 + indent,
               right: 8,
-              top: 10,
-              bottom: 10,
+              top: 6,
+              bottom: 6,
             ),
             decoration: BoxDecoration(
               color: widget.isLight ? Colors.white : AppColors.slate900,

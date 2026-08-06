@@ -1099,8 +1099,8 @@ class _SubCard extends StatelessWidget {
     return GestureDetector(
       onTap: onEdit,
       child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
           color: isLight ? Colors.white : AppColors.slate900,
           borderRadius: BorderRadius.circular(16),
@@ -1159,7 +1159,7 @@ class _SubCard extends StatelessWidget {
             ),
             // URL
             Padding(
-              padding: const EdgeInsets.only(top: 10),
+              padding: const EdgeInsets.only(top: 8),
               child: Row(
                 children: [
                   Text(
@@ -1186,11 +1186,11 @@ class _SubCard extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 6),
 
             // Bottom: last pull + actions
             Container(
-              padding: const EdgeInsets.only(top: 10),
+              padding: const EdgeInsets.only(top: 6),
               decoration: BoxDecoration(
                 border: Border(
                   top: BorderSide(

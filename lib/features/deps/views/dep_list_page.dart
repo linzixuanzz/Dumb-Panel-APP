@@ -1414,9 +1414,11 @@ class _DepCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 这张卡已经贴着地板：78dp 里有 48dp 是右侧 PopupMenuButton 的点击区，
+    // 那 48dp 一动不能动。可削的只有内边距与外边距，合计 −10dp 到头了。
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: isLight ? Colors.white : AppColors.slate900,
         borderRadius: BorderRadius.circular(12),
