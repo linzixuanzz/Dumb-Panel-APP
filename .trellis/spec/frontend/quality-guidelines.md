@@ -26,9 +26,12 @@ include: package:flutter_lints/flutter.yaml
 
 | 规则 | 数量 | 已定位的成因 |
 |---|---|---|
-| `use_build_context_synchronously` | 4 | `await` 之后使用 `BuildContext` 且未先判 `mounted` |
-| `library_private_types_in_public_api` | 2 | 公开类 `UserListState` 暴露私有类型 `_User`：`user_list_page.dart:68`（`final List<_User> items`）与 `:73`（`copyWith({List<_User>? items})`） |
-| 同类 info | 1 | |
+| `use_build_context_synchronously` | **5** | `await` 之后使用 `BuildContext` 且未先判 `mounted`。分布：`notification_list_page` / `open_api_page` / `script_list_page` / `security_page` / `user_list_page` 各 1 |
+| `library_private_types_in_public_api` | 2 | 公开类 `UserListState` 暴露私有类型 `_User`（`user_list_page.dart` 的 `final List<_User> items` 与 `copyWith({List<_User>? items})`） |
+
+> 之前这张表写的是「4 + 2 + 同类 info 1」，那个「同类 1」是含糊记法。
+> 实测就是 **5 + 2**。**只比对总数会漏掉「修好一个又新增一个」**，
+> 改动前后请比对 file:line 清单本身。
 
 > **硬性要求（对应第 0 期 A8）**：任何改动后 `flutter analyze` **不得超过 7 个 info**。
 > 修掉旧的可以，新增的不行。
@@ -132,7 +135,11 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 | 后端已暴露的默认值写死在客户端 | 面板改配置后 APP 不跟随 | 参考已修正的 `task_form_page.dart:223-266` |
 | 裸 `Color(0xFF...)` | 绕过 `AppColors` / `ColorScheme`，主色切换时漏改 | 已清零。历史反例：三处状态徽章写死 Emerald 深绿 `Color(0xFF047857)`，主色换蓝后成了深绿字配浅蓝底 |
 | 用 `AppColors.primary` / `blue500` 表达「成功 / 已启用」 | 主色本身就是蓝，会与「运行中 / 进行中」撞色 | 用 `AppColors.success` / `successDark` / `successLight` |
-| 新增第 12 种 `BorderRadius.circular` 取值 | 现已 11 种，正在收敛 | |
+| 写裸 `BorderRadius.circular(<字面量>)` | 已收敛成 `AppRadius` 五档且活代码零字面量 | 用 `control/sm/md/lg/pill`，禁止第六档 |
+| 删 `boxShadow` 后不给 `BoxDecoration` 补 `const` | `flutter_lints` 的 `prefer_const_constructors` 会**当场多出一批新 info**，顶破「≤ 7 个」门禁 | 删完检查 `BoxDecoration` 是否已全是编译期常量 |
+| `ReorderableListView` 的 key 挂到 itemBuilder 返回值的 **child** 上 | 运行时抛 `Every item of ReorderableListView must have a key`，**`flutter analyze` 完全看不出来** | key 必须在 `itemBuilder` 返回的**顶层 widget**上（迁 `AppCard` 时写 `AppCard(key: ...)`） |
+| 给 `Material` 同时传 `shape` 和 `borderRadius` | 两者互斥，**运行时 assert**，analyze 看不出来 | 用 `shape: RoundedRectangleBorder(borderRadius:, side:)`，把并列那行 `borderRadius:` 删掉 |
+| 迁移带自定义颜色的卡片时不显式传 `color`/`borderColor` | 会被 `AppCard` 默认值静默打回。真实案例：订阅拉取日志块的底色是**用户自选的日志主题**（`logTheme.background`），落到默认会把深色终端底换成白卡，ANSI 文字直接不可读 | 迁移前先记下原始颜色，迁完逐个比对 |
 | 给 provider 加 `.autoDispose` | 底部导航 tab 常驻，会丢状态并重复请求 | |
 | Notifier 的**写操作**里 try/catch 吞异常 | UI 的 `_showActionError` 拿不到错误，失败静默 | |
 | 新增 `// ignore:` 注释 | 全库目前零使用，加了就破坏「基线 7 个 info」的可读性 | |
@@ -195,5 +202,44 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
   **路径含空格会让 `flutter test` 在 native assets 构建阶段失败**
   （hook runner 未给 dart 可执行文件加引号）。
   当前用目录联接 `D:\flutter-nospace` 绕过。
+
+### ★ 本地 `flutter build apk --release` 产出的是**未签名** APK，装不上
+
+```
+apksigner verify --print-certs build/app/outputs/flutter-apk/app-release.apk
+  DOES NOT VERIFY
+  ERROR: Missing META-INF/MANIFEST.MF
+```
+
+APK 的 `META-INF/` 下只有构建元数据，**没有 `MANIFEST.MF` / `*.SF` / `*.RSA`**。
+
+**根因**（`android/app/build.gradle.kts`）：
+
+```kotlin
+buildTypes {
+    release {
+        if (hasReleaseSigning) {                                  // 本地为 false
+            signingConfig = signingConfigs.getByName("release")
+        }
+```
+
+`hasReleaseSigning` 依赖 `android/key.properties` 或 `KEYSTORE_*` 环境变量，本地都没有，
+于是 `signingConfig` 根本不被设置。**AGP 8+ 在 release buildType 没有 signingConfig 时
+是直接不签名**，不像老版本会退回 debug key。
+
+历史构建同样如此，只是本地从来没人拿它去装。
+
+**正式发版不受影响**：`.github/workflows/release.yml` 与 `android-build.yml` 会用
+`secrets.ANDROID_KEYSTORE_BASE64` 解码出 `.jks` 并生成 `key.properties`。
+
+**本地要出可安装包**：`keytool -genkeypair` 生成 jks 放到**仓库外**，
+再 `apksigner sign --ks <jks> --out <签好的> <未签的>`。
+这样签出来的包与正式版**签名不同**，装之前必须卸载旧版，本地数据会丢。
+`key.properties` 与 `.jks` **绝不能进 Git**。
+
+### CI 没有 format / analyze / test 门禁
+
+`.github/workflows/` 下 grep `dart format` / `analyze` / `flutter test` 均无命中。
+也就是说**这三项全靠本地自觉**，CI 不会拦住你。改动后请自己跑。
 - `pubspec.yaml` 的 `version:` 同时是 APP 版本号与 build number（当前 `1.2.6+19`），
   发版时 `docs/release-notes/` 下要有对应文件。

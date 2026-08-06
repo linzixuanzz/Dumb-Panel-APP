@@ -65,40 +65,73 @@ const _NavItem({
 
 ---
 
-## 样式现状（反模式）
+## 样式：组件层已建立并接线（第 1 期完成）
 
-**这一节记录的是问题，不是要照抄的规范。**
+### 圆角：五档，取值已拍板固定
 
-### 主题定义了，但界面不用
+`lib/core/theme/design_tokens.dart` 的 `AppRadius`：
 
-`lib/core/theme/app_theme.dart` 提供了 `cardTheme`（`:103-111`，圆角 16 + 1px 边框）、
-`inputDecorationTheme`、`filledButtonTheme`、`dialogTheme` 等。实际使用情况：
-
-| 形态 | 次数 | 说明 |
+| 档 | 值 | 角色 |
 |---|---|---|
-| Flutter `Card(` | **6** | `resource_card.dart:20`、`server_config_page.dart:359`、`backup_page.dart:927/1029/1210/1403` |
-| 手写 `BoxDecoration(` | **134 / 27 文件** | 每个「卡片」自己拼 color + borderRadius + border |
-| 手写 `isLight` 明暗分支 | **507 行 / 27 文件** | `final isLight = Theme.of(context).brightness == Brightness.light;` 后逐处三元 |
-| `BorderRadius.circular(` | **149 / 27 文件，11 种取值** | 4 / 8 / 9 / 10 / 12 / 14 / 16 / 18 / 20 / 24 / 999 |
-| `BoxShadow` | 12 / 11 文件 | |
+| `control` | 4 | **控件**（Checkbox 方框等尺寸恒定的东西） |
+| `sm` | 8 | 图标底板、微徽章 |
+| `md` | 12 | 输入框、内嵌块、按钮 |
+| `lg` | 14 | 卡片 |
+| `pill` | 999 | chip、进度条 |
 
-**同层级对象取值不统一**：列表项卡片在日志页是 18、任务页是 14、变量页是 12、设置页是 12。
+改造前是 **11 种散装取值**（4/8/9/10/12/14/16/18/20/24/999，其中 9 和 24 各只出现一次
+——那是手滑不是设计）。现在 `lib/` 下活代码里 `Radius.circular(<字面量>)` **一处不剩**。
 
-**直接后果**：把 `app_theme.dart` 里的圆角全改成 0，界面上绝大多数卡片不会有任何变化。
+> **硬规则**：
+> 1. 新代码只能用这五个名字，**禁止新增第六档**，也禁止写字面量。
+> 2. `control` 与 `sm` 值不同源：`control` 描述**控件**（尺寸恒定，半径就是半宽的比例，
+>    18dp 的 Checkbox 上 4 占 22%、8 占 44% 已接近圆）；`sm/md/lg/pill` 描述**表面**
+>    （尺寸由内容撑开）。两者不同量纲，不要互相替代。
+> 3. 取值经用户拍板**保持当前值不变**——11 种收敛成 5 种的一致性收益已经拿到，
+>    再压绝对值只产生「不一样」不产生「更干净」。要改必须重新拍板。
 
-### 典型的手写卡片长这样
+### ⚠️ `AppSpacing` 有同名档位，是最容易误删的一处
+
+`AppRadius` 与 `AppSpacing` 都有 `xs / xl / xxl` 这类名字。`AppRadius` 的三个已在
+第 1 期删除（零引用），但 **`AppSpacing.xs` / `AppSpacing.xl` 有 4 处在用**
+（`dashboard_page`、`sponsor_page`、`app_buttons` ×2、`app_state_views`）。
+
+删档位前必须区分是哪个类，只按 `\b(xs|xl|xxl)\b` 搜会连坐。
+
+### 卡片与提示条：走组件，不要内联 `BoxDecoration`
+
+| 组件 | 调用点 | 用途 |
+|---|---|---|
+| `AppCard` | **46** | 一切「卡片形」表面（有底色 + 圆角，通常有边框） |
+| `AppNotice` | **11** | 淡底提示条（帮助说明、错误提示、模式横幅） |
+| `AppLoadingView` / `AppEmptyView` / `AppErrorView` | 各 3~4 | 列表三态 |
+
+`BoxDecoration(` 从改造前的 **134 处降到 76 处**，剩下的是真正不该用 AppCard 的：
+`BoxShape.circle` 的圆钮与状态点、微徽章 / chip、图标底板、单边描边的分隔线，
+以及两处 `AnimatedContainer` + `Matrix4` 左滑操作（`AppCard` 不接
+`duration/curve/transform`）。
+
+`boxShadow` 与 `LinearGradient` 全库**均为 0**。扁平化不靠投影和渐变分层，
+靠 1px 边框 + 底色差。
+
+#### `AppCard` 有一处容易被当成手滑的实现细节
+
+有交互分支（传了 `onTap`/`onLongPress`）走 `DecoratedBox > Material > InkWell > Padding`，
+`Padding` 在 `bordered` 时会**额外加 1dp**：
 
 ```dart
-// lib/shared/widgets/task_cron_list.dart:24-41（连"共享组件"自己也是这个写法）
-final theme = Theme.of(context);
-final isLight = theme.brightness == Brightness.light;
-...
-decoration: BoxDecoration(
-  color: isLight ? AppColors.slate50 : AppColors.slate800,
-  borderRadius: BorderRadius.circular(compact ? 8 : 10),
-  border: Border.all(color: isLight ? AppColors.slate200 : AppColors.slate700),
-),
+final effectivePadding = bordered
+    ? padding.add(const EdgeInsets.all(AppBorderWidth.hairline))
+    : padding;
 ```
+
+因为无交互分支走 `Container(padding:, decoration:)`，而 `Container` 在有 `decoration`
+时会把 `border.dimensions` 并进内边距（`_paddingIncludingDecoration`），
+`DecoratedBox` 不会。不补这 1dp，同一个 `padding:` 参数在两个分支给出不同结果。
+**删掉它会凭空改变所有交互卡的尺寸。**
+
+> 同一个机制也解释了：`Container(padding: all(20), decoration: 带 border)` 的内容
+> 实际内缩是 **21dp** 不是 20dp。算裁切/对齐几何时要记得。
 
 ### 颜色来源：`AppColors` 静态常量，不是 `ColorScheme`
 
@@ -132,9 +165,42 @@ decoration: BoxDecoration(
 > 设计令牌已落在 `lib/core/theme/design_tokens.dart`。新代码请：
 > 1. 圆角 / 间距 / 描边宽度走 `AppRadius` / `AppSpacing` / `AppBorderWidth`，**不写裸数值**；
 > 2. 明暗分支走 `AppSurfaces.of(context)`，**不再手写 `isLight ? A : B`**；
-> 3. 卡片用 `AppCard`，列表三态用 `AppLoadingView` / `AppEmptyView` / `AppErrorView`；
+> 3. 卡片用 `AppCard`、提示条用 `AppNotice`、列表三态用
+>    `AppLoadingView` / `AppEmptyView` / `AppErrorView`；
 > 4. 必须用固定色时统一走 `AppColors`，**不要写裸 `Color(0xFF...)`**；
-> 5. 不要新增第 12 种圆角取值。
+> 5. 不要新增第六档圆角。
+
+### 前景色：淡底走 `tintFg`，实底走 `solidFg`，两者明暗方向**相反**
+
+```dart
+// 淡底（withAlpha 的徽章 / chip / 提示条）
+Color tintFg(Color c) => isLight ? Color.lerp(c, Colors.black, 0.2)! : c;
+
+// 实底（SnackBar 这类整块着色的背景）
+Color solidBg(Color c) => isLight ? Color.lerp(c, Colors.black, 0.4)! : c;
+Color get solidFg      => isLight ? Colors.white : AppColors.slate950;
+```
+
+**为什么必须用它们**：`tintBg()` 浅色模式是 `withAlpha(18)`，若调用方拿**同一个满强度色**
+当前景，数学上对比度封顶约 2.6:1。绿色更糟（`success` 亮度高，只有 2.13:1），
+`warning` 是 2.04:1。套上 `tintFg` 后分别升到 3.93 / 3.27 / 3.14:1。
+
+**为什么 20% 这个系数**：`Color.lerp(c, black, 0.2)` 逐字节复现了 `primaryDark` / `successDark`
+——Element Plus 的 `dark-2` 定义就是 `mix($color, black, 20%)`，两个常量当初就是抄它的。
+所以 `tintFg` 不会分裂出第二种深蓝 / 深绿。
+
+**为什么 `solidBg` 明暗方向相反**：SnackBar 的默认底是 `inverseSurface`（与页面相反）。
+若照 `tintFg` 那样深色返回原色，浅色那支深绿 `#3E7423` 摆到 `slate950` 页面上只有
+2.42:1，连非文字的 3:1 都不到。且 20% 的 `dark-2` 配方在**实底**上不够用
+（白字压 `successDark` 只有 3.45:1），必须压到 40%。
+
+> ⚠️ **淡底前景不要二次加深**：有些 `_statusFg()` 函数浅色模式**已经返回 `*Dark`**
+> （`backup_page`、`task/dep/subscription` 的状态色）。对它们再套 `tintFg` 会得到
+> `#29659F` 这种过深的颜色。套之前先确认调用方传的是满强度色。
+
+> **已知未达标（不是本期引入的）**：按 WCAG 对 10px 加粗文字的真实要求 4.5:1，
+> `primary` 3.93 / `success` 3.27 / `warning` 3.14 仍不够，只有 `danger` 5.05 过线。
+> 补齐需要加深 `AppColors` 的全局常量，用户已决定**保持与面板 Element Plus 一致、不加深**。
 
 ---
 
@@ -202,15 +268,19 @@ String _extractTaskError(dynamic error, String fallback) => extractErrorMessage(
 
 ---
 
-## 空状态：硬编码文案，**没有错误态**
+## 空状态 vs 错误态：三个主列表已区分，其余 6 个仍未
 
-27 处 `暂无XXX` 文案分散在各页面（`task_list_page.dart:880`、`log_list_page.dart:643`、
-`env_list_page.dart:1132`、`notification_list_page.dart:260` …）。
+第 0 期 R3 给 `TaskListState` / `LogListState` / `EnvListState` 加了 `error` 字段，
+这三个列表现在在「有错误且列表为空」时显示原因 + 重试按钮（`AppErrorView`），
+不再一律显示「暂无数据」。
 
-**没有任何页面在请求失败时显示错误 + 重试**。断网时列表走的是同一条「暂无数据」分支，
-因为 provider 的 `catch` 只把 `loading` 置回 false（详见 state-management.md）。
+**但仍有 6 个 State 没有 `error` 字段**（`NotificationListState` / `UserListState` /
+`DepListState` / `ScriptState` 等），断网时症状与改造前一样。
 
-> 第 0 期 R3 要修这个。新增列表页时，请把「真的没有数据」与「拿不到数据」区分开。
+> 新增列表 provider **必须**带 `error` 字段，并把「真的没有数据」与「拿不到数据」区分开。
+> 错误文案走 `extractListErrorMessage`（不是 `extractErrorMessage`）——后者在后端没返回
+> `error`/`message` 时会退回 `DioException.message`，那是英文
+> （"The connection errored: Failed host lookup..."），而错误态是摊在屏幕中央给用户看的。
 
 ---
 
