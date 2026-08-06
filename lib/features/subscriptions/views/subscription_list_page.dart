@@ -317,7 +317,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                         ],
                       )
                     : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                         itemCount: state.items.length,
                         itemBuilder: (_, i) {
                           final sub = state.items[i];

@@ -215,7 +215,7 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
             )
           : ListView(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
               children: [
                 Row(
                   children: [
@@ -526,7 +526,7 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
             )
           : ListView.builder(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
               itemCount: _sessions.length + 1,
               itemBuilder: (_, i) {
                 if (i == 0) {
@@ -776,7 +776,7 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
             )
           : ListView.builder(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
               itemCount: _items.length + 1,
               itemBuilder: (_, i) {
                 if (i == 0) {

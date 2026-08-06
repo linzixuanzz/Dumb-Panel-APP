@@ -574,7 +574,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                       color: AppColors.primary,
                       onRefresh: _load,
                       child: ListView(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                         children: [
                           // ── Version Info ──
                           if (_versionInfo != null) ...[

@@ -713,7 +713,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                       onRefresh: () =>
                           ref.read(scriptProvider.notifier).loadTree(),
                       child: ListView(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                         children: visibleTree
                             .map(
                               (file) => _FileTreeItem(

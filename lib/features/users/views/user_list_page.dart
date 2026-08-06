@@ -237,7 +237,7 @@ class _UserListPageState extends ConsumerState<UserListPage> {
                         ],
                       )
                     : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                         itemCount: state.items.length,
                         itemBuilder: (_, i) => _UserCard(
                           user: state.items[i],

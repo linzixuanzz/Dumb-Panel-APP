@@ -167,7 +167,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                         ],
                       )
                     : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                         itemCount: _apps.length,
                         itemBuilder: (_, i) =>
                             _buildAppCard(app: _apps[i], isLight: isLight),
@@ -1159,7 +1159,7 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
                         ],
                       )
                     : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                         itemCount: _logs.length,
                         itemBuilder: (_, i) {
                           final log = _logs[i];

@@ -1304,7 +1304,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                           );
                         }
                         return ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+                          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                           itemCount: filtered.length,
                           itemBuilder: (_, i) {
                             final dep = filtered[i];

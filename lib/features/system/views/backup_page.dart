@@ -1359,7 +1359,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                 onRefresh: _refresh,
                 child: ListView(
                   physics: const AlwaysScrollableScrollPhysics(),
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                   children: [
                     _buildActionCard(isLight),
                     if (_showProgressCard) ...[

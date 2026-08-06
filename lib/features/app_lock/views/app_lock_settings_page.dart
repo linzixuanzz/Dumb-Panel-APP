@@ -245,7 +245,7 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
                       ),
                     )
                   : ListView(
-                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                       children: [
                         Container(
                           padding: const EdgeInsets.all(18),
