@@ -204,7 +204,9 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
     try {
       final response = await DioClient.instance.dio.get(
         ApiEndpoints.tasks,
-        queryParameters: {'page': 1, 'page_size': 200},
+        // 面板上限 100，超了静默回落到 20（server/handler/task_query.go:52-54）。
+        // 这里只用来收集已有分组名做候选，原来写 200 等于只看了前 20 个任务的分组。
+        queryParameters: {'page': 1, 'page_size': 100},
       );
       final paginated = extractPaginated(response.data);
       final groups =

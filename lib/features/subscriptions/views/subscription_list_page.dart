@@ -60,7 +60,11 @@ class SubscriptionListNotifier extends StateNotifier<SubscriptionListState> {
     state = state.copyWith(loading: true);
     try {
       final dio = DioClient.instance.dio;
-      final params = <String, dynamic>{'page': 1, 'page_size': 200};
+      // 面板把 page_size 卡在 100：`if pageSize < 1 || pageSize > 100 { pageSize = 20 }`
+      // （server/handler/subscription.go:139-141）。原来这里写 200，超限后被**静默**
+      // 回落到 20 —— 订阅超过 20 条，第 21 条起在 APP 上根本看不见，而且没有任何报错。
+      // 100 是面板允许的上限；超过 100 条订阅还需要真正的分页，另计。
+      final params = <String, dynamic>{'page': 1, 'page_size': 100};
       if (state.keyword.isNotEmpty) params['keyword'] = state.keyword;
       final resp = await dio.get(
         ApiEndpoints.subscriptions,

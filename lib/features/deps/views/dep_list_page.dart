@@ -135,7 +135,12 @@ class DepListNotifier extends StateNotifier<DepListState> {
     String type, {
     String? pythonVersion,
   }) async {
-    final params = <String, dynamic>{'page': 1, 'page_size': 200, 'type': type};
+    // /api/deps 目前**根本不分页**：DepsHandler.List 只按 type 过滤后
+    // `query.Order(...).Find(&deps)` 全量返回（server/handler/deps.go:144-175），
+    // page / page_size 是被忽略的。所以这里原来的 200 不是 bug（另外两处
+    // subscription / task 才是，那两个端点有 100 上限、超了静默回落到 20）。
+    // 仍然改成 100：万一面板哪天给依赖也加上分页，100 才是不会触发回落的值。
+    final params = <String, dynamic>{'page': 1, 'page_size': 100, 'type': type};
     if (type == 'python' && (pythonVersion ?? '').trim().isNotEmpty) {
       params['python_version'] = pythonVersion!.trim();
     }

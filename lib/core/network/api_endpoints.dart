@@ -20,6 +20,11 @@ class ApiEndpoints {
   static const String systemStats = '$baseApi/system/stats';
   static const String systemVersion = '$baseApi/system/version';
   static const String checkUpdate = '$baseApi/system/check-update';
+  // 这三条原来是页面里 `'${ApiEndpoints.baseApi}/system/...'` 手拼的，
+  // 绕过常量表就等于改路径时会漏改。路由见面板 server/handler/system.go:696-698。
+  static const String systemUpdateStatus = '$baseApi/system/update-status';
+  static const String systemUpdate = '$baseApi/system/update';
+  static const String systemRestart = '$baseApi/system/restart';
   static const String panelSettings = '$baseApi/system/panel-settings';
   static const String panelLog = '$baseApi/system/panel-log';
   static const String sponsors = '$baseApi/sponsors';
