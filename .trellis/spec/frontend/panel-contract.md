@@ -127,6 +127,38 @@ tasks.last_run_status 0 成功 / 1 失败 / 2 已终止
 
 ---
 
+## ⚠️ 契约测试要钉 **JSON 键名**，不是 Go 结构体字段
+
+这是交叉审查抓到的一整类缺口：面板的测试断言的是 Go struct 的字段值，
+**改一个 json tag，面板全部测试仍然绿**，而 APP 静默退化成
+「标题变成 key、hint 消失、下拉变文本框」—— 没有任何地方报错。
+
+写契约测试时：**序列化一次，断言 JSON 里的键名**。
+断言的值用 Go 侧的变量而不是写死的中文，这样改文案不误报、只有改键名才红。
+
+## ⚠️ 同一个 key 声明两次时，客户端的表单状态是**按 key 存**的
+
+面板允许同一个 key 在不同 `show_when` 分支下声明多次
+（wecom 的 `content_template` 在 text 与 markdown 分支文案不同）。
+服务端的守卫只保证两条 `show_when` **互斥**。
+
+但客户端是这样建种子值的：
+
+```dart
+return <String, String>{
+  for (final field in fields)
+    field.key: existingNotifyFieldValue(field.key, config) ?? field.defaultValue,
+};
+```
+
+Dart map 推导式里**重复 key 后写覆盖先写** —— 种子值恒等于**最后一条**声明的
+`default`，与此刻显示的是哪个分支无关。Web 的 `configData[key]` 同理。
+
+现在那两条的 `default` 都是空串所以看不出来。面板侧已加断言
+（重复 key 的 `Default` / `Required` / `Widget` 必须一致），加了就红。
+
+---
+
 ## 冻结快照：不是「保留的硬编码」
 
 老面板兼容确实需要在 APP 里留一份基线数据，但它的语义必须是：
@@ -145,6 +177,24 @@ group('v3.0.0 冻结快照不许再长', () {
 ```
 
 往里加任何东西，测试立刻红。注释可以被无视，测试不行。
+
+---
+
+## 已验证的兼容底线（不要再重新担心一遍）
+
+schema 驱动依赖服务端下发某些键。这些键**是哪个版本引入的**，用
+`git log -S '"键名"' -- <file>` 查过：
+
+| 键 | 引入版本 | 结论 |
+|---|---|---|
+| `/api/configs` 的 `registered` | **v1.8.0**（2026-03-21） | 安全。APP 关心的最老面板是 **v2.2.2**（`dep_list_page` 那处降级挡的是 `/deps/python-runtimes` 在 v2.2.2 无、v2.2.20 才有），`registered` 比它早一个大版本 |
+
+> **为什么这条值得写下来**：`parseSystemConfigGroups` 会跳过 `registered != true` 的项，
+> 一条都收不到就显示「面板没有返回任何可编辑的系统配置」。而改造前那 10 个硬编码键
+> **根本不看 `registered`**。如果这个前提不成立，用户会从「能改 10 项」变成
+> 「一项都改不了 + 一句看不懂的错」—— **比改造前更糟**。
+>
+> 引入新的「依赖某个键存在」的降级判据时，照这个格式查一次并记在这里。
 
 ---
 
