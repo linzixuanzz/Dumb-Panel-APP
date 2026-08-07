@@ -17,7 +17,7 @@
 | 网络 | `dio ^5.7.0`（REST）+ `http ^1.2.2`（仅 SSE） | `pubspec.yaml:19-20`、`lib/core/network/sse_client.dart:3` |
 | 路由 | `go_router ^14.8.1` | `pubspec.yaml:23` |
 | 代码生成 | **无**。全库 0 个 `.g.dart`，`pubspec.yaml` 无 `build_runner` / `freezed` / `json_serializable` | `pubspec.yaml:43-47` |
-| 规模 | `lib/` 59 个 dart 文件 / 约 30,676 行 | rg 全量统计 |
+| 规模 | `lib/` **72** 个 dart 文件 / 约 **31,514** 行；`test/` 10 个文件 / 158 个用例 | 全量统计（第 2 期末） |
 
 服务端（Go 面板）在**另一个仓库**，本仓库只消费它的 HTTP API。
 本目录的 `../backend/` 是 `trellis init` 留下的 Go/ORM 模板，与本仓库无关，见 `../backend/index.md`。
@@ -34,6 +34,7 @@
 | [state-management.md](./state-management.md) | `StateNotifier` + 手写不可变 State 类、`copyWith`、`_unset` 哨兵、错误态现状 | 已按代码填写 |
 | [quality-guidelines.md](./quality-guidelines.md) | lint 基线、7 个既有 info、测试现状、禁止/必须模式、审查清单 | 已按代码填写 |
 | [type-safety.md](./type-safety.md) | JSON 解析防御式写法、后端默认值不得写死、运行模式分支 | 已按代码填写 |
+| [panel-contract.md](./panel-contract.md) | **APP 与面板的契约**：什么该下发什么不该、形状探测、config 必须字符串、未知值要诚实、冻结快照 | 第 2 期新增 |
 
 > **关于 `hook-guidelines.md` 的命名**：文件名来自 `trellis init` 的 React 模板。
 > Flutter 没有 hooks（本仓库也未使用 `flutter_hooks`），因此该文件的**内容**已整体改写为
@@ -43,49 +44,53 @@
 
 ## 读这些文档前必须知道的三件事
 
-### 1. 主题文件对界面几乎无效（反模式，第 0 期已建杠杆、第 1 期继续收敛）
+### 1. 样式已经收敛完了，新代码必须走令牌与共享组件
 
-`lib/core/theme/app_theme.dart` 定义了 `cardTheme` / `inputDecorationTheme` 等，但页面几乎不用：
+第 0 期建令牌层、第 1 期把它接线到全库。**改造前后的对照**：
 
-- 真正使用 Flutter `Card` 的只有 **6 处**（`resource_card.dart:20`、`server_config_page.dart:359`、`backup_page.dart:927/1029/1210/1403`）
-- 手写 `BoxDecoration(` **134 处 / 27 文件**
-- 手写 `isLight` 明暗分支 **507 行 / 27 文件**
-- `BorderRadius.circular(` **149 处 / 27 文件，11 种取值**（4/8/9/10/12/14/16/18/20/24/999）
+| | 改造前 | 现在 |
+|---|---|---|
+| 圆角取值 | 11 种散装字面量 | **5 档令牌**（`control/sm/md/lg/pill`），活代码零字面量 |
+| `BoxDecoration(` | 134 | **76**（剩下的是圆钮、徽章、图标底、单边分隔线等真不该用卡片的） |
+| `AppCard` 调用点 | 6 | **46** |
+| `boxShadow` | 12 | **0** |
+| `LinearGradient` | 2 | **0** |
 
-**后果**：把 `app_theme.dart` 的圆角全改成 0，界面上绝大多数卡片不会有任何变化。
+**新代码必须**：圆角走 `AppRadius`（只有那五个名字，禁止第六档）、卡片用 `AppCard`、
+提示条用 `AppNotice`、明暗走 `AppSurfaces`、提示走 `AppSnack`（**失败必须用 `error`**）。
 
-第 0 期 R4 已经补上 `lib/core/theme/design_tokens.dart`（令牌）
-与 `lib/shared/widgets/app_*.dart`（基元组件），并做了 5 个页面的示范迁移。
-**新代码必须走这一层**，否则第 1 期扁平化的杠杆会被继续稀释。
-详见 [component-guidelines.md](./component-guidelines.md#样式现状反模式)。
+详见 [component-guidelines.md](./component-guidelines.md)。
 
-### 2. `validateStatus: status < 500` 让 4xx 变成「成功」
+### 2. `validateStatus` 已收紧到 `< 400`，4xx 会抛 `DioException`
 
-`lib/core/network/dio_client.dart:16` 与 `:60`：
+改造前是 `< 500`，导致 401 被当成功响应、token 续期整段是死代码、
+后端返回 400 也弹「配置已保存」。第 0 期已修。
 
-```dart
-validateStatus: (status) => status != null && status < 500,
-```
+**新增调用点必须自行确认 catch 兜得住 4xx**。唯一的例外是
+`/auth/captcha-config` 保留请求级 `< 500`（老面板没这个接口，404 = 没配验证码）。
 
-所有 4xx 都不抛异常，直接进入 `then` 分支。连锁后果贯穿整个客户端：
+### 3. 测试有 158 个用例，但覆盖面是**有选择的**
 
-- `lib/core/auth/auth_interceptor.dart:46-114` 的 token 续期整段是**死代码**（`onError` 永不触发）
-- `lib/features/system/views/system_settings_page.dart:496-529` 后端返回 400 也弹「配置已保存」
-- 各 provider 的 `catch` 兜不到 4xx，列表拿到空数据后显示「暂无数据」
+不追覆盖率，只保护「改错了用户会丢数据 / 丢会话 / 看到错误信息」的地方：
 
-**第 0 期 R1 会收紧这个配置。** 改动后所有 4xx 会变成 `DioException`，
-**任何新增/修改调用点都必须自行确认 catch 兜得住**。详见
-[hook-guidelines.md](./hook-guidelines.md#网络层现状与陷阱)。
+401 续期链路、通知渠道配置合并（未知字段不丢）、列表 error 语义、
+系统配置 schema 的读写往返、通知渠道 schema 解析与降级、
+枚举换算的诚实性、cron 模板解析、订阅鉴权请求体。
 
-### 3. 测试只覆盖「改错了用户会丢数据」的地方
-
-第 0 期 R5 之前 `test/` 下只有一个用例体是 `// TODO` 的空壳，全绿等于零信息。
-现在有 4 个测试文件，只保护三条线：**401 续期链路**、**通知渠道配置不丢未知字段**、
-**列表 error 语义**。其余绝大部分代码仍然没有任何覆盖，
-改动时不要把「`flutter test` 通过」当成安全。
+**绝大部分 UI 代码仍然零覆盖** —— 圆角、间距、配色、布局对 `flutter test` 全部不可见。
+不要把「测试通过」当成界面没问题。
 
 没有引入任何测试依赖，假 HTTP 是手写的 `HttpClientAdapter`。详见
 [quality-guidelines.md](./quality-guidelines.md#测试现状)。
+
+### ★ 第 4 件：不要把面板的知识抄进 APP
+
+第 2 期的主题。判断标准：**面板加一个值时 APP 需不需要发新版？**
+需要就说明这份知识不该在 APP 里。
+
+已经改成面板下发的：系统配置（47 项，schema 驱动）、通知渠道字段（22 渠道 90 槽）、
+cron 模板（21 条）。仍然硬编码但**有意保留**的东西，以及哪些**不该**下发，
+见 [panel-contract.md](./panel-contract.md)。
 
 ---
 
