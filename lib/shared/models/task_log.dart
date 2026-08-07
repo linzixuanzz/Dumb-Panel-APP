@@ -1,8 +1,19 @@
+import '../utils/panel_enums.dart';
+
 class TaskLog {
   final int id;
   final int taskId;
   final String content;
-  final int? status; // 0=成功 1=失败 2=运行中
+
+  /// 0=成功 1=失败 2=运行中 **3=已终止**。
+  ///
+  /// 面板 `server/model/task_log.go:7-12` 的 LogStatus*。3 是面板 v3 新增的
+  /// 「主动终止」（手动停止 / 定时停止），APP 之前完全没有这个值：
+  /// 详情显示「未知」、列表状态点落到「运行中」的蓝、筛选栏也没有对应项。
+  ///
+  /// ⚠️ 不要和 `task.last_run_status` 混：那一套是 Run*（2 = 已终止），
+  /// 两套枚举 2 的含义正好相反。
+  final int? status;
   final double? duration;
   final String? logPath;
   final DateTime startedAt;
@@ -23,22 +34,14 @@ class TaskLog {
     this.taskName,
   });
 
-  bool get isSuccess => status == 0;
-  bool get isFailed => status == 1;
-  bool get isRunning => status == 2;
+  bool get isSuccess => status == kLogStatusSuccess;
+  bool get isFailed => status == kLogStatusFailed;
+  bool get isRunning => status == kLogStatusRunning;
+  bool get isAborted => status == kLogStatusAborted;
 
-  String get statusText {
-    switch (status) {
-      case 0:
-        return '成功';
-      case 1:
-        return '失败';
-      case 2:
-        return '运行中';
-      default:
-        return '未知';
-    }
-  }
+  String get statusText => logStatusLabel(status);
+
+  PanelStatusTone get statusTone => logStatusTone(status);
 
   String get durationText {
     if (duration == null) return '-';

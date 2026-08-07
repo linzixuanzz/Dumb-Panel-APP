@@ -9,6 +9,12 @@ class TaskStatsCard extends StatelessWidget {
   final int disabled;
   final int todaySuccess;
   final int todayFailed;
+
+  /// 今日主动终止数。面板把它从成功 / 失败里拆了出来（`aborted_logs`），
+  /// 不显示的话「今日成功 + 今日失败」永远对不上今日执行总数。
+  ///
+  /// 默认 0：老面板不返回 `aborted_logs`，此时这一格不渲染，布局与改动前一致。
+  final int todayAborted;
   final VoidCallback? onTap;
 
   const TaskStatsCard({
@@ -19,6 +25,7 @@ class TaskStatsCard extends StatelessWidget {
     required this.disabled,
     required this.todaySuccess,
     required this.todayFailed,
+    this.todayAborted = 0,
     this.onTap,
   });
 
@@ -84,6 +91,15 @@ class TaskStatsCard extends StatelessWidget {
                 color: AppColors.danger,
                 isLight: isLight,
               ),
+              // 面板没返回 aborted_logs（老面板）且今天一次没终止过时不占位，
+              // 避免给老面板用户凭空多出一个恒为 0 的格子。
+              if (todayAborted > 0)
+                _StatItem(
+                  label: '今日终止',
+                  value: '$todayAborted',
+                  color: AppColors.warning,
+                  isLight: isLight,
+                ),
             ],
           ),
         ],

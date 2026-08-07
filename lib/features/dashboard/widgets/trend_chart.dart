@@ -15,6 +15,12 @@ class TrendChart extends StatelessWidget {
 
     final successSpots = <FlSpot>[];
     final failSpots = <FlSpot>[];
+    // 面板 daily_stats 每天有三个计数：success / failed / **aborted**
+    // （server/handler/system.go:138-156 的 DailyStat）。
+    // aborted 是面板 v3 拆出来的「主动终止」，APP 之前只画两条线，
+    // 被停掉的执行在趋势图上完全不存在 —— 用户看到的是一条对不上总量的曲线。
+    final abortSpots = <FlSpot>[];
+    var hasAborted = false;
 
     for (int i = 0; i < data.length; i++) {
       final item = data[i] as Map<String, dynamic>;
@@ -24,6 +30,11 @@ class TrendChart extends StatelessWidget {
       failSpots.add(
         FlSpot(i.toDouble(), (item['failed'] as num? ?? 0).toDouble()),
       );
+      final aborted = (item['aborted'] as num? ?? 0).toDouble();
+      if (aborted > 0) {
+        hasAborted = true;
+      }
+      abortSpots.add(FlSpot(i.toDouble(), aborted));
     }
 
     return AppCard(
@@ -41,10 +52,21 @@ class TrendChart extends StatelessWidget {
                 ),
               ),
               const Spacer(),
-              // 与同屏 TaskStatsCard 的「今日成功 / 今日失败」保持同一套语义色。
+              // 与同屏 TaskStatsCard 的「今日成功 / 今日失败 / 今日终止」
+              // 保持同一套语义色。
               _LegendDot(color: AppColors.success, label: '成功', isLight: isLight),
               const SizedBox(width: 12),
               _LegendDot(color: AppColors.danger, label: '失败', isLight: isLight),
+              // 老面板的 daily_stats 没有 aborted 字段，整段区间又全是 0 时
+              // 不画这条恒等于 0 的线，也不占图例位置。
+              if (hasAborted) ...[
+                const SizedBox(width: 12),
+                _LegendDot(
+                  color: AppColors.warning,
+                  label: '终止',
+                  isLight: isLight,
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 16),
@@ -118,6 +140,7 @@ class TrendChart extends StatelessWidget {
                 lineBarsData: [
                   _line(successSpots, AppColors.success),
                   _line(failSpots, AppColors.danger),
+                  if (hasAborted) _line(abortSpots, AppColors.warning),
                 ],
               ),
             ),

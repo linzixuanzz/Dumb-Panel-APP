@@ -57,6 +57,16 @@ class DashboardData {
   int get disabledTasks => totalTasks - enabledTasks;
   int get todaySuccess => (dashboard['success_logs'] as num?)?.toInt() ?? 0;
   int get todayFailed => (dashboard['failed_logs'] as num?)?.toInt() ?? 0;
+
+  /// 今日主动终止的执行数（面板 `server/handler/system.go:101-102, 166`）。
+  ///
+  /// 面板已经把 aborted 从成功/失败里拆出来单独统计
+  /// （`Stats` 里注释写明「成功率只统计自然完成的成功 / 失败」），
+  /// APP 之前只读 success_logs / failed_logs，于是被手动停止的执行在首页
+  /// **凭空消失**：今日成功 + 今日失败对不上今日执行总数，用户以为丢日志了。
+  ///
+  /// 老面板不返回这个键 → 0，与改动前的显示完全一致。
+  int get todayAborted => (dashboard['aborted_logs'] as num?)?.toInt() ?? 0;
   List<dynamic> get recentLogs => dashboard['recent_logs'] as List? ?? [];
   List<dynamic> get executionTrend => dashboard['daily_stats'] as List? ?? [];
 

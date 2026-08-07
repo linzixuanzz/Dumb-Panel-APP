@@ -1,3 +1,5 @@
+import '../utils/panel_enums.dart';
+
 class Task {
   static const String groupLabelPrefix = '分组:';
 
@@ -67,17 +69,28 @@ class Task {
     required this.updatedAt,
   });
 
-  bool get isDisabled => status == 0;
-  bool get isQueued => status == 0.5;
-  bool get isEnabled => status == 1;
-  bool get isRunning => status == 2;
+  bool get isDisabled => status == kTaskStatusDisabled;
+  bool get isQueued => status == kTaskStatusQueued;
+  bool get isEnabled => status == kTaskStatusEnabled;
+  bool get isRunning => status == kTaskStatusRunning;
 
-  String get statusText {
-    if (isRunning) return '运行中';
-    if (isQueued) return '排队中';
-    if (isEnabled) return '已启用';
-    return '已禁用';
-  }
+  /// 本版 APP 是否认得这个状态值。不认得时 UI 走中性态，
+  /// 而不是沿用「已禁用」那一支的灰色 + 「启用」按钮。
+  bool get hasKnownStatus => isKnownTaskStatus(status);
+
+  /// 状态文案。兜底**不再**是「已禁用」：面板加第五种状态时，
+  /// 把它显示成已禁用会让用户去点「启用」，而那个按钮并不解决问题。
+  String get statusText => taskStatusLabel(status);
+
+  /// 任务类型文案（常规定时 / 手动运行 / 开机运行）。
+  /// 空串按「常规定时」是面板的归一化语义，非空且不认识的值原样显示。
+  String get taskTypeText => taskTypeLabel(taskType);
+
+  /// 上次运行结果文案。注意 `last_run_status` 走的是 Run* 枚举，2 是**已终止**。
+  String get lastRunResultText => taskRunResultLabel(lastRunStatus);
+
+  /// 上次运行是否失败。**只有 1 是失败**，2 是用户主动终止，不该按失败告警。
+  bool get lastRunFailed => lastRunStatus == 1;
 
   List<String> get labelList => labels.isEmpty
       ? []

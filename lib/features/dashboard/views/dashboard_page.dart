@@ -317,6 +317,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
                       disabled: data.disabledTasks,
                       todaySuccess: data.todaySuccess,
                       todayFailed: data.todayFailed,
+                      todayAborted: data.todayAborted,
                       onTap: () => context.go('/tasks'),
                     ),
                     const SizedBox(height: 24),

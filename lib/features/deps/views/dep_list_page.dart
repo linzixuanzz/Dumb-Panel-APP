@@ -11,6 +11,7 @@ import '../../../shared/models/python_runtime_info.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
+import '../../../shared/utils/panel_enums.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_notice.dart';
@@ -395,16 +396,10 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     return extractErrorMessage(error, fallback);
   }
 
-  String _typeLabel(String type) {
-    switch (type) {
-      case 'python':
-        return 'Python';
-      case 'linux':
-        return 'Linux';
-      default:
-        return 'NodeJS';
-    }
-  }
+  /// 依赖类型标签。兜底**不再**是 'NodeJS' —— 面板新增一种依赖类型时，
+  /// 那会把一个 Go / Rust 依赖显示成 NodeJS 依赖，用户按 npm 的思路去排查。
+  /// 换算表见 shared/utils/panel_enums.dart。
+  String _typeLabel(String type) => dependencyTypeLabel(type);
 
   List<String> _parseNames(String raw, bool autoSplit) {
     if (!autoSplit) {
@@ -1361,33 +1356,44 @@ class _DepCard extends StatelessWidget {
     required this.onForceDelete,
   });
 
-  // 安装中/排队中=蓝(info)、失败=红(danger)、已取消=灰、已安装=绿(success)。
+  // 安装中/排队中=蓝(info)、失败=红(danger)、已取消/未知=灰、已安装=绿(success)。
   // 「已安装」原先借用 primary 淡底 + 写死的 Emerald 深绿字，主色换蓝后就成了
   // 深绿字配浅蓝底，这里换成成套的 success 色。
+  //
+  // 「未知」这一档是本次补的：改动前最后一个分支是绿色，等价于
+  // 「凡是我不认识的依赖状态，一律画成已安装」。徽章文字已经改成显示原始状态
+  // 了，颜色再不跟上，用户看到的仍是一个绿色的成功态。
   Color _statusBg() {
-    if (dep.isBusy) {
-      return isLight ? AppColors.infoLight : AppColors.info.withAlpha(25);
+    switch (dep.statusTone) {
+      case PanelStatusTone.running:
+        return isLight ? AppColors.infoLight : AppColors.info.withAlpha(25);
+      case PanelStatusTone.danger:
+        return isLight ? AppColors.dangerLight : AppColors.danger.withAlpha(25);
+      case PanelStatusTone.success:
+        return isLight
+            ? AppColors.successLight
+            : AppColors.success.withAlpha(25);
+      case PanelStatusTone.warning:
+        return AppColors.warning.withAlpha(isLight ? 18 : 25);
+      case PanelStatusTone.neutral:
+        return isLight ? AppColors.slate100 : AppColors.slate700;
     }
-    if (dep.isFailed) {
-      return isLight ? AppColors.dangerLight : AppColors.danger.withAlpha(25);
-    }
-    if (dep.isCancelled) {
-      return isLight ? AppColors.slate100 : AppColors.slate700;
-    }
-    return isLight ? AppColors.successLight : AppColors.success.withAlpha(25);
   }
 
   Color _statusFg() {
-    if (dep.isBusy) {
-      return isLight ? AppColors.infoDark : AppColors.info;
+    switch (dep.statusTone) {
+      case PanelStatusTone.running:
+        return isLight ? AppColors.infoDark : AppColors.info;
+      case PanelStatusTone.danger:
+        return isLight ? AppColors.dangerDark : AppColors.danger;
+      case PanelStatusTone.success:
+        return isLight ? AppColors.successDark : AppColors.success;
+      case PanelStatusTone.warning:
+        return (isLight ? AppSurfaces.light : AppSurfaces.dark)
+            .tintFg(AppColors.warning);
+      case PanelStatusTone.neutral:
+        return isLight ? AppColors.slate600 : AppColors.slate300;
     }
-    if (dep.isFailed) {
-      return isLight ? AppColors.dangerDark : AppColors.danger;
-    }
-    if (dep.isCancelled) {
-      return isLight ? AppColors.slate600 : AppColors.slate300;
-    }
-    return isLight ? AppColors.successDark : AppColors.success;
   }
 
   @override

@@ -1,3 +1,5 @@
+import '../utils/panel_enums.dart';
+
 class Dependency {
   final int id;
   final String name;
@@ -31,22 +33,12 @@ class Dependency {
   bool get isCancelled => status == 'cancelled';
   bool get isBusy => isInstalling || isRemoving || isQueued;
 
-  String get statusText {
-    switch (status) {
-      case 'queued':
-        return '排队中';
-      case 'installing':
-        return '安装中';
-      case 'removing':
-        return '卸载中';
-      case 'failed':
-        return '失败';
-      case 'cancelled':
-        return '已取消';
-      default:
-        return '已安装';
-    }
-  }
+  /// 状态文案。兜底**不再**是「已安装」——
+  /// 面板新增一种依赖状态时，那会把一个装不上的依赖显示成已装好。
+  /// 换算表见 shared/utils/panel_enums.dart。
+  String get statusText => dependencyStatusLabel(status);
+
+  PanelStatusTone get statusTone => dependencyStatusTone(status);
 
   factory Dependency.fromJson(Map<String, dynamic> json) {
     return Dependency(

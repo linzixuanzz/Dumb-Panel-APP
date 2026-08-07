@@ -14,6 +14,7 @@ import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/task.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/api_utils.dart';
+import '../../../shared/utils/panel_enums.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/widgets/app_buttons.dart';
@@ -1616,7 +1617,9 @@ class _TaskCardState extends State<_TaskCard> {
     if (task.isQueued) {
       return AppColors.warning;
     }
-    if (task.lastRunStatus == 1) {
+    // 只有 last_run_status == 1 才是失败。2 是用户主动终止（面板 RunAborted），
+    // 不该亮红点去催人排查一个自己按下的停止键。
+    if (task.lastRunFailed) {
       return AppColors.danger;
     }
     if (task.isEnabled) {
@@ -1625,18 +1628,7 @@ class _TaskCardState extends State<_TaskCard> {
     return AppColors.slate300;
   }
 
-  String _statusLabel() {
-    if (task.isRunning) {
-      return '运行中';
-    }
-    if (task.isQueued) {
-      return '排队中';
-    }
-    if (task.isEnabled) {
-      return '已启用';
-    }
-    return '已禁用';
-  }
+  String _statusLabel() => task.statusText;
 
   Color _statusBg() {
     if (task.isRunning) {
@@ -1671,16 +1663,7 @@ class _TaskCardState extends State<_TaskCard> {
     return AppColors.neutral;
   }
 
-  String _taskTypeLabel() {
-    switch (task.taskType) {
-      case 'manual':
-        return '手动运行';
-      case 'startup':
-        return '开机运行';
-      default:
-        return '常规定时';
-    }
-  }
+  String _taskTypeLabel() => task.taskTypeText;
 
   List<String> _scheduleExpressions() {
     if (task.cronExpressions.isNotEmpty) {
@@ -1696,7 +1679,7 @@ class _TaskCardState extends State<_TaskCard> {
     if (task.isRunning) {
       return '点击查看实时日志';
     }
-    if (task.lastRunStatus == 1 && task.lastRunAt != null) {
+    if (task.lastRunFailed && task.lastRunAt != null) {
       return '上次失败：${formatTimeCn(task.lastRunAt, short: true)}';
     }
     if (task.nextRunAt != null) {
@@ -1730,7 +1713,7 @@ class _TaskCardState extends State<_TaskCard> {
         ? AppColors.slate200
         : AppColors.slate800;
     final labels = task.userLabelsForDisplay;
-    final hasFailure = task.lastRunStatus == 1;
+    final hasFailure = task.lastRunFailed;
     final primaryColor = task.isRunning ? AppColors.red500 : AppColors.primary;
 
     return PopScope(
@@ -2492,6 +2475,21 @@ class TaskDetailSheet extends StatelessWidget {
 
   const TaskDetailSheet({super.key, required this.task});
 
+  /// 上次运行结果的文字色。失败=红、已终止=琥珀、其余不着色。
+  /// 「已终止」不能用红：它是用户自己按的停止，标红等于报一个不存在的故障。
+  Color? _lastRunResultColor(int? lastRunStatus) {
+    switch (taskRunResultTone(lastRunStatus)) {
+      case PanelStatusTone.danger:
+        return AppColors.red500;
+      case PanelStatusTone.warning:
+        return AppColors.warning;
+      case PanelStatusTone.success:
+      case PanelStatusTone.running:
+      case PanelStatusTone.neutral:
+        return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -2563,17 +2561,15 @@ class TaskDetailSheet extends StatelessWidget {
                         '状态',
                         _MetaChip(
                           label: task.statusText,
-                          active: !task.isDisabled,
+                          // 不认识的状态一律按「非活跃」渲染：把它高亮成活跃态
+                          // 等于替面板下结论，而我们并不知道那个新状态是什么。
+                          active: task.hasKnownStatus && !task.isDisabled,
                         ),
                       ),
                       infoTile(
                         '任务类型',
                         Text(
-                          task.taskType == 'manual'
-                              ? '手动运行'
-                              : task.taskType == 'startup'
-                              ? '开机运行'
-                              : '常规定时',
+                          task.taskTypeText,
                           style: const TextStyle(fontSize: 13),
                         ),
                       ),
@@ -2640,18 +2636,16 @@ class TaskDetailSheet extends StatelessWidget {
                         ),
                       ),
                       infoTile(
+                        // 原写法是 `== 0 ? 成功 : 失败`，把 last_run_status == 2
+                        // （面板 RunAborted = 已终止）显示成「失败」。这不是
+                        // 「面板将来加值」的隐患，是当前版本就在说的谎：
+                        // 用户自己按了停止，APP 报失败，Web 报已终止。
                         '上次结果',
                         Text(
-                          task.lastRunStatus == null
-                              ? '未运行'
-                              : task.lastRunStatus == 0
-                              ? '成功'
-                              : '失败',
+                          task.lastRunResultText,
                           style: TextStyle(
                             fontSize: 13,
-                            color: task.lastRunStatus == 1
-                                ? AppColors.red500
-                                : null,
+                            color: _lastRunResultColor(task.lastRunStatus),
                           ),
                         ),
                       ),

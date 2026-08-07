@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -9,7 +11,9 @@ import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/python_runtime_info.dart';
 import '../../../shared/models/task.dart';
 import '../../../shared/utils/api_utils.dart';
+import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../utils/cron_schema.dart';
 import '../providers/task_provider.dart';
 
 class TaskFormPrefill {
@@ -37,6 +41,15 @@ class TaskFormPage extends ConsumerStatefulWidget {
 }
 
 enum _RandomDelayMode { inherit, disabled, custom }
+
+/// 直接铺在 Cron 输入框下方的快捷模板数量，其余收进「更多规则」面板。
+///
+/// 面板一共 21 条，全铺开会顶掉小半屏表单；6 条正好占两行。
+/// 取的是**面板返回的前 6 条**，不按 APP 自己的偏好重排 —— `GetTemplates()`
+/// 是一个手写有序数组（高频 → 常用 → 每天 → … → 秒级），顺序本身就是面板对
+/// 「哪些最常用」的表态。APP 再挑一遍就等于把刚搬走的判断又搬回来。
+/// 面板日后调整顺序，这里自动跟上。
+const int _kInlineCronTemplateCount = 6;
 
 class _TaskNotificationChannel {
   final int id;
@@ -93,6 +106,18 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
   bool _showHooks = false;
   List<String> _knownGroups = const [];
 
+  /// Cron 模板。默认就是老的 3 条硬编码，拉到面板的 21 条后整体替换。
+  List<CronTemplate> _cronTemplates = kFallbackCronTemplates;
+
+  /// 每一行 cron 表达式的解析结果（下标与 [splitCronExpressions] 对齐）。
+  /// 拿不到结果的行不入表，UI 上就是不显示提示，不显示任何错误。
+  Map<int, CronParseResult> _cronParseResults = const {};
+  Timer? _cronParseDebounce;
+
+  /// 丢弃过期响应用的世代号。用户连打几个字会发出多轮请求，
+  /// 没有它就可能出现「先发的慢请求后到，把新表达式的结论覆盖掉」。
+  int _cronParseGeneration = 0;
+
   bool get isEditing => widget.task != null;
 
   @override
@@ -142,12 +167,16 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
         _loadNotificationChannels(),
         _loadKnownGroups(),
         _loadPythonRuntimes(),
+        _loadCronTemplates(),
       ]);
     });
+    // 进页面就解析一次：编辑已有任务时用户还没动键盘，也应该能看到下次执行时间。
+    _scheduleCronParse(immediate: true);
   }
 
   @override
   void dispose() {
+    _cronParseDebounce?.cancel();
     for (final c in [
       _nameC,
       _commandC,
@@ -275,6 +304,176 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
       if (mounted) {
         setState(() => _loadingPythonRuntimes = false);
       }
+    }
+  }
+
+  /// 拉面板的 cron 模板（21 条 / 7 个分组）。
+  ///
+  /// 任何异常都静默保留 [kFallbackCronTemplates] —— 这个端点在老面板上可能
+  /// 不存在，而「模板按钮少几个」不值得给用户弹一条错误。这就是 design.md §4.1
+  /// 层 1 的形状探测：拿到列表就用，拿不到就用冻结的最小集。
+  Future<void> _loadCronTemplates() async {
+    try {
+      final response = await DioClient.instance.dio.get(
+        ApiEndpoints.cronTemplates,
+      );
+      final templates = parseCronTemplates(response.data);
+      if (!mounted || templates.isEmpty) {
+        return;
+      }
+      setState(() => _cronTemplates = templates);
+    } catch (_) {}
+  }
+
+  void _scheduleCronParse({bool immediate = false}) {
+    _cronParseDebounce?.cancel();
+    if (immediate) {
+      unawaited(_runCronParse());
+      return;
+    }
+    // 600ms：比连续打字的间隔长，比「填完一条表达式停下来看结果」的等待短。
+    _cronParseDebounce = Timer(
+      const Duration(milliseconds: 600),
+      () => unawaited(_runCronParse()),
+    );
+  }
+
+  /// 逐条问面板「这条 cron 合不合法、下次什么时候跑」。
+  ///
+  /// 为什么调接口而不是在 APP 里自己解析（design.md §6.c 第 5 条）：
+  /// cron 的合法性规则、5 位/6 位格式判定、以及「下次执行时间」都在面板的
+  /// robfig/cron 里，且要按**面板的时区**算。APP 本地算出来的时间和面板真正
+  /// 触发的时间对不上，比不显示更糟。
+  ///
+  /// 逐行发是因为面板 `pkg/cron.Parse` 只吃**单条**表达式（cron.go:53-73），
+  /// 多行文本发过去必然报错。上限 5 条，够用且不会因为用户贴了 50 行而打爆面板。
+  Future<void> _runCronParse() async {
+    final generation = ++_cronParseGeneration;
+    if (_taskType != 'cron') {
+      if (mounted && _cronParseResults.isNotEmpty) {
+        setState(() => _cronParseResults = const {});
+      }
+      return;
+    }
+    final expressions = splitCronExpressions(_cronC.text).take(5).toList();
+    if (expressions.isEmpty) {
+      if (mounted && _cronParseResults.isNotEmpty) {
+        setState(() => _cronParseResults = const {});
+      }
+      return;
+    }
+
+    final results = await Future.wait(
+      expressions.map(_parseSingleCron),
+      eagerError: false,
+    );
+    if (!mounted || generation != _cronParseGeneration) {
+      return;
+    }
+    final next = <int, CronParseResult>{};
+    for (var i = 0; i < results.length; i++) {
+      final result = results[i];
+      if (result != null) {
+        next[i] = result;
+      }
+    }
+    setState(() => _cronParseResults = next);
+  }
+
+  Future<CronParseResult?> _parseSingleCron(String expression) async {
+    try {
+      final response = await DioClient.instance.dio.post(
+        ApiEndpoints.cronParse,
+        data: {'expression': expression},
+      );
+      return CronParseResult.fromJson(response.data);
+    } catch (_) {
+      // 端点不存在 / 断网 / 400 —— 一律当作「没有结论」，不显示提示也不报错。
+      // 表达式真的非法时，保存那一步面板会给出「第 N 条定时规则无效: ...」。
+      return null;
+    }
+  }
+
+  void _applyCronTemplate(CronTemplate template) {
+    final current = _cronC.text.trim();
+    _cronC.text = current.isEmpty
+        ? template.expression
+        : '$current\n${template.expression}';
+    _scheduleCronParse(immediate: true);
+  }
+
+  Future<void> _showCronTemplateSheet() async {
+    final groups = groupCronTemplates(_cronTemplates);
+    final selected = await showModalBottomSheet<CronTemplate>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      useRootNavigator: true,
+      builder: (sheetContext) {
+        final theme = Theme.of(sheetContext);
+        return SizedBox(
+          height: MediaQuery.of(sheetContext).size.height * 0.7,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                child: Text(
+                  '选择定时规则',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                  children: [
+                    for (final group in groups) ...[
+                      if (group.category.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8, bottom: 6),
+                          child: Text(
+                            group.category,
+                            style: theme.textTheme.labelLarge?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      for (final template in group.templates)
+                        ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(
+                            template.name,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          subtitle: Text(
+                            template.description.isEmpty
+                                ? template.expression
+                                : '${template.expression} · ${template.description}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          onTap: () =>
+                              Navigator.of(sheetContext).pop(template),
+                        ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    // 面板挑完模板回来时页面可能已经被 pop 掉了，`_cronC` 那时已 dispose，
+    // 再往里写字会抛。
+    if (selected != null && mounted) {
+      _applyCronTemplate(selected);
     }
   }
 
@@ -485,7 +684,10 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                     DropdownMenuItem(value: 'startup', child: Text('开机运行')),
                   ],
                   onChanged: (v) {
-                    if (v != null) setState(() => _taskType = v);
+                    if (v != null) {
+                      setState(() => _taskType = v);
+                      _scheduleCronParse(immediate: true);
+                    }
                   },
                 ),
                 const SizedBox(height: 12),
@@ -521,31 +723,44 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                     decoration: const InputDecoration(
                       labelText: 'Cron 表达式',
                       hintText: '0 0 * * *',
+                      helperText: '一行一条规则，可写多条',
                     ),
+                    onChanged: (_) => _scheduleCronParse(),
                     validator: (v) =>
                         _taskType == 'cron' && (v == null || v.trim().isEmpty)
                         ? '请输入 Cron 表达式'
                         : null,
                   ),
+                  _buildCronParsePreview(theme),
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: [
-                      for (final p in [
-                        ('每小时', '0 0 * * * *'),
-                        ('每天0点', '0 0 0 * * *'),
-                        ('每天9点', '0 0 9 * * *'),
-                      ])
+                      // 常用几条直接放成快捷 chip，剩下的收进底部面板。
+                      // 面板现在有 21 条，全平铺会把表单顶掉小半屏。
+                      for (final template in _cronTemplates.take(
+                        _kInlineCronTemplateCount,
+                      ))
                         ActionChip(
                           label: Text(
-                            p.$1,
+                            template.name,
                             style: const TextStyle(fontSize: 12),
                           ),
-                          onPressed: () {
-                            final cur = _cronC.text.trim();
-                            _cronC.text = cur.isEmpty ? p.$2 : '$cur\n${p.$2}';
-                          },
+                          tooltip: template.description.isEmpty
+                              ? template.expression
+                              : '${template.expression} · ${template.description}',
+                          onPressed: () => _applyCronTemplate(template),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      if (_cronTemplates.length > _kInlineCronTemplateCount)
+                        ActionChip(
+                          avatar: const Icon(Icons.more_horiz, size: 16),
+                          label: Text(
+                            '更多规则(${_cronTemplates.length})',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          onPressed: _showCronTemplateSheet,
                           visualDensity: VisualDensity.compact,
                         ),
                     ],
@@ -864,6 +1079,73 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
           ),
         ),
       ),
+    );
+  }
+
+  /// Cron 表达式的解析提示：每条规则一行「描述 · 下次 时间」或错误原因。
+  ///
+  /// 数据全部来自面板 `POST /api/tasks/cron/parse`（含未来 5 次执行时间），
+  /// APP 不做任何本地 cron 解析 —— 下次执行时间必须按面板时区算，本地算出来的
+  /// 会和实际触发时刻对不上，那比不显示更误导。
+  ///
+  /// 拿不到结果（老面板没有这个端点 / 断网）时整块不渲染，不占位、不报错。
+  Widget _buildCronParsePreview(ThemeData theme) {
+    if (_cronParseResults.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final expressions = splitCronExpressions(_cronC.text).take(5).toList();
+    final showIndex = expressions.length > 1;
+    final rows = <Widget>[];
+    for (var i = 0; i < expressions.length; i++) {
+      final result = _cronParseResults[i];
+      if (result == null) {
+        continue;
+      }
+      final prefix = showIndex ? '规则 ${i + 1}：' : '';
+      final valid = result.isValid;
+      final next = result.nextRunTime;
+      final text = valid
+          ? [
+              if (result.description.isNotEmpty) result.description,
+              if (next != null) '下次 ${formatTimeCn(next)}',
+            ].join(' · ')
+          : (result.error.isEmpty ? '表达式无效' : result.error);
+      if (valid && text.isEmpty) {
+        continue;
+      }
+      rows.add(
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                valid ? Icons.schedule_rounded : Icons.error_outline_rounded,
+                size: 14,
+                color: valid ? AppColors.success : AppColors.danger,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  '$prefix$text',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: valid
+                        ? theme.colorScheme.onSurfaceVariant
+                        : AppColors.danger,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (rows.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: rows),
     );
   }
 

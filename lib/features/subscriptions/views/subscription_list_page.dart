@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -15,6 +16,7 @@ import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_notice.dart';
+import '../utils/subscription_auth.dart';
 
 // ── Provider ──
 
@@ -145,10 +147,29 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
   final _searchController = TextEditingController();
   Timer? _debounce;
 
+  /// 面板已有的 SSH 密钥。订阅表单里的密钥下拉靠它。
+  ///
+  /// 面板**没有**独立的 SSH 密钥页面：`/ssh-keys` 的 5 条路由是订阅页的子功能
+  /// （web/src/views/subscriptions/index.vue:1350-1365 就是订阅表单里的一个下拉）。
+  /// 所以 APP 这边也只做「选一把已有的密钥」，不做密钥管理页 —— 那会做出一个
+  /// 面板自己都没有的页面。
+  List<SshKeyOption> _sshKeys = const [];
+
+  /// 拉不到密钥列表时给用户的解释。`/ssh-keys` 挂了 RequireAdmin
+  /// （server/handler/ssh_key.go:108），非管理员必然 403 —— 这种时候必须说清
+  /// 「你没权限看密钥」，而不是甩一个空下拉让人以为面板里没配过密钥。
+  String? _sshKeyLoadError;
+
+  /// 正在进行的加载，避免连开两次表单打两次请求。
+  Future<void>? _sshKeyLoading;
+  bool _sshKeysLoaded = false;
+
   @override
   void initState() {
     super.initState();
     Future.microtask(() => ref.read(subscriptionListProvider.notifier).load());
+    // 提前拉一次，用户点「新建」时下拉通常已经就绪。
+    unawaited(_ensureSshKeys());
   }
 
   @override
@@ -156,6 +177,44 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
     _debounce?.cancel();
     _searchController.dispose();
     super.dispose();
+  }
+
+  /// 保证 SSH 密钥列表已加载。成功过就不再重复请求；失败过则允许下次重试。
+  Future<void> _ensureSshKeys() {
+    if (_sshKeysLoaded) {
+      return Future<void>.value();
+    }
+    return _sshKeyLoading ??= _loadSshKeys();
+  }
+
+  Future<void> _loadSshKeys() async {
+    try {
+      final response = await DioClient.instance.dio.get(ApiEndpoints.sshKeys);
+      final keys = parseSshKeys(response.data);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _sshKeys = keys;
+        _sshKeyLoadError = null;
+        _sshKeysLoaded = true;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      final status = error is DioException
+          ? error.response?.statusCode
+          : null;
+      setState(() {
+        _sshKeys = const [];
+        _sshKeyLoadError = status == 403
+            ? '只有管理员能查看 SSH 密钥，请改用 Access Token 或让管理员代为配置。'
+            : _extractRequestErrorMessage(error, '加载 SSH 密钥失败');
+      });
+    } finally {
+      _sshKeyLoading = null;
+    }
   }
 
   @override
@@ -469,7 +528,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
     }
   }
 
-  void _showCreateDialog() {
+  Future<void> _showCreateDialog() async {
     final nameC = TextEditingController();
     final urlC = TextEditingController();
     final branchC = TextEditingController();
@@ -481,8 +540,18 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
     final blacklistC = TextEditingController();
     final dependOnC = TextEditingController();
     final hookScriptC = TextEditingController();
+    final auth = _AuthFormState.create();
     String selectedType = 'git-repo';
     bool forceOverwrite = true;
+
+    // 先把密钥列表拿到手再开弹窗。弹窗内容是 StatefulBuilder 闭包，请求回来时
+    // 用外层 setState 刷不到它，而在闭包里存 setSheetState 又会在弹窗关掉之后
+    // 变成对已卸载 Element 调 setState。开之前 await 一次最省心：
+    // initState 里已经预热过，绝大多数情况下这里是立即返回的。
+    await _ensureSshKeys();
+    if (!mounted) {
+      return;
+    }
 
     showModalBottomSheet(
       context: context,
@@ -679,6 +748,12 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                               ),
                               const SizedBox(height: 8),
                               const _HookScriptHint(),
+                              _SubscriptionAuthFields(
+                                state: auth,
+                                sshKeys: _sshKeys,
+                                sshKeyLoadError: _sshKeyLoadError,
+                                onChanged: () => setSheetState(() {}),
+                              ),
                             ],
                             const SizedBox(height: 16),
                           ],
@@ -696,6 +771,15 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                             child: FilledButton(
                               onPressed: () async {
                                 if (nameC.text.trim().isEmpty) return;
+                                // 面板对鉴权字段有两条硬校验，本地先拦一道，
+                                // 省掉一个「点保存 → 等一个来回 → 看到同一句话」。
+                                final authError = auth.validate(selectedType);
+                                if (authError != null) {
+                                  rootMessenger.showSnackBar(
+                                    SnackBar(content: Text(authError)),
+                                  );
+                                  return;
+                                }
                                 try {
                                   await ref
                                       .read(subscriptionListProvider.notifier)
@@ -713,6 +797,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                                         'depend_on': dependOnC.text.trim(),
                                         'hook_script': hookScriptC.text.trim(),
                                         'force_overwrite': forceOverwrite,
+                                        ...auth.payload(selectedType),
                                       });
                                   if (!mounted) {
                                     return;
@@ -759,10 +844,12 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
           },
         );
       },
-    );
+      // 鉴权那两个输入框是本次新加的，关弹窗时释放掉。
+      // 其余控制器是既有代码就没释放的，不在本次改动范围内一并动。
+    ).whenComplete(auth.dispose);
   }
 
-  void _showEditDialog(Subscription sub) {
+  Future<void> _showEditDialog(Subscription sub) async {
     final nameC = TextEditingController(text: sub.name);
     final urlC = TextEditingController(text: sub.url);
     final branchC = TextEditingController(text: sub.branch);
@@ -774,8 +861,15 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
     final blacklistC = TextEditingController(text: sub.blacklist);
     final dependOnC = TextEditingController(text: sub.dependOn);
     final hookScriptC = TextEditingController(text: sub.hookScript);
+    final auth = _AuthFormState.edit(sub);
     String selectedType = sub.normalizedType;
     bool forceOverwrite = sub.forceOverwrite ?? true;
+
+    await _ensureSshKeys();
+    if (!mounted) {
+      auth.dispose();
+      return;
+    }
 
     showModalBottomSheet(
       context: context,
@@ -972,6 +1066,12 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                               ),
                               const SizedBox(height: 8),
                               const _HookScriptHint(),
+                              _SubscriptionAuthFields(
+                                state: auth,
+                                sshKeys: _sshKeys,
+                                sshKeyLoadError: _sshKeyLoadError,
+                                onChanged: () => setSheetState(() {}),
+                              ),
                             ],
                             const SizedBox(height: 16),
                           ],
@@ -996,6 +1096,13 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                           Expanded(
                             child: FilledButton(
                               onPressed: () async {
+                                final authError = auth.validate(selectedType);
+                                if (authError != null) {
+                                  rootMessenger.showSnackBar(
+                                    SnackBar(content: Text(authError)),
+                                  );
+                                  return;
+                                }
                                 try {
                                   await ref
                                       .read(subscriptionListProvider.notifier)
@@ -1013,6 +1120,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                                         'depend_on': dependOnC.text.trim(),
                                         'hook_script': hookScriptC.text.trim(),
                                         'force_overwrite': forceOverwrite,
+                                        ...auth.payload(selectedType),
                                       });
                                   if (!mounted) {
                                     return;
@@ -1053,6 +1161,197 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
           },
         );
       },
+    ).whenComplete(auth.dispose);
+  }
+}
+
+// ── 鉴权表单 ──
+
+/// 「仓库鉴权」那一段的可变状态。新建 / 编辑两个弹窗共用一份。
+class _AuthFormState {
+  _AuthFormState.create()
+    : type = SubscriptionAuthType.none,
+      sshKeyId = null,
+      usernameC = TextEditingController(),
+      tokenC = TextEditingController(),
+      hasExistingToken = false,
+      isEdit = false;
+
+  _AuthFormState.edit(Subscription sub)
+    : type = parseSubscriptionAuthType(sub.authType),
+      sshKeyId = sub.sshKeyId,
+      usernameC = TextEditingController(text: sub.authUsername),
+      // token 框永远从空开始：面板不下发明文（AuthToken 的 json tag 是 `-`），
+      // 预填一串假的星号只会让用户以为自己看到了真 token。
+      tokenC = TextEditingController(),
+      hasExistingToken = sub.hasAuthToken,
+      isEdit = true;
+
+  SubscriptionAuthType type;
+  int? sshKeyId;
+  final TextEditingController usernameC;
+  final TextEditingController tokenC;
+  final bool hasExistingToken;
+  final bool isEdit;
+
+  void dispose() {
+    usernameC.dispose();
+    tokenC.dispose();
+  }
+
+  String? validate(String subType) => validateSubscriptionAuth(
+    subType: subType,
+    authType: type,
+    sshKeyId: sshKeyId,
+    authToken: tokenC.text,
+    isEdit: isEdit,
+    hasExistingToken: hasExistingToken,
+  );
+
+  Map<String, dynamic> payload(String subType) => buildSubscriptionAuthPayload(
+    subType: subType,
+    authType: type,
+    sshKeyId: sshKeyId,
+    authUsername: usernameC.text,
+    authToken: tokenC.text,
+  );
+}
+
+/// 订阅表单里的「仓库鉴权」区块。
+///
+/// 与面板 Web（views/subscriptions/index.vue:1325-1417）字段一致：
+/// 三选一的方式 + SSH 密钥下拉 + Token 用户名 + Token。
+/// 只对 Git 仓库显示 —— 单文件订阅走的是直链下载，面板保存时也会把这几个字段清掉。
+class _SubscriptionAuthFields extends StatelessWidget {
+  const _SubscriptionAuthFields({
+    required this.state,
+    required this.sshKeys,
+    required this.sshKeyLoadError,
+    required this.onChanged,
+  });
+
+  final _AuthFormState state;
+  final List<SshKeyOption> sshKeys;
+  final String? sshKeyLoadError;
+  final VoidCallback onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    // 面板给的 ssh_key_id 可能指向一把当前用户看不到（非管理员）或已被删除的
+    // 密钥。这时候不能把下拉的值强行落到列表第一项上 —— 那等于替用户换了一把
+    // 密钥。值置空、另给一行说明，让用户自己决定重选还是保持不动。
+    final selectableId = sshKeys.any((key) => key.id == state.sshKeyId)
+        ? state.sshKeyId
+        : null;
+    final hasDanglingKey = state.sshKeyId != null && selectableId == null;
+    final keyError = sshKeyLoadError;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 16),
+        const Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            '仓库鉴权',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final option in SubscriptionAuthType.values)
+                ChoiceChip(
+                  label: Text(
+                    subscriptionAuthTypeLabel(option),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  selected: state.type == option,
+                  onSelected: (_) {
+                    state.type = option;
+                    onChanged();
+                  },
+                  visualDensity: VisualDensity.compact,
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 6),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            '私有仓库推荐使用权限更可控的 Token；公开仓库留空即可。',
+            style: TextStyle(fontSize: 11, color: context.surfaces.mutedText),
+          ),
+        ),
+        if (state.type == SubscriptionAuthType.ssh) ...[
+          const SizedBox(height: 12),
+          if (keyError != null)
+            AppNotice(color: AppColors.warning, text: keyError)
+          else if (sshKeys.isEmpty)
+            const AppNotice(
+              color: AppColors.warning,
+              text: '面板里还没有 SSH 密钥。请先在面板 Web 端的订阅页添加，或改用 Access Token。',
+            )
+          else
+            DropdownButtonFormField<int?>(
+              initialValue: selectableId,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'SSH 密钥'),
+              items: [
+                const DropdownMenuItem<int?>(value: null, child: Text('未选择')),
+                ...sshKeys.map(
+                  (key) => DropdownMenuItem<int?>(
+                    value: key.id,
+                    child: Text(key.name, overflow: TextOverflow.ellipsis),
+                  ),
+                ),
+              ],
+              onChanged: (value) {
+                state.sshKeyId = value;
+                onChanged();
+              },
+            ),
+          if (hasDanglingKey) ...[
+            const SizedBox(height: 6),
+            Text(
+              '当前订阅绑定的密钥 #${state.sshKeyId} 不在可选列表里（可能已被删除，或你没有查看权限）。',
+              style: TextStyle(fontSize: 11, color: context.surfaces.mutedText),
+            ),
+          ],
+        ],
+        if (state.type == SubscriptionAuthType.token) ...[
+          const SizedBox(height: 12),
+          TextField(
+            controller: state.usernameC,
+            decoration: const InputDecoration(
+              labelText: '鉴权用户名',
+              hintText: '留空默认 x-access-token（GitHub 适用）',
+              helperText: 'GitHub 留空；Gitee 填用户名；GitLab 可填 oauth2 或 private-token。',
+              helperMaxLines: 2,
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: state.tokenC,
+            obscureText: true,
+            decoration: InputDecoration(
+              labelText: 'Access Token',
+              hintText: state.hasExistingToken
+                  ? '留空则保持当前已保存的 Token'
+                  : '粘贴 Git 平台访问令牌',
+              helperText: state.hasExistingToken
+                  ? '面板不会回传已保存的 Token。不需要更换就保持留空。'
+                  : '建议使用仅有仓库读取权限的 Token。',
+              helperMaxLines: 2,
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -1435,7 +1734,15 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
                       itemCount: _logs.length,
                       itemBuilder: (_, index) {
                         final log = _logs[index];
-                        final success = (log['status'] as num?)?.toInt() == 0;
+                        // 面板 SubLog.Status 目前只有 0 成功 / 1 失败
+                        // （server/service/subscription.go:95-101 就是这么算的）。
+                        // 但 Web 端注释里已经在说「不给 SubLog.Status 加『已终止』，
+                        // 前端自己打本地标记」（views/subscriptions/index.vue:740），
+                        // 说明第三个值是有可能出现的。所以这里不写
+                        // `status == 0 ? 成功 : 失败` —— 那会把任何新值一律说成失败。
+                        final logStatus = (log['status'] as num?)?.toInt();
+                        final success = logStatus == 0;
+                        final failed = logStatus == 1;
                         final time = DateTime.tryParse(
                           log['created_at']?.toString() ?? '',
                         );
@@ -1458,13 +1765,19 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
                                     decoration: BoxDecoration(
                                       color: success
                                           ? AppColors.success.withAlpha(20)
-                                          : AppColors.danger.withAlpha(15),
+                                          : failed
+                                          ? AppColors.danger.withAlpha(15)
+                                          : AppColors.neutral.withAlpha(20),
                                       borderRadius: BorderRadius.circular(
                                         AppRadius.pill,
                                       ),
                                     ),
                                     child: Text(
-                                      success ? '成功' : '失败',
+                                      success
+                                          ? '成功'
+                                          : failed
+                                          ? '失败'
+                                          : '未知(${logStatus ?? '-'})',
                                       style: TextStyle(
                                         fontSize: 11,
                                         fontWeight: FontWeight.w700,
@@ -1473,7 +1786,9 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
                                         color: context.surfaces.tintFg(
                                           success
                                               ? AppColors.success
-                                              : AppColors.danger,
+                                              : failed
+                                              ? AppColors.danger
+                                              : AppColors.neutral,
                                         ),
                                       ),
                                     ),

@@ -10,6 +10,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/task_log.dart';
 import '../../../shared/utils/api_utils.dart';
+import '../../../shared/utils/panel_enums.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_snack.dart';
@@ -615,30 +616,51 @@ class _LogListPageState extends ConsumerState<LogListPage> {
                     ),
                     _StatusFilterChip(
                       label: '成功',
-                      selected: state.statusFilter == 0,
+                      selected: state.statusFilter == kLogStatusSuccess,
                       onTap: () {
                         _resetScroll();
-                        ref.read(logListProvider.notifier).setStatusFilter(0);
+                        ref
+                            .read(logListProvider.notifier)
+                            .setStatusFilter(kLogStatusSuccess);
                       },
                       selectedColor: AppColors.success,
                     ),
                     _StatusFilterChip(
                       label: '失败',
-                      selected: state.statusFilter == 1,
+                      selected: state.statusFilter == kLogStatusFailed,
                       onTap: () {
                         _resetScroll();
-                        ref.read(logListProvider.notifier).setStatusFilter(1);
+                        ref
+                            .read(logListProvider.notifier)
+                            .setStatusFilter(kLogStatusFailed);
                       },
                       selectedColor: AppColors.danger,
                     ),
                     _StatusFilterChip(
                       label: '运行中',
-                      selected: state.statusFilter == 2,
+                      selected: state.statusFilter == kLogStatusRunning,
                       onTap: () {
                         _resetScroll();
-                        ref.read(logListProvider.notifier).setStatusFilter(2);
+                        ref
+                            .read(logListProvider.notifier)
+                            .setStatusFilter(kLogStatusRunning);
                       },
                       selectedColor: AppColors.info,
+                    ),
+                    // 面板 v3 起日志状态是四个（server/model/task_log.go:7-12），
+                    // 「已终止」是手动停止 / 定时停止留下的独立状态，不再混进失败。
+                    // 面板 Web 的筛选栏（views/logs/index.vue:589）早就有这一项，
+                    // APP 缺它 = 用户在手机上永远筛不出自己停掉的那些任务。
+                    _StatusFilterChip(
+                      label: '已终止',
+                      selected: state.statusFilter == kLogStatusAborted,
+                      onTap: () {
+                        _resetScroll();
+                        ref
+                            .read(logListProvider.notifier)
+                            .setStatusFilter(kLogStatusAborted);
+                      },
+                      selectedColor: AppColors.warning,
                     ),
                   ],
                 ),
@@ -736,13 +758,27 @@ class _LogItem extends StatelessWidget {
     this.selected = false,
   });
 
-  // 日志列表最主要的状态区分就靠这个圆点：成功=绿、失败=红、运行中=蓝。
+  // 日志列表最主要的状态区分就靠这个圆点：
+  // 成功=绿、失败=红、运行中=蓝、已终止=琥珀、未知=灰。
   // 改造前成功取 primary(#409EFF)、运行中取 blue500(#3B82F6)，主色换蓝后
   // 两者都是蓝、肉眼分不出。
+  //
+  // 「已终止」和「未知」这两档是本次补的。改造前是 `if 成功 绿; if 失败 红; 蓝`，
+  // 面板 v3 新增的 status=3（主动终止）会亮成蓝色，与「还在跑」完全同色 ——
+  // 用户会以为任务卡住了，跑去列表里等一个永远不会结束的运行。
   Color _statusColor() {
-    if (log.isSuccess) return AppColors.success;
-    if (log.isFailed) return AppColors.danger;
-    return AppColors.info;
+    switch (log.statusTone) {
+      case PanelStatusTone.success:
+        return AppColors.success;
+      case PanelStatusTone.danger:
+        return AppColors.danger;
+      case PanelStatusTone.running:
+        return AppColors.info;
+      case PanelStatusTone.warning:
+        return AppColors.warning;
+      case PanelStatusTone.neutral:
+        return AppColors.neutral;
+    }
   }
 
   @override
