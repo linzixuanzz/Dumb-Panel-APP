@@ -12,6 +12,8 @@ import '../../../shared/models/notify_channel.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../utils/channel_config.dart';
+import '../utils/frozen_channel_fields_v300.dart';
+import '../utils/notify_field_schema.dart';
 
 final notificationListProvider =
     StateNotifierProvider<NotificationListNotifier, NotificationListState>((
@@ -20,49 +22,14 @@ final notificationListProvider =
       return NotificationListNotifier();
     });
 
-class NotificationTypeOption {
-  final String type;
-  final String name;
-
-  const NotificationTypeOption({required this.type, required this.name});
-
-  factory NotificationTypeOption.fromJson(Map<String, dynamic> json) {
-    return NotificationTypeOption(
-      type: json['type']?.toString() ?? '',
-      name: json['name']?.toString() ?? json['type']?.toString() ?? '',
-    );
-  }
-}
-
-const List<NotificationTypeOption> _fallbackTypes = [
-  NotificationTypeOption(type: 'webhook', name: 'Webhook'),
-  NotificationTypeOption(type: 'email', name: '邮件'),
-  NotificationTypeOption(type: 'telegram', name: 'Telegram'),
-  NotificationTypeOption(type: 'dingtalk', name: '钉钉'),
-  NotificationTypeOption(type: 'wecom', name: '企业微信机器人'),
-  NotificationTypeOption(type: 'wecom_app', name: '企业微信应用'),
-  NotificationTypeOption(type: 'bark', name: 'Bark'),
-  NotificationTypeOption(type: 'pushplus', name: 'PushPlus'),
-  NotificationTypeOption(type: 'serverchan', name: 'Server酱'),
-  NotificationTypeOption(type: 'feishu', name: '飞书'),
-  NotificationTypeOption(type: 'gotify', name: 'Gotify'),
-  NotificationTypeOption(type: 'pushdeer', name: 'PushDeer'),
-  NotificationTypeOption(type: 'pushme', name: 'PushMe'),
-  NotificationTypeOption(type: 'chanify', name: 'Chanify'),
-  NotificationTypeOption(type: 'igot', name: 'iGot'),
-  NotificationTypeOption(type: 'qmsg', name: 'Qmsg'),
-  NotificationTypeOption(type: 'pushover', name: 'Pushover'),
-  NotificationTypeOption(type: 'discord', name: 'Discord'),
-  NotificationTypeOption(type: 'slack', name: 'Slack'),
-  NotificationTypeOption(type: 'ntfy', name: 'ntfy'),
-  NotificationTypeOption(type: 'wxpusher', name: 'WxPusher'),
-  NotificationTypeOption(type: 'custom', name: '自定义'),
-];
-
 class NotificationListState {
   final List<NotifyChannel> items;
   final bool loading;
-  final List<NotificationTypeOption> types;
+
+  /// 渠道类型 + 每个类型的字段定义，全部来自面板 `/notifications/types`。
+  /// 老面板只回 `{type,name}`，这时每一项的 `fields` 是空的，
+  /// 由 [resolveNotifyChannelFields] 回落到 v3.0.0 冻结快照。
+  final List<NotifyChannelSchema> types;
 
   const NotificationListState({
     this.items = const [],
@@ -73,7 +40,7 @@ class NotificationListState {
   NotificationListState copyWith({
     List<NotifyChannel>? items,
     bool? loading,
-    List<NotificationTypeOption>? types,
+    List<NotifyChannelSchema>? types,
   }) {
     return NotificationListState(
       items: items ?? this.items,
@@ -91,7 +58,7 @@ class NotificationListNotifier extends StateNotifier<NotificationListState> {
     try {
       final dio = DioClient.instance.dio;
       final channelsFuture = dio.get(ApiEndpoints.notifications);
-      // 渠道类型表是辅助数据，本来就有 _fallbackTypes 兜底。收紧 validateStatus 后
+      // 渠道类型表是辅助数据，本来就有冻结快照兜底。收紧 validateStatus 后
       // 它的 4xx 会让 Future.wait 整体失败，连已经取到的渠道列表都会被丢掉，
       // 页面反而变成「暂无通知渠道」。所以类型表单独降级，不参与主流程成败。
       final typesFuture = _fetchTypes();
@@ -106,34 +73,26 @@ class NotificationListNotifier extends StateNotifier<NotificationListState> {
       state = state.copyWith(
         items: items,
         loading: false,
-        types: types.isNotEmpty ? types : _fallbackTypes,
+        types: resolveNotifyChannelTypes(types),
       );
     } catch (_) {
       state = state.copyWith(
         loading: false,
-        types: state.types.isNotEmpty ? state.types : _fallbackTypes,
+        types: resolveNotifyChannelTypes(state.types),
       );
     }
   }
 
-  /// 取渠道类型表。失败不抛，交给 [_fallbackTypes] 兜底。
-  Future<List<NotificationTypeOption>> _fetchTypes() async {
+  /// 取渠道类型 + 字段 schema。失败不抛，交给冻结快照兜底。
+  ///
+  /// 这里**不做**任何版本判断：老面板返回的项没有 `fields`，解析出来就是
+  /// `fields` 为空的 schema，形状本身就是探测结果。
+  Future<List<NotifyChannelSchema>> _fetchTypes() async {
     try {
       final response = await DioClient.instance.dio.get(
         ApiEndpoints.notificationTypes,
       );
-      final typeData = extractData(response.data);
-      if (typeData is! List) {
-        return const [];
-      }
-      return typeData
-          .whereType<Map>()
-          .map(
-            (e) =>
-                NotificationTypeOption.fromJson(Map<String, dynamic>.from(e)),
-          )
-          .where((option) => option.type.isNotEmpty)
-          .toList();
+      return parseNotifyChannelSchemas(extractData(response.data));
     } catch (_) {
       return const [];
     }
@@ -382,237 +341,11 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
     }
   }
 
-  static const _channelFieldMap =
-      <String, List<({String key, String label, String hint, bool obscure})>>{
-        'webhook': [
-          (
-            key: 'url',
-            label: 'Webhook URL',
-            hint: 'https://example.com/webhook',
-            obscure: false,
-          ),
-        ],
-        'email': [
-          (
-            key: 'smtp_host',
-            label: 'SMTP 主机',
-            hint: 'smtp.qq.com',
-            obscure: false,
-          ),
-          (key: 'smtp_port', label: 'SMTP 端口', hint: '465', obscure: false),
-          (
-            key: 'smtp_user',
-            label: '邮箱账号',
-            hint: 'user@example.com',
-            obscure: false,
-          ),
-          (
-            key: 'smtp_pass',
-            label: '邮箱密码/授权码',
-            hint: 'SMTP 授权码',
-            obscure: true,
-          ),
-          (key: 'to', label: '收件人', hint: '多个收件人用逗号分隔', obscure: false),
-        ],
-        'telegram': [
-          (
-            key: 'token',
-            label: 'Bot Token',
-            hint: '从 @BotFather 获取',
-            obscure: false,
-          ),
-          (key: 'chat_id', label: 'Chat ID', hint: '聊天/群组 ID', obscure: false),
-          (
-            key: 'api_host',
-            label: 'API 地址 (可选)',
-            hint: '留空使用官方',
-            obscure: false,
-          ),
-        ],
-        'dingtalk': [
-          (
-            key: 'webhook',
-            label: 'Webhook URL',
-            hint: 'https://oapi.dingtalk.com/robot/send?access_token=xxx',
-            obscure: false,
-          ),
-          (
-            key: 'secret',
-            label: '加签秘钥 (可选)',
-            hint: 'SEC 开头的秘钥',
-            obscure: false,
-          ),
-        ],
-        'wecom': [
-          (
-            key: 'webhook',
-            label: 'Webhook URL',
-            hint: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx',
-            obscure: false,
-          ),
-        ],
-        'wecom_app': [
-          (key: 'corp_id', label: '企业 ID', hint: 'CorpID', obscure: false),
-          (key: 'secret', label: '应用 Secret', hint: 'Secret', obscure: true),
-          (key: 'agent_id', label: 'Agent ID', hint: 'AgentId', obscure: false),
-          (
-            key: 'to_user',
-            label: '成员账号 (可选)',
-            hint: '多个成员用 | 分隔，留空 @all',
-            obscure: false,
-          ),
-        ],
-        'bark': [
-          (
-            key: 'key',
-            label: 'Device Key',
-            hint: 'Bark App 中的 Key',
-            obscure: false,
-          ),
-          (
-            key: 'server',
-            label: '服务器 (可选)',
-            hint: '默认 https://api.day.app',
-            obscure: false,
-          ),
-          (
-            key: 'sound',
-            label: '推送声音 (可选)',
-            hint: '如 birdsong',
-            obscure: false,
-          ),
-          (key: 'group', label: '推送分组 (可选)', hint: '消息分组名称', obscure: false),
-        ],
-        'pushplus': [
-          (
-            key: 'token',
-            label: 'Token',
-            hint: 'PushPlus 用户 Token',
-            obscure: false,
-          ),
-          (
-            key: 'topic',
-            label: '群组编码 (可选)',
-            hint: '一对多推送时的群组编码',
-            obscure: false,
-          ),
-        ],
-        'serverchan': [
-          (key: 'key', label: 'SendKey', hint: 'SCT...', obscure: false),
-        ],
-        'feishu': [
-          (
-            key: 'webhook',
-            label: 'Webhook URL',
-            hint: 'https://open.feishu.cn/open-apis/bot/v2/hook/xxx',
-            obscure: false,
-          ),
-          (key: 'secret', label: '加签秘钥 (可选)', hint: '签名校验秘钥', obscure: false),
-        ],
-        'gotify': [
-          (
-            key: 'server',
-            label: '服务器地址',
-            hint: 'https://gotify.example.com',
-            obscure: false,
-          ),
-          (
-            key: 'token',
-            label: 'App Token',
-            hint: 'Gotify 应用 Token',
-            obscure: false,
-          ),
-        ],
-        'pushdeer': [
-          (
-            key: 'key',
-            label: 'PushKey',
-            hint: 'PushDeer 的 PushKey',
-            obscure: false,
-          ),
-          (
-            key: 'server',
-            label: '服务器 (可选)',
-            hint: '默认 https://api2.pushdeer.com',
-            obscure: false,
-          ),
-        ],
-        'pushme': [
-          (key: 'key', label: 'PushMe Key', hint: 'push_key', obscure: false),
-        ],
-        'chanify': [
-          (
-            key: 'token',
-            label: 'Token',
-            hint: 'Chanify 设备 Token',
-            obscure: false,
-          ),
-        ],
-        'igot': [
-          (key: 'key', label: 'Key', hint: 'iGot 推送 Key', obscure: false),
-        ],
-        'qmsg': [
-          (key: 'key', label: 'Qmsg Key', hint: 'Qmsg 酱的 Key', obscure: false),
-          (key: 'qq', label: 'QQ 号/群号 (可选)', hint: '留空按默认配置发送', obscure: false),
-        ],
-        'pushover': [
-          (
-            key: 'token',
-            label: 'API Token',
-            hint: '应用 API Token',
-            obscure: false,
-          ),
-          (key: 'user', label: 'User Key', hint: '用户 Key', obscure: false),
-        ],
-        'discord': [
-          (
-            key: 'webhook',
-            label: 'Webhook URL',
-            hint: 'https://discord.com/api/webhooks/...',
-            obscure: false,
-          ),
-        ],
-        'slack': [
-          (
-            key: 'webhook',
-            label: 'Webhook URL',
-            hint: 'https://hooks.slack.com/services/...',
-            obscure: false,
-          ),
-        ],
-        'ntfy': [
-          (key: 'topic', label: 'Topic', hint: '订阅主题名称', obscure: false),
-          (
-            key: 'server',
-            label: '服务器 (可选)',
-            hint: '默认 https://ntfy.sh',
-            obscure: false,
-          ),
-          (key: 'token', label: 'Token (可选)', hint: '访问令牌', obscure: false),
-        ],
-        'wxpusher': [
-          (
-            key: 'app_token',
-            label: 'App Token',
-            hint: 'WxPusher 的 appToken',
-            obscure: false,
-          ),
-          (
-            key: 'uids',
-            label: 'UID 列表 (可选)',
-            hint: '多个 UID 用逗号分隔',
-            obscure: false,
-          ),
-          (
-            key: 'topic_ids',
-            label: 'Topic ID (可选)',
-            hint: '多个 ID 用逗号分隔',
-            obscure: false,
-          ),
-        ],
-      };
-
-  /// 没有字段表的渠道类型（如 custom）走「配置 JSON」编辑框，用这个 key 存控制器。
+  /// 一个字段定义都拿不到的渠道类型走「配置 JSON」编辑框，用这个 key 存控制器。
+  ///
+  /// 新面板会给 custom 下发 5 个字段（url / method / content_type / headers / body，
+  /// 与 notifier.go 的 `sendCustomWebhook` 读的键逐条对应），那时它走通用表单。
+  /// 这个分支只剩老面板上的 custom、以及面板新加而 APP 还拿不到 schema 的类型。
   static const String _rawConfigFieldKey = '__raw_json__';
 
   void _showChannelDialog({NotifyChannel? channel}) {
@@ -620,14 +353,12 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
     final nameController = TextEditingController(text: channel?.name ?? '');
     final existingConfig = Map<String, dynamic>.from(channel?.config ?? {});
     final fieldControllers = <String, TextEditingController>{};
-    // SSL 是三态（自动 / 启用 / 关闭），不是开关：
-    // 面板在「auto 或键不存在」时按端口是否 465 自行判断，
-    // 用 bool 表达会把 auto 压成 false，等于替用户关掉 465 端口的 SSL。
-    String smtpSslMode = resolveSmtpSslMode(existingConfig);
+    // select 型字段没有 TextEditingController，当前值存这里。
+    final selectValues = <String, String>{};
 
-    final availableTypes = ref.read(notificationListProvider).types.isNotEmpty
-        ? ref.read(notificationListProvider).types
-        : _fallbackTypes;
+    final availableTypes = resolveNotifyChannelTypes(
+      ref.read(notificationListProvider).types,
+    );
     String selectedType = channel?.type ?? availableTypes.first.type;
     if (!availableTypes.any((item) => item.type == selectedType)) {
       selectedType = availableTypes.first.type;
@@ -638,6 +369,8 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
         c.dispose();
       }
       fieldControllers.clear();
+      // 换了渠道类型，上一个类型的下拉选值同样作废。
+      selectValues.clear();
     }
 
     /// 服务端已有的 config 只有在渠道类型没被改过时才对得上号。
@@ -645,22 +378,20 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
     bool keepsExistingConfig() =>
         channel != null && selectedType == channel.type;
 
-    TextEditingController getFieldController(String key) {
-      return fieldControllers.putIfAbsent(key, () {
-        if (key == _rawConfigFieldKey) {
-          // 回填逻辑与「打开 → 直接保存不清空配置」的回归用例都在
-          // features/notifications/utils/channel_config.dart。
-          return TextEditingController(
-            text: buildRawConfigEditorText(
-              existingConfig: existingConfig,
-              keepExistingConfig: keepsExistingConfig(),
-            ),
-          );
-        }
-        return TextEditingController(
-          text: existingConfig[key]?.toString() ?? '',
-        );
-      });
+    TextEditingController textController(String key, String seed) {
+      return fieldControllers.putIfAbsent(
+        key,
+        () => TextEditingController(text: seed),
+      );
+    }
+
+    /// 字段此刻的值。select 读 [selectValues]，其余读输入框。
+    String currentValue(NotifyFieldSchema field, Map<String, String> seeds) {
+      final seed = seeds[field.key] ?? '';
+      if (field.effectiveWidget == NotifyFieldWidget.select) {
+        return selectValues[field.key] ?? seed;
+      }
+      return textController(field.key, seed).text;
     }
 
     showModalBottomSheet(
@@ -671,7 +402,114 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setSheetState) {
-            final fields = _channelFieldMap[selectedType] ?? [];
+            // 面板下发了 fields 就用面板的，没有就回落 v3.0.0 冻结快照 ——
+            // 形状探测与降级都收在 resolveNotifyChannelFields 里，这里不做版本判断。
+            final fields = resolveNotifyChannelFields(
+              type: selectedType,
+              schemas: availableTypes,
+            );
+            final seeds = buildNotifyFieldSeeds(
+              fields: fields,
+              existingConfig: existingConfig,
+              keepExistingConfig: keepsExistingConfig(),
+            );
+            Map<String, String> readDraft() => <String, String>{
+              for (final field in fields) field.key: currentValue(field, seeds),
+            };
+            final visibleFields = visibleNotifyFields(
+              fields: fields,
+              values: readDraft(),
+            );
+
+            Widget buildFieldControl(NotifyFieldSchema field) {
+              final seed = seeds[field.key] ?? '';
+              final label = field.isRequired ? '${field.label} *' : field.label;
+              final hint = field.placeholder.isEmpty
+                  ? null
+                  : field.placeholder;
+              // 字段列表随渠道类型整体换血。不给 key 的话 Flutter 会按位置复用
+              // 上一个类型同位置的 Element，下拉会显示成上一个类型的旧值。
+              final fieldKey = ValueKey<String>('$selectedType/${field.key}');
+
+              switch (field.effectiveWidget) {
+                case NotifyFieldWidget.select:
+                  final current = selectValues[field.key] ?? seed;
+                  return DropdownButtonFormField<String>(
+                    key: fieldKey,
+                    initialValue: current,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      labelText: label,
+                      helperText: hint,
+                    ),
+                    items: field
+                        .renderOptions(current)
+                        .map(
+                          (option) => DropdownMenuItem<String>(
+                            value: option.value,
+                            child: Text(
+                              option.label,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    // 选项值一律是 String（NotifyFieldOption.value 就是 String），
+                    // 不会有 bool 混进 config —— 那会让面板整份 config 解析失败，
+                    // 该渠道所有通知从此全挂。
+                    onChanged: (value) {
+                      if (value == null) {
+                        return;
+                      }
+                      setSheetState(() => selectValues[field.key] = value);
+                    },
+                  );
+                case NotifyFieldWidget.textarea:
+                  return TextField(
+                    key: fieldKey,
+                    controller: textController(field.key, seed),
+                    minLines: 3,
+                    maxLines: 6,
+                    decoration: InputDecoration(
+                      labelText: label,
+                      hintText: hint,
+                      alignLabelWithHint: true,
+                    ),
+                    // textarea 装的全是 JSON（news_articles、template_card_payload、
+                    // image_base64…），等宽字体好对括号。
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                    ),
+                  );
+                case NotifyFieldWidget.password:
+                  return TextField(
+                    key: fieldKey,
+                    controller: textController(field.key, seed),
+                    obscureText: true,
+                    // 密钥别让输入法当词组记下来。
+                    enableSuggestions: false,
+                    autocorrect: false,
+                    decoration: InputDecoration(
+                      labelText: label,
+                      hintText: hint,
+                    ),
+                  );
+                // 不认识的 widget 一律降级成输入框，**绝不隐藏字段**：
+                // 隐藏等于用户在 APP 上永远填不了它。
+                case NotifyFieldWidget.input:
+                case NotifyFieldWidget.unknown:
+                  return TextField(
+                    key: fieldKey,
+                    controller: textController(field.key, seed),
+                    decoration: InputDecoration(
+                      labelText: label,
+                      hintText: hint,
+                    ),
+                  );
+              }
+            }
+
             return Padding(
               padding: EdgeInsets.fromLTRB(
                 20,
@@ -701,6 +539,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
                       initialValue: selectedType,
+                      isExpanded: true,
                       decoration: const InputDecoration(labelText: '渠道类型'),
                       items: availableTypes
                           .map(
@@ -719,60 +558,29 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                         }
                       },
                     ),
-                    if (fields.isNotEmpty) ...[
+                    if (visibleFields.isNotEmpty) ...[
                       const SizedBox(height: 16),
                       const Divider(height: 1),
                       const SizedBox(height: 12),
-                      ...fields.map(
-                        (f) => Padding(
+                      ...visibleFields.map(
+                        (field) => Padding(
                           padding: const EdgeInsets.only(bottom: 12),
-                          child: TextField(
-                            controller: getFieldController(f.key),
-                            obscureText: f.obscure,
-                            decoration: InputDecoration(
-                              labelText: f.label,
-                              hintText: f.hint,
-                            ),
-                          ),
+                          child: buildFieldControl(field),
                         ),
                       ),
-                      if (selectedType == 'email')
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          // 选项与文案对齐面板 Web 端
-                          // （web/src/views/notifications/index.vue:106-110）。
-                          child: DropdownButtonFormField<String>(
-                            initialValue: smtpSslMode,
-                            decoration: const InputDecoration(
-                              labelText: 'SSL 连接',
-                              helperText: '自动：465 端口启用',
-                            ),
-                            items: const [
-                              DropdownMenuItem(
-                                value: smtpSslModeAuto,
-                                child: Text('自动 (465 启用)'),
-                              ),
-                              DropdownMenuItem(
-                                value: smtpSslModeOn,
-                                child: Text('启用 SSL'),
-                              ),
-                              DropdownMenuItem(
-                                value: smtpSslModeOff,
-                                child: Text('关闭 SSL'),
-                              ),
-                            ],
-                            onChanged: (value) {
-                              if (value != null) {
-                                setSheetState(() => smtpSslMode = value);
-                              }
-                            },
-                          ),
-                        ),
                     ],
                     if (fields.isEmpty) ...[
                       const SizedBox(height: 12),
                       TextField(
-                        controller: getFieldController(_rawConfigFieldKey),
+                        // 回填逻辑与「打开 → 直接保存不清空配置」的回归用例都在
+                        // features/notifications/utils/channel_config.dart。
+                        controller: textController(
+                          _rawConfigFieldKey,
+                          buildRawConfigEditorText(
+                            existingConfig: existingConfig,
+                            keepExistingConfig: keepsExistingConfig(),
+                          ),
+                        ),
                         minLines: 5,
                         maxLines: 10,
                         decoration: const InputDecoration(
@@ -799,22 +607,39 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
 
                         Map<String, dynamic> configMap;
                         if (fields.isNotEmpty) {
+                          // 显隐重新算一遍：用户可能改完下拉又改了输入框，
+                          // 而 build 时算的那份 visibleFields 已经过期了。
+                          final draft = readDraft();
+                          final activeFields = visibleNotifyFields(
+                            fields: fields,
+                            values: draft,
+                          );
+                          final invalid = validateNotifyFields(
+                            visibleFields: activeFields,
+                            values: draft,
+                          );
+                          if (invalid != null) {
+                            messenger.showSnackBar(
+                              SnackBar(content: Text(invalid)),
+                            );
+                            return;
+                          }
                           // 合并规则（保留未知字段）与回归用例都在
                           // features/notifications/utils/channel_config.dart。
                           configMap = buildChannelConfigFromFields(
                             existingConfig: existingConfig,
                             keepExistingConfig: keepsExistingConfig(),
-                            fieldValues: {
-                              for (final f in fields)
-                                f.key: getFieldController(f.key).text.trim(),
-                            },
-                            smtpSslMode: selectedType == 'email'
-                                ? smtpSslMode
-                                : null,
+                            fieldValues: buildNotifyFieldValues(
+                              visibleFields: activeFields,
+                              existingConfig: existingConfig,
+                              keepExistingConfig: keepsExistingConfig(),
+                              draft: draft,
+                            ),
                           );
                         } else {
-                          final raw = getFieldController(
+                          final raw = textController(
                             _rawConfigFieldKey,
+                            '',
                           ).text.trim();
                           final parsed = parseChannelConfig(
                             raw.isEmpty ? '{}' : raw,
@@ -1022,7 +847,7 @@ class _ChannelCard extends StatelessWidget {
   }
 }
 
-String _typeName(List<NotificationTypeOption> types, String type) {
+String _typeName(List<NotifyChannelSchema> types, String type) {
   for (final item in types) {
     if (item.type == type) {
       return item.name;

@@ -5,12 +5,15 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// 通知渠道「读取 → 修改 → 回写」的回归保护。
 ///
-/// 背景：APP 的字段表（notification_list_page.dart 的 `_channelFieldMap`）是本地写死的，
-/// 面板支持而表里没有的键（telegram proxy、wecom 图文卡片参数…）一旦被覆盖掉，
+/// 背景：表单只画得出「这台面板声明了的字段」。面板支持、但当前 schema 没声明的键
+/// （老面板上的 telegram proxy、wecom 图文卡片参数…）一旦被覆盖掉，
 /// 用户在 Web 上配好的东西就没了，而且**在 APP 里完全看不出来**。
+///
+/// schema 解析、show_when、required、以及端到端的字符串约束在
+/// notify_field_schema_test.dart；这里只管合并规则与 smtp_ssl 的取键不对称。
 void main() {
   group('buildChannelConfigFromFields', () {
-    test('APP 字段表里没有的键（telegram proxy）保存后仍在', () {
+    test('schema 没声明的键（telegram proxy）保存后仍在', () {
       final existing = <String, dynamic>{
         'token': '123:ABC',
         'chat_id': '-100123',
@@ -61,84 +64,36 @@ void main() {
       expect(result.containsKey('token'), isFalse);
     });
 
-    test('email 的 smtp_ssl 写进 config；非 email 不写', () {
-      final withSsl = buildChannelConfigFromFields(
-        existingConfig: const {'smtp_host': 'smtp.qq.com'},
-        keepExistingConfig: true,
-        fieldValues: const {'smtp_host': 'smtp.qq.com'},
-        smtpSslMode: smtpSslModeOn,
-      );
-      expect(withSsl['smtp_ssl'], 'true');
-
-      final withoutSsl = buildChannelConfigFromFields(
-        existingConfig: const {'url': 'https://example.com'},
-        keepExistingConfig: true,
-        fieldValues: const {'url': 'https://example.com'},
-      );
-      expect(withoutSsl.containsKey('smtp_ssl'), isFalse);
-    });
-
     // ★ 面板 sendToChannel 把 config 反序列化成 map[string]string
     //   （server/service/notifier.go:166-168），出现 bool 会让整份 Unmarshal 失败：
     //   `json: cannot unmarshal bool into Go value of type string`，
     //   该渠道所有通知（含「测试」按钮）从此全挂，且 Web 端原样读写也修不回来。
-    test('写入的 smtp_ssl 必须是字符串，绝不能是 bool', () {
-      for (final mode in const [
-        smtpSslModeAuto,
-        smtpSslModeOn,
-        smtpSslModeOff,
-      ]) {
-        final config = buildChannelConfigFromFields(
-          existingConfig: const {},
-          keepExistingConfig: false,
-          fieldValues: const {'smtp_host': 'smtp.qq.com'},
-          smtpSslMode: mode,
-        );
-        expect(
-          config['smtp_ssl'],
-          isA<String>(),
-          reason: 'bool 会让面板整份 config 解析失败',
-        );
-        expect(config['smtp_ssl'], mode);
-        // 逐字校验落地 JSON，避免「Dart 侧是 String、编码后仍是 bool」这种漏网写法。
-        expect(
-          jsonEncode(config),
-          contains('"smtp_ssl":"$mode"'),
-          reason: '面板只认 auto/true/false 三个字符串',
-        );
-      }
-    });
-
-    test('写入值被收敛到 auto/true/false 三态，不透传乱值', () {
+    //
+    //   这里守的是**类型层**的那道闸：fieldValues 是 Map<String, String>，
+    //   表单能产出的每一个值都必然落地成 JSON 字符串。
+    //   端到端（schema select / default / 存量 bool）的守卫在
+    //   notify_field_schema_test.dart。
+    test('表单写进去的值一律是 JSON 字符串', () {
       final config = buildChannelConfigFromFields(
         existingConfig: const {},
         keepExistingConfig: false,
-        fieldValues: const {'smtp_host': 'smtp.qq.com'},
-        smtpSslMode: 'YES',
-      );
-      expect(config['smtp_ssl'], 'true');
-    });
-
-    test('打开 → 一个字不改 → 保存，smtp_ssl 不被改写', () {
-      // 存量 auto（Web 端默认）最容易被压成 false：
-      // 用 bool 开关表达三态时，auto 会显示成「关闭」，一存就替用户关掉 465 的 SSL。
-      const existing = <String, dynamic>{
-        'smtp_host': 'smtp.qq.com',
-        'smtp_port': '465',
-        'smtp_ssl': 'auto',
-      };
-
-      final saved = buildChannelConfigFromFields(
-        existingConfig: existing,
-        keepExistingConfig: true,
         fieldValues: const {
           'smtp_host': 'smtp.qq.com',
           'smtp_port': '465',
+          'smtp_ssl': smtpSslModeOff,
         },
-        smtpSslMode: resolveSmtpSslMode(existing),
       );
 
-      expect(saved['smtp_ssl'], 'auto');
+      for (final entry in config.entries) {
+        expect(
+          entry.value,
+          isA<String>(),
+          reason: '${entry.key} 不是字符串会让面板整份 config 解析失败',
+        );
+      }
+      // 逐字校验落地 JSON，避免「Dart 侧是 String、编码后仍是 bool」这种漏网写法。
+      expect(jsonEncode(config), contains('"smtp_ssl":"false"'));
+      expect(jsonEncode(config), contains('"smtp_port":"465"'));
     });
 
     test('不修改传入的 existingConfig', () {
@@ -153,51 +108,61 @@ void main() {
   });
 
   // 面板判定 SSL 的实现见 server/service/notifier.go:357-370（smtpImplicitSSLEnabled）
-  // 与 :1273-1283（notificationConfigBool）。这里的用例逐条对齐它的语义。
-  group('resolveSmtpSslMode', () {
-    test('存量字符串按面板语义读回', () {
-      expect(resolveSmtpSslMode(const {'smtp_ssl': 'true'}), smtpSslModeOn);
-      expect(resolveSmtpSslMode(const {'smtp_ssl': 'false'}), smtpSslModeOff);
-      expect(resolveSmtpSslMode(const {'smtp_ssl': 'auto'}), smtpSslModeAuto);
-      expect(resolveSmtpSslMode(const {'smtp_ssl': 'AUTO'}), smtpSslModeAuto);
-      expect(resolveSmtpSslMode(const {'smtp_ssl': ' true '}), smtpSslModeOn);
-      // notificationConfigBool 认的同义词。
-      expect(resolveSmtpSslMode(const {'smtp_ssl': '1'}), smtpSslModeOn);
-      expect(resolveSmtpSslMode(const {'smtp_ssl': 'enabled'}), smtpSslModeOn);
-      expect(resolveSmtpSslMode(const {'smtp_ssl': 'off'}), smtpSslModeOff);
-      // 空串在面板等价于 auto（按端口是否 465 判断）。
-      expect(resolveSmtpSslMode(const {'smtp_ssl': ''}), smtpSslModeAuto);
-      // 面板对无法识别的值取 defaultValue=false。
-      expect(resolveSmtpSslMode(const {'smtp_ssl': '???'}), smtpSslModeOff);
+  // 与 :1273-1283（notificationConfigBool）。
+  //
+  // schema 下发后 smtp_ssl 就是一个普通的 select 字段（面板 Web 端
+  // index.vue:106-110 声明的正是 auto/true/false 三个字符串），通用渲染器直接就能画。
+  // 唯一 schema **表达不出来**的是：面板读 SSL 时依次看 5 个键，而 schema 只声明主键。
+  // 下面这组用例守的就是这处不对称。
+  group('resolveExistingSmtpSslValue', () {
+    test('主键存在时原样返回，不替面板做三态归一', () {
+      expect(resolveExistingSmtpSslValue(const {'smtp_ssl': 'true'}), 'true');
+      expect(resolveExistingSmtpSslValue(const {'smtp_ssl': 'false'}), 'false');
+      expect(resolveExistingSmtpSslValue(const {'smtp_ssl': 'auto'}), 'auto');
+      // 认不出来的值也原样返回：选项集合由面板 schema 说了算，
+      // APP 把它压成 false 就等于替面板改了用户的配置。
+      // 它会被渲染成「(面板未声明)」的一项，用户看得见也存得回去。
+      expect(resolveExistingSmtpSslValue(const {'smtp_ssl': '???'}), '???');
+      expect(resolveExistingSmtpSslValue(const {'smtp_ssl': ''}), '');
     });
 
-    test('存量 bool（旧版 APP 写坏的数据）也能读回', () {
-      expect(resolveSmtpSslMode(const {'smtp_ssl': true}), smtpSslModeOn);
-      expect(resolveSmtpSslMode(const {'smtp_ssl': false}), smtpSslModeOff);
+    test('存量 bool（旧版 APP 写坏的投毒数据）读成字符串', () {
+      // 这份数据面板整份 config 都解析不了，该渠道所有通知全挂。
+      // 读成字符串后，用户下一次保存就把它修好了。
+      expect(resolveExistingSmtpSslValue(const {'smtp_ssl': true}), 'true');
+      expect(resolveExistingSmtpSslValue(const {'smtp_ssl': false}), 'false');
     });
 
-    test('键不存在按 auto 处理，不能显示成关闭', () {
-      expect(resolveSmtpSslMode(const {}), smtpSslModeAuto);
+    test('键不存在返回 null —— 表示「从没设置过」，不能编一个值出来', () {
+      expect(resolveExistingSmtpSslValue(const {}), isNull);
       expect(
-        resolveSmtpSslMode(const {'smtp_host': 'smtp.qq.com'}),
-        smtpSslModeAuto,
+        resolveExistingSmtpSslValue(const {'smtp_host': 'smtp.qq.com'}),
+        isNull,
       );
     });
 
-    test('识别面板的 4 个兼容别名，并保持同样的优先级', () {
-      expect(resolveSmtpSslMode(const {'use_ssl': 'true'}), smtpSslModeOn);
-      expect(resolveSmtpSslMode(const {'smtp_use_ssl': 'true'}), smtpSslModeOn);
-      expect(resolveSmtpSslMode(const {'enable_ssl': 'true'}), smtpSslModeOn);
-      expect(resolveSmtpSslMode(const {'ssl': 'true'}), smtpSslModeOn);
+    test('主键缺失时认 4 个兼容别名，并归一到三态', () {
+      // 别名是青龙导入等外部来源写的，取值五花八门，必须归一 ——
+      // 否则回写主键时会把面板认不出来的值固化进 smtp_ssl。
+      expect(resolveExistingSmtpSslValue(const {'use_ssl': 'true'}), 'true');
+      expect(
+        resolveExistingSmtpSslValue(const {'smtp_use_ssl': '1'}),
+        'true',
+      );
+      expect(resolveExistingSmtpSslValue(const {'enable_ssl': 'on'}), 'true');
+      expect(resolveExistingSmtpSslValue(const {'ssl': 'no'}), 'false');
 
       // 面板取「第一个存在的键」，smtp_ssl 排在别名前面。
       expect(
-        resolveSmtpSslMode(const {'smtp_ssl': 'false', 'use_ssl': 'true'}),
-        smtpSslModeOff,
+        resolveExistingSmtpSslValue(const {
+          'smtp_ssl': 'false',
+          'use_ssl': 'true',
+        }),
+        'false',
       );
     });
 
-    test('别名配置存下来后不被改变含义，且别名本身不丢', () {
+    test('别名本身不会被合并逻辑删掉', () {
       const existing = <String, dynamic>{
         'smtp_host': 'smtp.qq.com',
         'smtp_port': '587',
@@ -207,17 +172,37 @@ void main() {
       final saved = buildChannelConfigFromFields(
         existingConfig: existing,
         keepExistingConfig: true,
-        fieldValues: const {
+        fieldValues: <String, String>{
           'smtp_host': 'smtp.qq.com',
           'smtp_port': '587',
+          // 表单里显示的就是从 use_ssl 解析出来的值，写回主键。
+          'smtp_ssl': resolveExistingSmtpSslValue(existing) ?? smtpSslModeAuto,
         },
-        smtpSslMode: resolveSmtpSslMode(existing),
       );
 
       // 写回主键：面板取键顺序里 smtp_ssl 在最前，值又是从 use_ssl 解析来的，
       // 所以面板的判定结果不变；同时 Web 端（只认 smtp_ssl）也能正常显示。
       expect(saved['smtp_ssl'], 'true');
       expect(saved['use_ssl'], 'true', reason: '未知/别名字段不能丢');
+    });
+  });
+
+  group('normalizeSmtpSslMode', () {
+    test('对齐面板 notificationConfigBool 认的同义词', () {
+      expect(normalizeSmtpSslMode('1'), smtpSslModeOn);
+      expect(normalizeSmtpSslMode('yes'), smtpSslModeOn);
+      expect(normalizeSmtpSslMode('enabled'), smtpSslModeOn);
+      expect(normalizeSmtpSslMode(' TRUE '), smtpSslModeOn);
+      expect(normalizeSmtpSslMode('0'), smtpSslModeOff);
+      expect(normalizeSmtpSslMode('off'), smtpSslModeOff);
+      expect(normalizeSmtpSslMode('disabled'), smtpSslModeOff);
+      // 空串在面板等价于 auto（按端口是否 465 判断）。
+      expect(normalizeSmtpSslMode(''), smtpSslModeAuto);
+      expect(normalizeSmtpSslMode('AUTO'), smtpSslModeAuto);
+      // 面板对无法识别的值取 defaultValue=false。
+      expect(normalizeSmtpSslMode('???'), smtpSslModeOff);
+      expect(normalizeSmtpSslMode(true), smtpSslModeOn);
+      expect(normalizeSmtpSslMode(false), smtpSslModeOff);
     });
   });
 

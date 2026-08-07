@@ -6,12 +6,16 @@
 // 而闭包里的代码没法在不起 UI 的情况下断言。
 //
 // 踩过的坑，改动前先看对应函数的注释：
-// 1. 表单字段表（_channelFieldMap）是 APP 本地写死的，面板支持而表里没有的键
-//    （telegram proxy、wecom 图文卡片参数…）必须原样保留；
-// 2. 没有字段表的渠道（custom）走 JSON 编辑框，编辑框初值必须回填已有配置，
-//    否则「打开 → 直接保存」等于用 {} 覆盖；
+// 1. 表单只画得出「当前这台面板声明了的字段」，其余的键（面板支持但 schema 没声明的、
+//    条件不满足没渲染的、这一版 APP 不认识的）必须原样保留；
+// 2. 一个字段定义都拿不到的渠道（老面板上的 custom）走 JSON 编辑框，编辑框初值必须
+//    回填已有配置，否则「打开 → 直接保存」等于用 {} 覆盖；
 // 3. 用户在下拉里换了渠道类型，旧类型的配置键就没有意义，不能再带回服务端；
 // 4. config 的值**必须全是字符串**，且 smtp_ssl 是三态不是开关——见下面 smtpSslMode* 的注释。
+//
+// 字段表本身已经不在 APP 里了：面板 `/notifications/types` 下发 `fields`，
+// 解析与渲染规则见 notify_field_schema.dart，老面板的降级见
+// frozen_channel_fields_v300.dart。
 
 import 'dart:convert';
 
@@ -28,35 +32,50 @@ const String smtpSslModeAuto = 'auto';
 const String smtpSslModeOn = 'true';
 const String smtpSslModeOff = 'false';
 
+/// SSL 的主键。面板的字段 schema 只声明得出这一个，4 个兼容别名不在 schema 里 ——
+/// 这正是下面 [resolveExistingSmtpSslValue] 必须存在的原因。
+const String kSmtpSslConfigKey = 'smtp_ssl';
+
 /// 面板判定 SSL 时依次尝试的 5 个键（server/service/notifier.go:358）。
 /// 顺序即优先级：**第一个存在的键**决定结果（哪怕值是空串），后面的不再看。
 /// 后 4 个是青龙导入等外部来源用的兼容别名，面板自己不写。
 const List<String> smtpSslConfigKeys = <String>[
-  'smtp_ssl',
+  kSmtpSslConfigKey,
   'smtp_use_ssl',
   'use_ssl',
   'enable_ssl',
   'ssl',
 ];
 
-/// 从服务端返回的 config 里解析出 SSL 三态，用作表单初值。
+/// 这份 config 里 `smtp_ssl` 的**已有值**；返回 null 表示从来没设置过。
 ///
-/// 必须与面板 `smtpImplicitSSLEnabled` 的取键顺序一致，否则会出现
-/// 「APP 显示关闭、面板实际启用」这种表单与真相不符的状态；
-/// 而用户随手一存就会把显示的错值固化成真值。
+/// 为什么不能让通用渲染器直接读 `config['smtp_ssl']`：面板判定 SSL 时依次看
+/// [smtpSslConfigKeys] 这 5 个键，而 schema 只声明得出主键那一个。配置里只有别名
+/// （青龙导入写的 `use_ssl`）时，直接读主键会拿到 null → 表单显示默认值「自动」，
+/// 而面板实际是启用的 —— 用户随手一存，启用就被改成了自动。
+/// 这是 schema **表达不出来**的一处面板内部不对称，只能留在 APP 侧补偿。
 ///
-/// 存量数据有三种形态，都要认：
-/// - 字符串（Web / 青龙导入写的，`'auto' | 'true' | 'false'` 及各类同义词）
-/// - bool（旧版 APP 写坏的投毒数据）
-/// - 键不存在（面板按端口是否为 465 自动判断，即 auto）
-String resolveSmtpSslMode(Map<String, dynamic> config) {
+/// 主键存在时**原样返回，不做三态归一**：选项集合由面板 schema 说了算，
+/// 面板哪天给 SSL 多加一个取值（比如 starttls），APP 不能替它压成 false。
+/// 认不出来的值会被渲染成「(面板未声明)」的一项，用户看得见、也存得回去。
+///
+/// 唯一的例外是 bool —— 那是旧版 APP 写坏的投毒数据（面板整份 config 都读不了，
+/// 该渠道所有通知全挂），必须在这里就修成字符串。
+String? resolveExistingSmtpSslValue(Map<String, dynamic> config) {
+  final primary = config[kSmtpSslConfigKey];
+  if (primary != null) {
+    return primary is bool ? normalizeSmtpSslMode(primary) : primary.toString();
+  }
+
   for (final key in smtpSslConfigKeys) {
-    if (!config.containsKey(key)) {
+    if (key == kSmtpSslConfigKey || !config.containsKey(key)) {
       continue;
     }
+    // 别名是外部来源写的，取值五花八门（1/yes/on…），必须归一到三态之一，
+    // 否则回写主键时会把面板认不出来的值固化进 smtp_ssl。
     return normalizeSmtpSslMode(config[key]);
   }
-  return smtpSslModeAuto;
+  return null;
 }
 
 /// 把任意存量取值收敛到三态之一，语义对齐面板
@@ -98,17 +117,19 @@ String normalizeSmtpSslMode(dynamic value) {
 ///
 /// [existingConfig] 是服务端返回的原始 config（整份，含 APP 不认识的键）。
 /// [keepExistingConfig] 为 false 表示用户改过渠道类型，旧配置整份作废。
-/// [fieldValues] 是**已经 trim 过**的表单值，key 用字段表里的 key，顺序即渲染顺序。
-/// [smtpSslMode] 只有 email 渠道传，其余传 null；取值见 [smtpSslModeAuto] 等常量。
+/// [fieldValues] 是**已经 trim 过**的表单值，key 用 schema 字段的 key，顺序即渲染顺序；
+/// 怎么从表单算出它见 notify_field_schema.dart 的 `buildNotifyFieldValues`。
 ///
 /// 语义：以 [existingConfig] 为基底，只覆盖 [fieldValues] 里出现的键；
 /// 表单里被清空的字段视为「明确要求删除」，不退回旧值。
+/// 反过来，[fieldValues] 里**没有**的键原样保留 —— 这就是「未知字段不丢失」的落点，
+/// 覆盖三种情况：面板 schema 没声明的键、show_when 不满足所以没渲染的键、
+/// 以及面板将来新增而这一版 APP 还不认识的键。
 /// 做法与 open_api_page.dart 保留未知 scope 的思路一致。
 Map<String, dynamic> buildChannelConfigFromFields({
   required Map<String, dynamic> existingConfig,
   required bool keepExistingConfig,
   required Map<String, String> fieldValues,
-  String? smtpSslMode,
 }) {
   final configMap = keepExistingConfig
       ? Map<String, dynamic>.from(existingConfig)
@@ -122,15 +143,6 @@ Map<String, dynamic> buildChannelConfigFromFields({
     }
   }
 
-  if (smtpSslMode != null) {
-    // 一律写回主键 smtp_ssl，不写别名：主键在面板的取键顺序里排第一，
-    // 而这里写的值本来就是从「当时生效的那个键」解析出来的，
-    // 所以即便配置里还留着 use_ssl 之类的别名，解析结果也不会变。
-    // 顺带让 Web 端（只认 smtp_ssl）能正常显示。
-    // 经 normalize 兜底，保证落地的永远是 'auto'/'true'/'false' 三个字符串之一。
-    configMap['smtp_ssl'] = normalizeSmtpSslMode(smtpSslMode);
-  }
-
   return configMap;
 }
 
@@ -139,6 +151,11 @@ Map<String, dynamic> buildChannelConfigFromFields({
 /// 这个编辑框原来永远是空的（existingConfig 里不存在 `__raw_json__` 这个键），
 /// 于是「打开 custom 渠道 → 直接保存」= 用 {} 覆盖，整份配置被清空。
 /// 回填已有配置后，用户看到什么就保存什么。
+///
+/// 新面板会给 custom 下发 5 个字段（url / method / content_type / headers / body，
+/// 与 notifier.go 的 `sendCustomWebhook` 逐条对应），那时走通用表单，不再进这里。
+/// 这个编辑框留给「一个字段定义都拿不到」的情况：老面板上的 custom，
+/// 以及面板将来新增、而冻结快照里当然也没有的渠道类型。
 String buildRawConfigEditorText({
   required Map<String, dynamic> existingConfig,
   required bool keepExistingConfig,
