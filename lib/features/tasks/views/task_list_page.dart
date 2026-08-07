@@ -1327,7 +1327,13 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                   ],
                 ),
               ),
-              _MetaChip(label: task.statusText, active: !task.isDisabled),
+              // 与详情页那颗徽章（:2566）用同一条判断：不认识的状态按「非活跃」
+              // 渲染。只改文案不改高亮的话，面板新增的状态在排序视图里仍会亮成
+              // 一个活跃态徽章，而我们并不知道那个新状态到底是不是活跃的。
+              _MetaChip(
+                label: task.statusText,
+                active: task.hasKnownStatus && !task.isDisabled,
+              ),
             ],
           ),
         );
