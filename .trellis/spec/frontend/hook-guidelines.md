@@ -238,16 +238,36 @@ final msg = extractErrorMessage(error, '加载失败');   // api_utils.dart:44
 > 注释里记录了踩坑原因：「后端 `page_size` 上限 100，请求更大值会静默退回 20，
 > 导致列表只显示 40 行」（`env_list_page.dart:67-69`）。改分页逻辑前先读这条。
 
-### SSE：独立客户端，不经 dio
+### SSE：独立客户端，不经 dio，但**与 dio 共用同一个续期入口**
 
 `lib/core/network/sse_client.dart` 用 `package:http` 手动解析 `event:` / `data:` 行，
-自己加 `Authorization` 头（`:54-56`），支持 `autoReconnect`（收到 `event: done` + `data: reconnect` 时 1 秒后重连，`:87-101`）。
+自己加 `Authorization` 头，支持 `autoReconnect`（收到 `event: done` + `data: reconnect` 时 1 秒后重连）。
 
 用于：任务实时日志、日志流、依赖安装日志、订阅拉取流。
 对应端点在 `ApiEndpoints` 里都是 `baseApiV1` 前缀。
 
-> **注意**：SSE 不经过 `AuthInterceptor`，**token 过期时不会自动续期**，
-> 只会回调 `onError('认证失败，请重新登录')`（`:61-64`）。
+401 的处理流程（**不要在这里重造第二套续期**）：
+
+1. 调 `TokenRefresher.instance.refresh(staleToken: 用出去的那个 token)`；
+2. 拿到新 token 后重连一次，**用户无感**，不弹任何提示；
+3. 重连仍是 401 → `notifySessionExpired()`（清凭据 + 跳登录页，与 REST 同一个出口），
+   并通过 `onError` 抛 `SseAuthFailure` 哨兵，页面据此区分「网络断了可以重试」
+   和「会话没了，重试没意义」。
+
+> **`TokenRefresher` 是全仓库唯一的续期入口**（`lib/core/auth/token_refresher.dart`），
+> `AuthInterceptor` 也走它。理由是「同一时刻只能有一次续期在飞」：
+> 两条链路各刷各的，后返回的那次会把先返回的新 token 覆盖成已作废的值。
+>
+> **重连额度**：`SseClient._refreshRetryUsed` 是 dio 侧 `RequestOptions.extra`
+> 那个「已重发」标记的等价物，防的是 401 → 续期 → 401 的无限循环；
+> 它在**每次连接成功（<400）时归还**，否则一次会话只能续期一次，
+> 挂两小时的日志流第二次过期就直接掉线。
+
+> **⚠️ 服务端不支持 `Last-Event-ID`**：`log.go` / `deps.go` / `subscription.go`
+> 从不发 `id:` 帧也从不读它，任何重连都会**把整段历史从头重放**。
+> 所以 `connect()` 有一个 `onReconnect` 回调，页面必须在里面把「已显示的行」
+> 灌进 `SseReplayBuffer`（`lib/shared/utils/sse_replay_buffer.dart`）做去重，
+> 否则重连一次日志翻一倍。
 
 ---
 

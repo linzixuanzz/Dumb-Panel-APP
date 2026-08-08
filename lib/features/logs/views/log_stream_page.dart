@@ -8,6 +8,7 @@ import '../../../shared/models/task_log.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
+import '../../../shared/utils/sse_replay_buffer.dart';
 
 class LogStreamPage extends StatefulWidget {
   final int logId;
@@ -22,6 +23,10 @@ class _LogStreamPageState extends State<LogStreamPage> {
   final _sseClient = SseClient();
   final _scrollController = ScrollController();
   final _lines = <String>[];
+
+  /// 服务端重连一律从头重放整段历史（没有 Last-Event-ID），
+  /// 靠它把重放的行抵扣掉，用户才不会看到日志翻倍。
+  final _replayBuffer = SseReplayBuffer();
 
   bool _loading = true;
   bool _done = false;
@@ -106,15 +111,29 @@ class _LogStreamPageState extends State<LogStreamPage> {
       return;
     }
 
+    _replayBuffer.reset(_lines);
     _sseClient.connect(
       path: ApiEndpoints.logStream(taskId),
       autoReconnect: true,
+      // 重放去重统一挂在这里：不管重连是服务端 done:reconnect 触发的，
+      // 还是 token 续期后客户端自己发起的，行为都一样。
+      onReconnect: () => _replayBuffer.reset(_lines),
       onEvent: (event) {
         if (!mounted) {
           return;
         }
 
         if (event.event == 'done') {
+          if (event.data == 'reconnect') {
+            // reconnect 是「任务还在跑，换条连接继续」，不是结束。
+            // 以前这里一律置 _done=true，重连回来日志继续刷，
+            // 页面却挂着一个「已结束」的状态。
+            setState(() {
+              _done = false;
+              _status = '运行中';
+            });
+            return;
+          }
           setState(() {
             _done = true;
             _status = event.data == 'finished' ? '已完成' : event.data;
@@ -122,7 +141,7 @@ class _LogStreamPageState extends State<LogStreamPage> {
           return;
         }
 
-        final newLines = _splitLines(event.data);
+        final newLines = _replayBuffer.consume(_splitLines(event.data));
         if (newLines.isEmpty) {
           return;
         }
@@ -144,13 +163,15 @@ class _LogStreamPageState extends State<LogStreamPage> {
           _status = '连接结束';
         });
       },
-      onError: (_) {
+      onError: (error) {
         if (!mounted) {
           return;
         }
         setState(() {
           _done = true;
-          _status = '连接错误';
+          // 这个 _status 挂在 AppBar 的 Chip 里，塞整句会把 actions 撑到溢出；
+          // 完整的「登录已失效，请重新登录」由登录页顶部负责说，这里只给短标签。
+          _status = error is SseAuthFailure ? '登录已失效' : '连接错误';
         });
       },
     );

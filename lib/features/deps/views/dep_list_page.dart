@@ -1547,6 +1547,10 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
   final _logs = <String>[];
   final _scrollController = ScrollController();
   bool _done = false;
+
+  /// 连接失败的原因。之前失败也只是把 _done 置 true，
+  /// 于是断线和「装完了」显示的都是同一条绿色「安装完成」banner —— 是假的成功。
+  String? _errorMessage;
   Color? _logBackgroundColor;
 
   @override
@@ -1580,8 +1584,14 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
       onDone: () {
         if (mounted) setState(() => _done = true);
       },
-      onError: (_) {
-        if (mounted) setState(() => _done = true);
+      onError: (error) {
+        if (!mounted) return;
+        setState(() {
+          _done = true;
+          _errorMessage = error is SseAuthFailure
+              ? error.message
+              : '安装日志连接已断开';
+        });
       },
     );
   }
@@ -1632,7 +1642,25 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
                 ),
               ),
             ),
-            if (_done)
+            if (_errorMessage != null)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                color: doneBannerBackground,
+                child: Text(
+                  _errorMessage!,
+                  textAlign: TextAlign.center,
+                  // 断线不是成功，不能复用绿色 banner。浅色分支取 dangerDark，
+                  // 理由与下面的 successDark 一样：banner 底是 slate100。
+                  style: TextStyle(
+                    color: logTheme.brightness == Brightness.dark
+                        ? AppColors.danger
+                        : AppColors.dangerDark,
+                    fontSize: 13,
+                  ),
+                ),
+              )
+            else if (_done)
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(12),

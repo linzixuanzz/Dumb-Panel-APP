@@ -16,6 +16,7 @@ import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/duration_utils.dart';
 import '../../../shared/utils/panel_enums.dart';
+import '../../../shared/utils/sse_replay_buffer.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/widgets/app_buttons.dart';
@@ -2681,7 +2682,10 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
   final ScrollController _scrollController = ScrollController();
   final _sseClient = SseClient();
   final _lines = <String>[];
-  final _historyReplayBuffer = <String>[];
+
+  /// 服务端重连一律从头重放整段历史（没有 Last-Event-ID），
+  /// 靠它把重放的行抵扣掉，用户才不会看到日志翻倍。
+  final _replayBuffer = SseReplayBuffer();
   bool _loading = true;
   bool _done = false;
   bool _autoScroll = true;
@@ -2817,12 +2821,13 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
     _sseClient.close();
     _pollTimer?.cancel();
     _pollTimer = null;
-    _historyReplayBuffer
-      ..clear()
-      ..addAll(_lines);
+    _replayBuffer.reset(_lines);
     _sseClient.connect(
       path: ApiEndpoints.logStream(taskId),
       autoReconnect: true,
+      // 重放去重统一挂在这里：不管重连是服务端 done:reconnect 触发的，
+      // 还是 token 续期后客户端自己发起的，行为都一样。
+      onReconnect: () => _replayBuffer.reset(_lines),
       onEvent: (event) {
         if (!mounted) return;
         if (event.event == 'done') {
@@ -2831,9 +2836,6 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
               _done = false;
               _statusText = '运行中';
             });
-            _historyReplayBuffer
-              ..clear()
-              ..addAll(_lines);
             return;
           }
           setState(() {
@@ -2845,7 +2847,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
         final newLines = event.data.replaceAll('\r\n', '\n').split('\n');
         newLines.removeWhere((l) => l.isEmpty);
         if (newLines.isEmpty) return;
-        final dedupedLines = _consumeReplayLines(newLines);
+        final dedupedLines = _replayBuffer.consume(newLines);
         if (dedupedLines.isEmpty) return;
         setState(() {
           _lines.addAll(dedupedLines);
@@ -2859,8 +2861,17 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
         if (_done) return;
         setState(() => _statusText = '连接结束');
       },
-      onError: (_) {
+      onError: (error) {
         if (!mounted) return;
+        if (error is SseAuthFailure) {
+          // 会话已经死了，轮询接口同样会 401。这里不再降级轮询：
+          // 只会刷一串失败请求，然后被路由踢回登录页，反而盖掉真正的原因。
+          // 文案取短的：_statusText 挂在 AppBar 的 Chip 里，
+          // 整句「登录已失效，请重新登录」会把 actions 撑到溢出，
+          // 完整说明由登录页顶部负责。
+          setState(() => _statusText = '登录已失效');
+          return;
+        }
         if (!_done) {
           setState(() => _statusText = '连接错误');
           _pollTimer?.cancel();
@@ -2869,26 +2880,6 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
         }
       },
     );
-  }
-
-  List<String> _consumeReplayLines(List<String> incomingLines) {
-    if (_historyReplayBuffer.isEmpty) {
-      return incomingLines;
-    }
-
-    final result = <String>[];
-    for (final line in incomingLines) {
-      if (_historyReplayBuffer.isNotEmpty &&
-          line == _historyReplayBuffer.first) {
-        _historyReplayBuffer.removeAt(0);
-        continue;
-      }
-
-      _historyReplayBuffer.clear();
-      result.add(line);
-    }
-
-    return result;
   }
 
   String _statusFromLiveTask(double? status, {required bool done}) {

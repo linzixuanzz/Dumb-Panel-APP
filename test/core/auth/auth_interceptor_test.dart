@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:daidai_app/core/auth/auth_interceptor.dart';
+import 'package:daidai_app/core/auth/token_refresher.dart';
 import 'package:daidai_app/core/network/api_endpoints.dart';
 import 'package:daidai_app/core/storage/secure_storage.dart';
 import 'package:dio/dio.dart';
@@ -28,6 +29,9 @@ void main() {
       'access_token': 'access-old',
       'refresh_token': 'refresh-1',
     });
+    // 续期动作已经收敛到 TokenRefresher 单例（SSE 也调它）。
+    // 单例状态会跨用例串场，不重置的话上一条用例的假 dio 会被下一条复用。
+    TokenRefresher.instance.resetForTest();
     authFailedCalls = 0;
   });
 

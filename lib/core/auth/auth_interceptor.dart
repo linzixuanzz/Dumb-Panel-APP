@@ -2,25 +2,7 @@ import 'package:dio/dio.dart';
 import '../network/api_endpoints.dart';
 import '../network/dio_client.dart';
 import '../storage/secure_storage.dart';
-
-String _extractAccessToken(dynamic responseData) {
-  if (responseData is Map) {
-    final directToken = responseData['access_token']?.toString();
-    if (directToken != null && directToken.isNotEmpty) {
-      return directToken;
-    }
-
-    final nestedData = responseData['data'];
-    if (nestedData is Map) {
-      final nestedToken = nestedData['access_token']?.toString();
-      if (nestedToken != null && nestedToken.isNotEmpty) {
-        return nestedToken;
-      }
-    }
-  }
-
-  throw StateError('Missing access_token in refresh response');
-}
+import 'token_refresher.dart';
 
 /// 打在 `RequestOptions.extra` 上的标记：表示这条请求是「续期成功后重发」的。
 ///
@@ -114,14 +96,13 @@ class AuthInterceptor extends Interceptor {
     _isRefreshing = true;
 
     try {
+      // 续期动作本身交给 TokenRefresher 单例：SSE 走 package:http、完全不经过
+      // dio 拦截器，它 401 时调的是同一个入口。两条链路共用「正在飞的那次刷新」，
+      // 才不会出现「两处同时刷新、后一个把前一个的新 token 覆盖成过期值」。
       // rawDio 不挂拦截器，刷新失败不会递归回到这里。
-      final response = await _rawDio.post(
-        ApiEndpoints.refresh,
-        options: Options(headers: {'Authorization': 'Bearer $refreshToken'}),
+      final newAccessToken = await TokenRefresher.instance.refresh(
+        rawDioFactory: () => _rawDio,
       );
-
-      final newAccessToken = _extractAccessToken(response.data);
-      await SecureStorage.saveAccessToken(newAccessToken);
 
       handler.resolve(await _retry(err.requestOptions, newAccessToken));
       await _flushPending(newAccessToken);

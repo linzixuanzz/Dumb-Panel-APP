@@ -1901,6 +1901,11 @@ class _SubscriptionPullStreamPageState
   final _scrollController = ScrollController();
   bool _done = false;
   String? _statusMessage;
+
+  /// 连接失败的原因。与 _statusMessage 分开存：
+  /// 「当前没有正在运行的拉取任务」是正常结论，断线不是，
+  /// 混在一起的话底部 banner 只能一律显示绿色的「拉取完成」—— 是假的成功。
+  String? _errorMessage;
   Color? _logBackgroundColor;
 
   @override
@@ -1945,13 +1950,16 @@ class _SubscriptionPullStreamPageState
       onDone: () {
         if (mounted) setState(() => _done = true);
       },
-      onError: (_) {
-        if (mounted) {
-          setState(() {
-            _done = true;
-            _statusMessage ??= '拉取日志连接已断开';
-          });
-        }
+      onError: (error) {
+        if (!mounted) return;
+        setState(() {
+          _done = true;
+          // 会话失效和普通断线要说清楚是哪一种：前者重试没有意义，
+          // 用户该做的是重新登录，而不是反复点开这个页面。
+          _errorMessage = error is SseAuthFailure
+              ? error.message
+              : '拉取日志连接已断开';
+        });
       },
     );
   }
@@ -1982,10 +1990,10 @@ class _SubscriptionPullStreamPageState
         child: Column(
           children: [
             Expanded(
-              child: _logs.isEmpty && _statusMessage != null
+              child: _logs.isEmpty && (_errorMessage ?? _statusMessage) != null
                   ? Center(
                       child: Text(
-                        _statusMessage!,
+                        (_errorMessage ?? _statusMessage)!,
                         style: TextStyle(color: logTheme.mutedForeground),
                       ),
                     )
@@ -2009,7 +2017,25 @@ class _SubscriptionPullStreamPageState
                       ),
                     ),
             ),
-            if (_done)
+            if (_errorMessage != null)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                color: doneBannerBackground,
+                child: Text(
+                  _errorMessage!,
+                  textAlign: TextAlign.center,
+                  // 断线不是成功，不能复用绿色 banner。浅色分支取 dangerDark，
+                  // 理由与下面的 successDark 一样：banner 底是 slate100。
+                  style: TextStyle(
+                    color: logTheme.brightness == Brightness.dark
+                        ? AppColors.danger
+                        : AppColors.dangerDark,
+                    fontSize: 13,
+                  ),
+                ),
+              )
+            else if (_done)
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(12),

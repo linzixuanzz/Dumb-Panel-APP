@@ -78,7 +78,9 @@ validateStatus: (status) => status != null && status < 500,
 | 设置页 | 400 也弹「配置已保存」（`system_settings_page.dart:496-529`） |
 
 **局部绕过存在但不成体系**：`auth_service.dart:68-84` 登录接口自己判 `statusCode >= 400`
-手动抛 `DioException`；`sse_client.dart:61` 单独处理 401（SSE 不经 dio）。
+手动抛 `DioException`；`sse_client.dart` 自己判 HTTP 状态码（SSE 不经 dio）——
+但它的 401 **不再自己续期**，而是调 `TokenRefresher` 这个共用入口，
+见 [hook-guidelines.md](../frontend/hook-guidelines.md#sse独立客户端不经-dio但与-dio-共用同一个续期入口)。
 
 > **改这一行之前**：`rg "DioClient.instance.dio" lib` 找出所有调用点，逐个确认 catch 兜得住。
 > 这不是抽查能过关的事。

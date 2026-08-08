@@ -19,17 +19,18 @@ lib/
 
 ---
 
-## `lib/core/` — 基础设施（11 个文件）
+## `lib/core/` — 基础设施（12 个文件）
 
 | 子目录 | 文件 | 职责 |
 |---|---|---|
 | `network/` | `dio_client.dart` (64) | dio 单例 + `rawDio` 工厂 |
 | | `api_endpoints.dart` (193) | **全部** REST 路径常量 |
-| | `sse_client.dart` (134) | SSE 长连接，走 `package:http`，**不经过 dio** |
+| | `sse_client.dart` | SSE 长连接，走 `package:http`，**不经过 dio**；401 走 `TokenRefresher` 续期后重连一次 |
 | | `app_user_agent.dart` (195) | UA 与 `X-Client-*` 头，`initialize()` 在 `main()` 首行调用 |
 | `auth/` | `auth_provider.dart` (231) | `AuthNotifier` / `AuthState` / `authProvider` |
 | | `auth_service.dart` (160) | 登录、初始化、改密、健康检查 |
-| | `auth_interceptor.dart` (115) | Bearer 注入 + 401 续期排队重发 |
+| | `auth_interceptor.dart` | Bearer 注入 + 401 排队重发（续期动作委托给 `TokenRefresher`） |
+| | `token_refresher.dart` | **全仓库唯一**的 access token 续期入口，单飞（dio 与 SSE 共用） |
 | `storage/` | `secure_storage.dart` (327) | `FlutterSecureStorage`（token/user/panels）+ `SharedPreferences`（serverUrl/UI 状态） |
 | `router/` | `app_router.dart` (257) | `routerProvider`、全部 `GoRoute`、`redirect` 鉴权 |
 | `theme/` | `app_theme.dart` (272) | `AppColors` 色板（含 `success`/`info`/`danger`/`warning`/`neutral` 语义状态色）+ `AppTheme.light()/dark()` |

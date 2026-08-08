@@ -62,13 +62,21 @@ rootMessenger.showSnackBar(const SnackBar(content: Text('已保存')));
 ```
 test/
 ├── support/
-│   └── fake_http_adapter.dart          手写假 HttpClientAdapter + jsonResponse + dioWithAdapter
-├── core/auth/auth_interceptor_test.dart 401 续期链路（续期成功/失败/防死锁/并发排队/noRefreshPaths）
+│   ├── fake_http_adapter.dart          手写假 HttpClientAdapter + jsonResponse + dioWithAdapter
+│   └── fake_sse_http_client.dart       手写假 http.BaseClient + sseResponse / emptyResponse
+├── core/
+│   ├── auth/auth_interceptor_test.dart  401 续期链路（续期成功/失败/防死锁/并发排队/noRefreshPaths）
+│   ├── auth/token_refresher_test.dart   单次续期（并发共用/dio 与 SSE 共用/失败不钉死）
+│   └── network/sse_client_test.dart     SSE 401 → 续期 → 重连（无感/不无限重试/额度归还）
+├── shared/utils/sse_replay_buffer_test.dart  重连历史重放去重（宁可重复不能吞行）
 ├── features/
 │   ├── list_error_state_test.dart      TaskListState / LogListState 的 error 语义与清空
 │   └── notifications/channel_config_test.dart  通知渠道配置合并（未知字段不丢）
 └── widget_test.dart                     空态 vs 错误态的渲染差异
 ```
+
+> `TokenRefresher` 是单例，`setUp` 里必须调 `resetForTest()`：
+> 不重置的话上一条用例注入的假 dio 会被下一条复用，出现查半天的假红/假绿。
 
 > 历史：`widget_test.dart` 原来只有一个用例体是 `// TODO` 的空壳，
 > 「`flutter test` 1 个用例通过」是**假绿**。第 0 期 R5 已经替换掉。
