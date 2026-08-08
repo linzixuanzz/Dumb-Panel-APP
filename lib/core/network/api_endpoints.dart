@@ -67,6 +67,20 @@ class ApiEndpoints {
   static const String logs = '$baseApi/logs';
   static String logById(int id) => '$baseApi/logs/$id';
   static String logStream(int id) => '$baseApiV1/logs/$id/stream';
+
+  /// 原始日志直传下载的**换票**接口。鉴权与 `/logs/:id` 完全一致
+  /// （JWTAuth + OpenAPIAccess("logs") + RequireRole("viewer")），
+  /// 返回一张绑定单个文件、120 秒过期的票据。面板路由见 server/handler/log.go:269。
+  static String logRawTicket(int id) => '$baseApi/logs/$id/raw-ticket';
+
+  /// 原始日志文件本体。⚠️ 这条路由在面板侧**没有挂 JWT 中间件**
+  /// （server/handler/log.go:272），只认 `?ticket=`——因为它本来是给浏览器
+  /// 原生下载用的，而原生下载带不了 Authorization 头。
+  ///
+  /// 客户端不自己拼这个地址：真正要请求的 URL 由换票接口下发（含票据）。
+  /// 这里的常量只用于校验「下发的地址确实指向本条日志」，
+  /// 见 features/logs/utils/raw_log_download.dart 的 parseRawLogTicket。
+  static String logRaw(int id) => '$baseApi/logs/$id/raw';
   static const String logsBatchDelete = '$baseApi/logs/batch-delete';
   static const String logsClean = '$baseApi/logs/clean';
 

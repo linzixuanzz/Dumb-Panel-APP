@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../../core/network/api_endpoints.dart';
@@ -9,6 +10,8 @@ import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/sse_replay_buffer.dart';
+import '../../../shared/widgets/app_snack.dart';
+import '../utils/raw_log_download.dart';
 
 class LogStreamPage extends StatefulWidget {
   final int logId;
@@ -34,6 +37,13 @@ class _LogStreamPageState extends State<LogStreamPage> {
   int? _taskId;
   String _status = '加载中...';
   Color? _logBackgroundColor;
+
+  /// 这条日志在磁盘上有没有独立的原始日志文件。
+  ///
+  /// null 表示「还没拿到日志详情」（加载中或加载失败），此时不给下载入口 ——
+  /// 那种状态下既不知道文件存不存在，也说不出为什么不能下。
+  bool? _hasRawFile;
+  bool _downloadingRaw = false;
 
   @override
   void initState() {
@@ -85,6 +95,10 @@ class _LogStreamPageState extends State<LogStreamPage> {
         _done = !log.isRunning;
         _loading = false;
         _status = log.isRunning ? '连接中...' : log.statusText;
+        // 与面板签发票据前的前置判断同源：resolveTaskLogRecordRawFile 要求
+        // task_logs.log_path 非空，否则直接回「该日志没有独立的原始日志文件」。
+        // 这里读的是同一个字段，不是客户端另立的一套规则。
+        _hasRawFile = (log.logPath ?? '').trim().isNotEmpty;
       });
       if (_autoScroll && historyLines.isNotEmpty) {
         _scrollToBottom();
@@ -177,6 +191,74 @@ class _LogStreamPageState extends State<LogStreamPage> {
     );
   }
 
+  /// 下载服务端磁盘上的原始日志文件。
+  ///
+  /// 与页面上这份文本的区别：页面里的内容已经按终端语义折叠过裸 `\r`，
+  /// 「复制全部」拿到的也是折叠后的；原始文件是逐字节的，控制序列一个不少。
+  /// 日志很大时它还能整个绕开渲染 —— 不用先把几 MB 文本铺成 TextSpan 才拿到手。
+  ///
+  /// 顺序是「先把字节拉完，再弹系统保存框」，**不能反过来**：
+  /// 票据只活 120 秒（见 utils/raw_log_download.dart），
+  /// 先让用户去保存框里挑目录的话，挑久一点票就过期了。
+  Future<void> _downloadRawLog() async {
+    if (_downloadingRaw) {
+      return;
+    }
+    if (_hasRawFile != true) {
+      // 短日志会被压缩后直接存进 task_logs.content，磁盘上没有独立文件。
+      // 面板 Web 端的做法是把按钮置灰 + 挂 title 说明原因，但触屏上 tooltip
+      // 要长按才出得来，所以这里改成「点了就直接告诉他为什么」。
+      AppSnack.warn(context, '这条日志的内容存在数据库里，没有独立的原始日志文件');
+      return;
+    }
+
+    setState(() => _downloadingRaw = true);
+    try {
+      final file = await const RawLogDownloader().downloadTaskLog(widget.logId);
+      if (!mounted) {
+        return;
+      }
+      // 系统保存框（SAF）由用户自己挑位置，不需要存储权限，也不受分区存储影响。
+      // 与备份 / 脚本下载走的是同一套（backup_page、script_list_page）。
+      final savedPath = await FilePicker.platform.saveFile(
+        dialogTitle: '保存原始日志',
+        fileName: file.filename,
+        type: FileType.any,
+        bytes: file.bytes,
+      );
+      if (!mounted) {
+        return;
+      }
+      if (savedPath == null) {
+        // 用户自己在系统保存框里按了取消，不是失败，保持中性。
+        AppSnack.show(context, '已取消保存');
+        return;
+      }
+      AppSnack.success(context, '原始日志已保存');
+    } on RawLogDownloadException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      // 这一支的文案已经是翻译好的中文原因（含票据过期 / 无权限 / 文件已清理）。
+      AppSnack.error(context, error.message);
+    } on UnsupportedError {
+      // 平台能力缺失而不是这次操作出错，用警告。
+      if (!mounted) {
+        return;
+      }
+      AppSnack.warn(context, '当前平台暂不支持直接保存文件');
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      AppSnack.error(context, extractListErrorMessage(error, '下载原始日志失败'));
+    } finally {
+      if (mounted) {
+        setState(() => _downloadingRaw = false);
+      }
+    }
+  }
+
   List<String> _splitLines(String content) {
     final normalized = content.replaceAll('\r\n', '\n');
     final lines = normalized.split('\n');
@@ -215,7 +297,12 @@ class _LogStreamPageState extends State<LogStreamPage> {
     return Scaffold(
       backgroundColor: logTheme.background,
       appBar: AppBar(
-        title: Text('日志 #${widget.logId}'),
+        // actions 现在有 4 项（状态 chip + 复制 + 下载 + 自动滚动），窄屏上
+        // 留给标题的宽度会被压得很少。加 ellipsis 让它老老实实截断。
+        title: Text(
+          '日志 #${widget.logId}',
+          overflow: TextOverflow.ellipsis,
+        ),
         backgroundColor: logTheme.background,
         foregroundColor: logTheme.foreground,
         actions: [
@@ -250,6 +337,23 @@ class _LogStreamPageState extends State<LogStreamPage> {
                   const SnackBar(content: Text('日志已复制到剪贴板'), duration: Duration(seconds: 2)),
                 );
               },
+            ),
+          // 只在拿到日志详情之后才出现：在那之前既不知道有没有原始文件，
+          // 也说不清楚点了会发生什么。
+          if (_hasRawFile != null)
+            IconButton(
+              icon: _downloadingRaw
+                  ? SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: logTheme.foreground,
+                      ),
+                    )
+                  : const Icon(Icons.download_outlined),
+              tooltip: '下载原始日志',
+              onPressed: _downloadingRaw ? null : _downloadRawLog,
             ),
           IconButton(
             icon: Icon(_autoScroll ? Icons.vertical_align_bottom : Icons.pause),

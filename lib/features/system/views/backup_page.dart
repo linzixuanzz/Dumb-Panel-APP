@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
@@ -558,7 +557,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
         ApiEndpoints.backupDownload(filename),
         options: Options(responseType: ResponseType.bytes),
       );
-      final bytes = _extractBytes(resp.data);
+      final bytes = extractResponseBytes(resp.data);
       if (bytes == null || bytes.isEmpty) {
         throw StateError('下载内容为空');
       }
@@ -768,20 +767,6 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     }
     if (file.bytes != null) {
       return MultipartFile.fromBytes(file.bytes!, filename: file.name);
-    }
-    return null;
-  }
-
-  Uint8List? _extractBytes(dynamic data) {
-    if (data is Uint8List) {
-      return data;
-    }
-    if (data is List<int>) {
-      return Uint8List.fromList(data);
-    }
-    if (data is List) {
-      final values = data.whereType<num>().map((item) => item.toInt()).toList();
-      return Uint8List.fromList(values);
     }
     return null;
   }

@@ -424,20 +424,6 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
     }
     return null;
   }
-
-  Uint8List? extractBytes(dynamic data) {
-    if (data is Uint8List) {
-      return data;
-    }
-    if (data is List<int>) {
-      return Uint8List.fromList(data);
-    }
-    if (data is List) {
-      final values = data.whereType<num>().map((item) => item.toInt()).toList();
-      return Uint8List.fromList(values);
-    }
-    return null;
-  }
 }
 
 class ScriptListPage extends ConsumerStatefulWidget {
@@ -1106,9 +1092,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
         ApiEndpoints.scriptsDownload(file.path),
         options: Options(responseType: ResponseType.bytes),
       );
-      final bytes = ref
-          .read(scriptProvider.notifier)
-          .extractBytes(response.data);
+      final bytes = extractResponseBytes(response.data);
       if (bytes == null || bytes.isEmpty) {
         throw StateError('下载内容为空');
       }

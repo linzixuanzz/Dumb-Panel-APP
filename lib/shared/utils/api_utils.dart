@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 /// 从 API 响应中提取 data 字段
 /// 后端格式：response.Success() 直接输出，某些接口用 gin.H{"data": ...} 包了一层
 dynamic extractData(dynamic responseData) {
@@ -37,6 +39,28 @@ dynamic extractData(dynamic responseData) {
     return (items: items, total: items.length);
   }
   return (items: <Map<String, dynamic>>[], total: 0);
+}
+
+/// 把 `ResponseType.bytes` 的响应体归一成 [Uint8List]。
+///
+/// dio 正常情况下直接给 `Uint8List`，剩下两个分支是历史兜底：
+/// `backup_page` 与 `script_list_page` 各自写过一份**逐字相同**的私有实现
+/// （`_extractBytes` / `extractBytes`），这里是把第三份出现之前先合并掉。
+///
+/// 拿不到有效字节时返回 null，**不抛异常** —— 文案由调用方决定
+/// （备份说「下载备份失败」，日志说「下载原始日志失败」）。
+Uint8List? extractResponseBytes(dynamic data) {
+  if (data is Uint8List) {
+    return data;
+  }
+  if (data is List<int>) {
+    return Uint8List.fromList(data);
+  }
+  if (data is List) {
+    final values = data.whereType<num>().map((item) => item.toInt()).toList();
+    return Uint8List.fromList(values);
+  }
+  return null;
 }
 
 /// 从 API 错误响应中提取可读的错误信息

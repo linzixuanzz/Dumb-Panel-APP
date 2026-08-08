@@ -70,6 +70,24 @@ ResponseBody jsonResponse(Map<String, dynamic> body, {int status = 200}) {
   );
 }
 
+/// 构造**按字节**返回的响应体，用于 `ResponseType.bytes` 的下载接口。
+///
+/// 与 [jsonResponse] 的区别只在 content-type：走 `ResponseType.bytes` 时
+/// dio 根本不看它，但真实响应确实是 `text/plain`，保持一致才好排查。
+ResponseBody bytesResponse(
+  List<int> body, {
+  int status = 200,
+  String contentType = 'text/plain; charset=utf-8',
+}) {
+  return ResponseBody.fromBytes(
+    body,
+    status,
+    headers: {
+      Headers.contentTypeHeader: [contentType],
+    },
+  );
+}
+
 /// 与 `lib/core/network/dio_client.dart` 同款配置的 dio：
 /// `validateStatus < 400`（4xx 必须抛 DioException 才能进 onError）
 /// 加上 json 的 Content-Type（少了它 dio 会把请求体按 form 编码，行为和线上不一致）。
