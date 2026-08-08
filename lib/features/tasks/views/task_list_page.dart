@@ -14,6 +14,7 @@ import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/task.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/api_utils.dart';
+import '../../../shared/utils/duration_utils.dart';
 import '../../../shared/utils/panel_enums.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/utils/log_background.dart';
@@ -2656,11 +2657,11 @@ class TaskDetailSheet extends StatelessWidget {
                         ),
                       ),
                       infoTile(
+                        // 原写法是裸秒 `3600.00s`，两小时的任务写成 7200.00s，
+                        // 用户得自己除。改成与日志列表、面板同一套分档。
                         '最近耗时',
                         Text(
-                          task.lastRunningTime == null
-                              ? '-'
-                              : '${task.lastRunningTime!.toStringAsFixed(2)}s',
+                          formatDurationSeconds(task.lastRunningTime),
                           style: const TextStyle(fontSize: 13),
                         ),
                       ),

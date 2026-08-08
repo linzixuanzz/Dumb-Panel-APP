@@ -12,6 +12,7 @@ import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/subscription.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
+import '../../../shared/utils/duration_utils.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_card.dart';
@@ -1795,7 +1796,13 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
                                   ),
                                   const Spacer(),
                                   Text(
-                                    '${(log['duration'] as num?)?.toStringAsFixed(1) ?? '0.0'}s',
+                                    // 原写法是裸秒，且拿不到 duration 时假造一个
+                                    // 「0.0s」。而 `0s` 现在是有确切含义的（任务刚
+                                    // 开始跑，服务端把耗时重置为 0），拿它兜底等于
+                                    // 把「不知道」说成「跑了 0 秒」。
+                                    formatDurationSeconds(
+                                      log['duration'] as num?,
+                                    ),
                                     style: TextStyle(
                                       fontSize: 12,
                                       color: isLight

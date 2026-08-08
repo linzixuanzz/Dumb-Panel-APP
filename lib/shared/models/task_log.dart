@@ -1,3 +1,4 @@
+import '../utils/duration_utils.dart';
 import '../utils/panel_enums.dart';
 
 class TaskLog {
@@ -43,14 +44,11 @@ class TaskLog {
 
   PanelStatusTone get statusTone => logStatusTone(status);
 
-  String get durationText {
-    if (duration == null) return '-';
-    if (duration! < 1) return '${(duration! * 1000).toStringAsFixed(0)}ms';
-    if (duration! < 60) return '${duration!.toStringAsFixed(1)}s';
-    final minutes = (duration! / 60).floor();
-    final seconds = (duration! % 60).toStringAsFixed(0);
-    return '${minutes}m${seconds}s';
-  }
+  /// 耗时展示。分档实现在 `shared/utils/duration_utils.dart`：
+  /// 这里原本自己写了一份 ms / s / m 三档的逻辑，缺小时档（4711.9s 会显示成
+  /// `78m31s`），而且长在 getter 里没法单测。搬出去之后与面板
+  /// `web/src/utils/duration.ts` 共用同一套分档。
+  String get durationText => formatDurationSeconds(duration);
 
   factory TaskLog.fromJson(Map<String, dynamic> json) {
     return TaskLog(
