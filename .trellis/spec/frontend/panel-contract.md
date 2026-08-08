@@ -254,5 +254,6 @@ APP 曾经三处写 200，其中订阅列表导致**第 21 条起看不见**。
 |---|---|
 | `web/src/views/api-docs/apiData.ts` | 文档字符串，已经漂了（wecom_app 漏 `mpnews`）。绑死测试覆盖不到 TS |
 | `Task / Dependency / EnvVar / NotifyChannel` 的 `toJson()` | **死代码**，真实请求体是页面内联字面量。每个实体两份字段清单。`Subscription` 那份已删 |
-| 115 处裸 `showSnackBar(` | 绕过 `AppSnack`，单列 backlog |
-| 6 个 State 无 `error` 字段 | 断网时静默变空 |
+| 111 处裸 `showSnackBar(`（14 文件） | 绕过 `AppSnack`，单列 backlog。8 个文件零使用 `AppSnack`，`env_list_page` 是迁了一半 |
+| 4 个 State 无 `error` 字段 | `Notification / User / Dep / Script`，断网时静默变空 |
+| `SubscriptionListState` / `DashboardData` 有 `error` 但 UI 不读 | 「改了一半」：字段有、set 了，build 里没人消费，仍显示「暂无订阅」 |

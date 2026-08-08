@@ -26,7 +26,7 @@ include: package:flutter_lints/flutter.yaml
 
 | 规则 | 数量 | 已定位的成因 |
 |---|---|---|
-| `use_build_context_synchronously` | **5** | `await` 之后使用 `BuildContext` 且未先判 `mounted`。分布：`notification_list_page` / `open_api_page` / `script_list_page` / `security_page` / `user_list_page` 各 1 |
+| `use_build_context_synchronously` | **5** | `await` 之后使用 `BuildContext`，守卫不到位。file:line 清单见下 |
 | `library_private_types_in_public_api` | 2 | 公开类 `UserListState` 暴露私有类型 `_User`（`user_list_page.dart` 的 `final List<_User> items` 与 `copyWith({List<_User>? items})`） |
 
 > 之前这张表写的是「4 + 2 + 同类 info 1」，那个「同类 1」是含糊记法。
@@ -42,6 +42,54 @@ include: package:flutter_lints/flutter.yaml
 `lib/shared/models/user.dart` 已有公开的 `User`。两者字段大量重合。
 **新代码不要再制造这种影子模型**——需要页面私有模型时，要么复用 `shared/models/`，
 要么让承载它的 State 类也保持私有。
+
+### `use_build_context_synchronously` 的 5 处在哪、为什么
+
+清单以 `flutter analyze --no-pub` 实跑输出为准（最近一次：2026-08-08，7 issues）。
+**这 5 处分两种成因，修法不同，别当成一类批量改。**
+
+#### 甲类（4 处）：判错了对象
+
+判的是 State 的 `mounted`，用的却是 builder 传下来的另一个 `BuildContext`。
+`if (!mounted)` 保证的是 State 还在，保证不了那个对话框的 `ctx` 还挂在树上：
+
+```dart
+// lib/features/notifications/views/notification_list_page.dart:673-674
+await ref.read(notificationListProvider.notifier).update(channel.id, payload);
+if (!mounted) return;          // 判的是 State
+Navigator.of(ctx).pop();       // 用的是 builder 的 ctx → 仍然告警
+```
+
+| 位置 | 那个「别人的 context」 |
+|---|---|
+| `notification_list_page.dart:674` | `showModalBottomSheet` 的 `ctx` |
+| `open_api_page.dart:832` | `showDialog` 的 `dialogCtx` |
+| `security_page.dart:890` | `showDialog` 的 `dialogCtx` |
+| `user_list_page.dart:485` | `showDialog` 的 `dialogCtx` |
+
+修法：把 `if (!mounted)` 换成 `if (!ctx.mounted)`，或者照下面的样子在 `await`
+之前先把 `Navigator` / `ScaffoldMessenger` 取出来。
+
+#### 乙类（1 处）：判对了，但分析器证明不了
+
+`script_list_page.dart:2759`，在 `_ScriptDebugRunSheetState`（类定义 `:2564`）的
+`build(BuildContext context)`（`:2699`）里：
+
+```dart
+await Clipboard.setData(ClipboardData(text: _logs.join('\n')));
+if (!mounted) return;                        // State.mounted
+ScaffoldMessenger.of(context).showSnackBar(  // :2759 — build 的 context 参数
+  const SnackBar(content: Text('已复制调试日志')),
+);
+```
+
+这里的 `context` **实际上就是** `State.context`，运行期没有问题。但 lint 无法证明
+build 的形参与 `State.context` 同一，所以照样报 `unrelated 'mounted' check`。
+修法只是把 `if (!mounted)` 改成 `if (!context.mounted)` 一行，不要按甲类去找什么
+「别人的 context」——这个文件里没有。
+
+> **这一处曾经找不到。** 用 `Navigator.of(` 搜整个文件会漏掉它，因为它是
+> `ScaffoldMessenger.of(`。查这条 lint 时**永远以 analyze 输出为准，不要靠 grep 某个符号**。
 
 ### `use_build_context_synchronously` 的正确写法
 
@@ -74,6 +122,14 @@ test/
 │   └── notifications/channel_config_test.dart  通知渠道配置合并（未知字段不丢）
 └── widget_test.dart                     空态 vs 错误态的渲染差异
 ```
+
+> ⚠️ **上面这棵树不是全量**，它停在第 0/1 期的形态。`test/` 下实际有 **16 个 `*_test.dart`**，
+> 树里只画了 7 个。没画进来的：`features/system/system_config_schema_test.dart`、
+> `features/notifications/notify_field_schema_test.dart`、`features/tasks/cron_schema_test.dart`、
+> `features/subscriptions/subscription_auth_test.dart`、`features/envs/env_transfer_test.dart`、
+> `features/logs/raw_log_download_test.dart`、`shared/panel_enums_test.dart`、
+> `shared/duration_utils_test.dart`、`shared/utils/api_utils_test.dart`。
+> **判断某条链路有没有测试请直接 glob `test/**/*_test.dart`，不要只看这棵树。**
 
 > `TokenRefresher` 是单例，`setUp` 里必须调 `resetForTest()`：
 > 不重置的话上一条用例注入的假 dio 会被下一条复用，出现查半天的假红/假绿。
@@ -125,11 +181,19 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 | 触碰「读取-修改-回写」的表单 | 必须有测试证明**未知字段不丢失**（见下方通知渠道案例） |
 | 触碰列表 provider | 必须有测试证明请求失败时 `error` 被设置且能被 UI 消费 |
 | 纯 UI 调整 | 不强制 |
-| 新增 `shared/utils/` 函数 | 建议补纯函数单测（这类最容易测，目前一个都没有） |
+| 新增 `shared/utils/` 函数 | 建议补纯函数单测（这类最容易测，已经有 `api_utils` / `duration_utils` / `sse_replay_buffer` 三份可以照抄） |
 
-**测试的现实障碍**：除 `TaskNotifier` / `LogListNotifier` 外，其余 Notifier 仍然直接使用
-`DioClient.instance.dio` 单例（`env_list_page.dart`、`dep_list_page.dart` …），无法注入假 dio。
-若要给它们补测试，先按上面的形状加可选 `Dio` 构造参数。
+**测试的现实障碍**：全库 11 个 `StateNotifier`，只有 `TaskNotifier` / `LogListNotifier` 带
+`{Dio? dio}`。另外 7 个（`ScriptNotifier` / `NotificationListNotifier` / `SubscriptionListNotifier` /
+`DepListNotifier` / `UserListNotifier` / `DashboardNotifier` / `EnvListNotifier`）直接取
+`DioClient.instance.dio` 单例，**假 dio 注不进去**；剩下 2 个（`AuthNotifier` 走 `AuthService`、
+`AppLockController` 走 `SecureStorage`）本来就不碰 dio。
+若要给那 7 个补测试，先按上面的形状加可选 `Dio` 构造参数。
+
+> ⚠️ **这是补 `error` 字段的前置条件**。上表「触碰列表 provider 必须有测试证明 `error` 被设置
+> 且能被 UI 消费」是硬性要求，而缺 `error`（或有字段但 UI 不读）的
+> Dep / Script / Notification / User / Subscription **恰好一个都注入不了 dio**。
+> 顺序反了就会写到一半发现测不了，只能回头改构造函数。
 
 ---
 
@@ -137,7 +201,7 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 
 | 禁止 | 原因 | 反例 |
 |---|---|---|
-| 请求 URL 直接拼字符串 | 绕过 `ApiEndpoints`，改路径时漏改 | `system_settings_page.dart:265/349/419` |
+| 请求 URL 直接拼字符串 | 绕过 `ApiEndpoints`，改路径时漏改 | **历史问题，已修，全库零命中**。原先是 `system_settings_page` 三处 `'${ApiEndpoints.baseApi}/system/...'`，现已收进 `ApiEndpoints.systemUpdateStatus` / `systemUpdate` / `systemRestart`（`api_endpoints.dart:23-27`）。别再照旧行号去找，那三行现在是别的代码 |
 | 在页面里自己 `response.data['data']` | 后端有 3 种包裹形态 | 应用 `extractData` / `extractPaginated`（`api_utils.dart`） |
 | 编辑表单时用空 map 重建再整串覆盖 | **用户在 Web 配的字段会被静默清空** | `notification_list_page.dart:735-757` |
 | 后端已暴露的默认值写死在客户端 | 面板改配置后 APP 不跟随 | 参考已修正的 `task_form_page.dart:223-266` |

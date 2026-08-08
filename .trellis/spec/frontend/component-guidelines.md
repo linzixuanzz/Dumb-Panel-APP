@@ -206,8 +206,13 @@ Color get solidFg      => isLight ? Colors.white : AppColors.slate950;
 
 ## 对话框与浮层
 
-全库 `showDialog` / `showModalBottomSheet` / `AlertDialog` 合计 **127 处 / 17 文件**，
+全库 `showDialog` / `showModalBottomSheet` / `AlertDialog` 合计 **133 处 / 18 文件**，
 没有统一封装，每处自己写 `AlertDialog` 或 `showModalBottomSheet`。
+
+> 这个数字**在涨**（改造期记的是 127 处 / 17 文件）。没有封装意味着每新增一个弹窗就多一份
+> 圆角 / 按钮高度 / 取消文案的自由发挥，涨的是后面统一时要改的量。新增弹窗前先看看
+> `script_list_page.dart`（23 处）那几个 `showDialog` 是不是已经有能抄的形状。
+
 `app_theme.dart:211-227` 给了 `bottomSheetTheme`（顶部 20 圆角）和 `dialogTheme`（20 圆角），
 这部分因为走的是 Material 组件，**是少数真正生效的主题配置**。
 
@@ -251,9 +256,13 @@ AppSnack.error(context, message, replaceCurrent: true);
 > 还是通栏方块的提示条 —— 而它恰恰是出现频率最高的之一。
 > **一般规则：本提交造成的不一致，在本提交里修掉，不推给 backlog。**
 >
-> 全库仍有 **115 处**裸 `showSnackBar(`（15 个文件，其中 `env_list_page`(18) /
-> `subscription_list_page`(12) 一次都没用过 `AppSnack`）没有迁移，单列 backlog。
-> 新代码一律走 `AppSnack`。
+> 全库仍有 **111 处**裸 `showSnackBar(`（**14 个文件**，不含 `app_snack.dart` 自己那 2 处：
+> 一处在文档注释里、一处是 `AppSnack` 的实现本体）没有迁移，单列 backlog。
+> 其中 **8 个文件一次都没用过 `AppSnack`**：`security_page`(15) / `subscription_list_page`(14) /
+> `open_api_page`(12) / `user_list_page`(10) / `notification_list_page`(9) / `more_page`(2) /
+> `task_form_page`(2) / `panel_log_page`(1)。
+> `env_list_page` 裸调用最多（18）但已经用了 11 次 `AppSnack` —— 它是**迁了一半**，不是零使用，
+> 别照着旧记录去「从零接线」。新代码一律走 `AppSnack`。
 
 错误文案统一经 `extractErrorMessage(error, fallback)`（`shared/utils/api_utils.dart:44`）提取后端 `error`/`message` 字段：
 
@@ -272,10 +281,22 @@ String _extractTaskError(dynamic error, String fallback) => extractErrorMessage(
 
 第 0 期 R3 给 `TaskListState` / `LogListState` / `EnvListState` 加了 `error` 字段，
 这三个列表现在在「有错误且列表为空」时显示原因 + 重试按钮（`AppErrorView`），
-不再一律显示「暂无数据」。
+不再一律显示「暂无数据」。全库 `AppErrorView` / `AppEmptyView` 的调用点也就只有这三个文件。
 
-**但仍有 6 个 State 没有 `error` 字段**（`NotificationListState` / `UserListState` /
-`DepListState` / `ScriptState` 等），断网时症状与改造前一样。
+其余 6 个分两种情况，**症状一样但工作量不一样**：
+
+| 情况 | State | 现状 |
+|---|---|---|
+| 连字段都没有 | `NotificationListState` / `UserListState` / `DepListState` / `ScriptState` | 断网时症状与改造前一样 |
+| **字段有、也 set 了，但 UI 不读** | `SubscriptionListState`、`DashboardData` | 更危险，见下 |
+
+`SubscriptionListState` 的 `error` 字段在 `subscription_list_page.dart:35`，`load()` 的 catch 在
+`:82` 确实写了 `error: '加载订阅失败'`，但**整个 build 里没有任何一处读它**，`:375` 仍然是写死的
+`Text('暂无订阅')`。`DashboardData` 同理（`dashboard_provider.dart:29` 声明、`:139` 赋值，
+`dashboard_page.dart` 一次没读）。
+
+> ⚠️ **别用 `grep 'final String? error'` 判断某个列表修好了没有**——这两个会给出假阳性。
+> 判据是 build 里有没有把它接到 `AppErrorView`。
 
 > 新增列表 provider **必须**带 `error` 字段，并把「真的没有数据」与「拿不到数据」区分开。
 > 错误文案走 `extractListErrorMessage`（不是 `extractErrorMessage`）——后者在后端没返回
@@ -298,8 +319,11 @@ navigator.pop();
 rootMessenger.showSnackBar(const SnackBar(content: Text('已保存')));
 ```
 
-这个约定**执行得不彻底**：`flutter analyze` 仍有 4 处 `use_build_context_synchronously`
-（见 quality-guidelines.md）。新代码必须遵守，不得让这个计数上升。
+这个约定**执行得不彻底**：`flutter analyze` 仍有 **5 处** `use_build_context_synchronously`
+（清单见 quality-guidelines.md「告警基线」）。新代码必须遵守，不得让这个计数上升。
+
+> 这里原本写的是 4 处，与 quality-guidelines.md 的 5 对不上 —— 两份文档记同一个基线时必然会漂，
+> **以 quality-guidelines.md 为准**，本文只引用不复制。
 
 ---
 
@@ -309,4 +333,4 @@ rootMessenger.showSnackBar(const SnackBar(content: Text('已保存')));
 |---|---|---|
 | 编辑表单时用空 map 重建 config 再整串覆盖 | 面板支持但 APP 字段表里没有的键**保存即丢失** | `notification_list_page.dart:735-757`（对照正确做法 `open_api_page.dart:671` 保留未知 scope） |
 | 后端默认值写死在表单里 | 面板改了默认 Python 版本，APP 不跟随 | 已修：`task_form_page.dart:223-266` 现在读 `default_version` |
-| 请求 URL 直接拼字符串 | 绕过 `ApiEndpoints`，改路径时漏改 | `system_settings_page.dart:265/349/419` 三处 `'${ApiEndpoints.baseApi}/system/...'` |
+| 请求 URL 直接拼字符串 | 绕过 `ApiEndpoints`，改路径时漏改 | **已修，全库零命中**。历史反例是 `system_settings_page` 里三处 `'${ApiEndpoints.baseApi}/system/...'`，现已收成 `ApiEndpoints.systemUpdateStatus` / `systemUpdate` / `systemRestart`（`api_endpoints.dart:23-27` 留了注释） |
