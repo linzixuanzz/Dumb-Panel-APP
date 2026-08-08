@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,7 +14,9 @@ import '../../../shared/utils/api_utils.dart';
 import '../../../shared/widgets/app_buttons.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_notice.dart';
+import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
+import '../utils/env_transfer.dart';
 
 final envListProvider = StateNotifierProvider<EnvListNotifier, EnvListState>((
   ref,
@@ -262,6 +266,45 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
       data: {'source_id': sourceId, 'target_id': targetId},
     );
     await load();
+  }
+
+  /// 导出。走面板 `GET /envs/export-all` —— 与 Web 端「导出 JSON」同一条接口。
+  ///
+  /// 为什么不直接序列化 [EnvListState.envs]：那份列表会被搜索词 / 分组筛过，
+  /// 用户以为导了全部、实际只导了筛出来的那些，而且**看不出来**。
+  /// export-all 返回的是未分页未筛选的全量数组，同名多条各占一行 —— 无损导出的前提。
+  ///
+  /// [ids] 非空时只导这些 id（对应列表页的多选）。失败**不静默降级**成本地列表：
+  /// 宁可报错，也不能让用户拿到一份少了几条却毫无提示的备份。
+  Future<List<EnvTransferItem>> exportAll({List<int>? ids}) async {
+    final response = await DioClient.instance.dio.get(
+      ApiEndpoints.envsExportAll,
+      queryParameters: (ids == null || ids.isEmpty)
+          ? null
+          : <String, dynamic>{'ids': ids.join(',')},
+    );
+
+    final data = extractData(response.data);
+    if (data is! List) {
+      return const <EnvTransferItem>[];
+    }
+    return data
+        .whereType<Map<String, dynamic>>()
+        .map(EnvTransferItem.fromJson)
+        .toList();
+  }
+
+  /// 导入。不 try/catch：写操作吞掉异常会让 UI 拿不到失败原因（spec 明令禁止）。
+  Future<EnvImportOutcome> importEnvs({
+    required List<EnvTransferItem> items,
+    required EnvImportMode mode,
+  }) async {
+    final response = await DioClient.instance.dio.post(
+      ApiEndpoints.envsImport,
+      data: buildEnvImportRequest(items: items, mode: mode),
+    );
+    await load();
+    return EnvImportOutcome.fromResponse(response.data);
   }
 
   void reorderLocal(int oldIndex, int newIndex) {
@@ -760,6 +803,115 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     await ref.read(envListProvider.notifier).load();
   }
 
+  /// 导入 / 导出入口。
+  ///
+  /// 做成弹出菜单而不是再加两个 chip：页头这一行在 360dp 宽的机器上已经排到边，
+  /// 多两个 56dp 的 chip 会直接 RenderFlex overflow。
+  Widget _buildTransferMenu() {
+    final surfaces = context.surfaces;
+    return PopupMenuButton<String>(
+      tooltip: '导入导出',
+      onSelected: (value) {
+        if (value == 'export') {
+          _showExportSheet();
+          return;
+        }
+        _showImportSheet();
+      },
+      itemBuilder: (_) => const [
+        PopupMenuItem<String>(
+          value: 'export',
+          child: Row(
+            children: [
+              Icon(Icons.ios_share, size: 18, color: AppColors.slate400),
+              SizedBox(width: AppSpacing.sm),
+              Text('导出变量'),
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'import',
+          child: Row(
+            children: [
+              Icon(
+                Icons.file_download_outlined,
+                size: 18,
+                color: AppColors.slate400,
+              ),
+              SizedBox(width: AppSpacing.sm),
+              Text('导入变量'),
+            ],
+          ),
+        ),
+      ],
+      child: Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          color: surfaces.card,
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: surfaces.cardBorder,
+            width: AppBorderWidth.hairline,
+          ),
+        ),
+        child: const Icon(
+          Icons.more_horiz,
+          size: 18,
+          color: AppColors.slate400,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showExportSheet() async {
+    final selectedIds = _selectedIds.toList()..sort();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      useRootNavigator: true,
+      builder: (_) => _EnvExportSheet(
+        selectedIds: selectedIds,
+        loadItems: (ids) =>
+            ref.read(envListProvider.notifier).exportAll(ids: ids),
+      ),
+    );
+  }
+
+  Future<void> _showImportSheet() async {
+    // 「面板上已经有多条同名同备注」这条提醒用的是**当前已加载的列表**，它可能被
+    // 搜索词 / 分组筛过。最坏情况只是少给一条提醒，不影响面板的实际行为；
+    // 真正会造成数据损坏的那一条（文件内同名同备注重复）只看导入文件本身，
+    // 与这份列表无关 —— 见 analyzeEnvImport 的注释。
+    final existing = ref
+        .read(envListProvider)
+        .envs
+        .map(
+          (env) => EnvTransferItem(
+            name: env.name,
+            value: env.value,
+            remarks: env.remarks,
+            groups: env.groups,
+            enabled: env.enabled,
+          ),
+        )
+        .toList();
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      useRootNavigator: true,
+      builder: (_) => _EnvImportSheet(
+        existing: existing,
+        submit: (items, mode) => ref
+            .read(envListProvider.notifier)
+            .importEnvs(items: items, mode: mode),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(envListProvider);
@@ -833,6 +985,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                             });
                           },
                         ),
+                      ],
+                      if (!_sortMode) ...[
+                        const SizedBox(width: 8),
+                        _buildTransferMenu(),
                       ],
                       if (!_selectionMode && !_sortMode) ...[
                         const SizedBox(width: 8),
@@ -1792,6 +1948,742 @@ class _EnvValueSheetEditor extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+String _formatTransferSize(int bytes) {
+  if (bytes < 1024) {
+    return '$bytes B';
+  }
+  final kb = bytes / 1024;
+  if (kb < 1024) {
+    return '${kb.toStringAsFixed(1)} KB';
+  }
+  return '${(kb / 1024).toStringAsFixed(2)} MB';
+}
+
+/// 提示里只列前几条，剩下的折成「等 N 项」。全列出来会把弹层撑爆。
+String _joinIdentityPreview(List<String> values, {int limit = 3}) {
+  if (values.length <= limit) {
+    return values.join('、');
+  }
+  return '${values.take(limit).join('、')} 等 ${values.length} 项';
+}
+
+/// 导出弹层。
+///
+/// 三个刻意的选择：
+/// 1. **不做脱敏**。环境变量里全是 Cookie / Token，遮掉就导不回去了 ——
+///    导出的全部意义就是「改完再导进来」。所以只警告，不改内容。
+/// 2. **不提供 shell / js / python**（面板 `POST /envs/export-files` 那三种）。
+///    它们把同名多条合并成一行、丢掉备注和分组，而且面板没有对应的导入口，
+///    放在「导出改完再导入」的入口里只会诱导用户走进死路。
+/// 3. 拿不到数据时**报错，不回落到本地列表** —— 见 EnvListNotifier.exportAll。
+class _EnvExportSheet extends StatefulWidget {
+  final List<int> selectedIds;
+  final Future<List<EnvTransferItem>> Function(List<int>? ids) loadItems;
+
+  const _EnvExportSheet({required this.selectedIds, required this.loadItems});
+
+  @override
+  State<_EnvExportSheet> createState() => _EnvExportSheetState();
+}
+
+class _EnvExportSheetState extends State<_EnvExportSheet> {
+  bool _selectedOnly = false;
+  bool _loading = true;
+  String? _error;
+  String _content = '';
+  int _count = 0;
+  int _bytes = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedOnly = widget.selectedIds.isNotEmpty;
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final items = await widget.loadItems(
+        _selectedOnly ? widget.selectedIds : null,
+      );
+      if (!mounted) {
+        return;
+      }
+      final content = encodeEnvTransferJson(items);
+      setState(() {
+        _content = content;
+        _count = items.length;
+        _bytes = utf8.encode(content).length;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _error = extractErrorMessage(error, '导出环境变量失败');
+        _content = '';
+        _count = 0;
+        _bytes = 0;
+        _loading = false;
+      });
+    }
+  }
+
+  void _setSelectedOnly(bool value) {
+    if (_selectedOnly == value) {
+      return;
+    }
+    setState(() => _selectedOnly = value);
+    _load();
+  }
+
+  String _suggestedFileName() {
+    final now = DateTime.now();
+    String two(int value) => value.toString().padLeft(2, '0');
+    return 'envs-${now.year}${two(now.month)}${two(now.day)}'
+        '-${two(now.hour)}${two(now.minute)}${two(now.second)}.json';
+  }
+
+  void _copy() {
+    Clipboard.setData(ClipboardData(text: _content));
+    AppSnack.success(context, '已复制 $_count 条环境变量到剪贴板');
+  }
+
+  Future<void> _save() async {
+    try {
+      final savedPath = await FilePicker.platform.saveFile(
+        dialogTitle: '保存环境变量',
+        fileName: _suggestedFileName(),
+        type: FileType.any,
+        // utf8.encode 在当前 SDK 返回的就是 Uint8List，不用再包一层 fromList
+        // （包了就得 import dart:typed_data，而那会变成一条 unused_import 风险）。
+        bytes: utf8.encode(_content),
+      );
+      if (!mounted) {
+        return;
+      }
+      if (savedPath == null) {
+        // 用户自己按了取消，不是失败，保持中性。
+        AppSnack.show(context, '已取消保存');
+        return;
+      }
+      AppSnack.success(context, '已保存 $_count 条环境变量');
+    } on UnsupportedError {
+      if (!mounted) {
+        return;
+      }
+      AppSnack.warn(context, '当前平台暂不支持直接保存文件');
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      AppSnack.error(context, extractErrorMessage(error, '保存文件失败'));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final surfaces = context.surfaces;
+    final canExport = !_loading && _error == null && _count > 0;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        AppSpacing.xl,
+        0,
+        AppSpacing.xl,
+        MediaQuery.of(context).viewInsets.bottom + AppSpacing.xl,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '导出环境变量',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          const AppNotice(
+            color: AppColors.warning,
+            icon: Icons.warning_amber_rounded,
+            text:
+                '导出内容是 Cookie / Token 的明文。复制到剪贴板后其他应用可能读到，'
+                '存成文件也别放进网盘或聊天记录 —— 用完请及时清理。',
+          ),
+          if (widget.selectedIds.isNotEmpty) ...[
+            const SizedBox(height: AppSpacing.md),
+            Wrap(
+              spacing: AppSpacing.sm,
+              children: [
+                ChoiceChip(
+                  label: Text('已选 ${widget.selectedIds.length} 项'),
+                  selected: _selectedOnly,
+                  onSelected: (value) {
+                    if (value) {
+                      _setSelectedOnly(true);
+                    }
+                  },
+                ),
+                ChoiceChip(
+                  label: const Text('全部变量'),
+                  selected: !_selectedOnly,
+                  onSelected: (value) {
+                    if (value) {
+                      _setSelectedOnly(false);
+                    }
+                  },
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: AppSpacing.md),
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: AppSpacing.xl),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (_error != null)
+            AppNotice(
+              color: AppColors.danger,
+              icon: Icons.error_outline,
+              text: _error!,
+              accentText: true,
+            )
+          else
+            AppCard(
+              radius: AppRadius.md,
+              color: surfaces.subtle,
+              borderColor: surfaces.subtleBorder,
+              padding: const EdgeInsets.all(AppSpacing.md),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '共 $_count 条 · ${_formatTransferSize(_bytes)}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.xxs),
+                  Text(
+                    '格式与面板「导出 JSON」完全一致：同名多条各占一行（多账号不会被压平），'
+                    '备注、分组、启用状态一并带上，可原样导回本 APP 或面板 Web。',
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.5,
+                      color: surfaces.mutedText,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          const SizedBox(height: AppSpacing.lg),
+          if (_error != null)
+            OutlinedButton.icon(
+              onPressed: _loading ? null : _load,
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text('重试'),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size(0, 44),
+              ),
+            )
+          else
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: canExport ? _save : null,
+                    icon: const Icon(Icons.save_alt, size: 16),
+                    label: const Text('保存为文件'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 44),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: canExport ? _copy : null,
+                    icon: const Icon(Icons.copy, size: 16),
+                    label: const Text('复制'),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(0, 44),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 导入弹层。
+///
+/// 只提供面板已有的两种模式（合并 / 替换），不自己拼第三种 —— 理由见 [EnvImportMode]。
+///
+/// 提交前做一次本地体检（[analyzeEnvImport]），其中**合并模式下会压平多账号**
+/// 这一条是硬拦：面板 `POST /envs/import` 的 merge 没有 `PUT /envs/by-name` 那道
+/// 「同名多条直接报 409」的守卫，放过去就是无声的数据损坏。
+class _EnvImportSheet extends StatefulWidget {
+  final List<EnvTransferItem> existing;
+  final Future<EnvImportOutcome> Function(
+    List<EnvTransferItem> items,
+    EnvImportMode mode,
+  )
+  submit;
+
+  const _EnvImportSheet({required this.existing, required this.submit});
+
+  @override
+  State<_EnvImportSheet> createState() => _EnvImportSheetState();
+}
+
+class _EnvImportSheetState extends State<_EnvImportSheet> {
+  final _textController = TextEditingController();
+  Timer? _debounce;
+
+  EnvImportMode _mode = EnvImportMode.merge;
+  EnvTransferParseResult _parsed = const EnvTransferParseResult();
+  EnvImportPreflight? _preflight;
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _textController.dispose();
+    super.dispose();
+  }
+
+  /// 边打字边整份 jsonDecode 会卡（粘一份 1MB 的进来更明显），沿用列表页搜索框的防抖。
+  void _scheduleAnalyze() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), _analyze);
+  }
+
+  void _analyze() {
+    if (!mounted) {
+      return;
+    }
+    final raw = _textController.text.trim();
+    if (raw.isEmpty) {
+      // 空白不算「格式错误」，别一进来就给用户一条红提示。
+      setState(() {
+        _parsed = const EnvTransferParseResult();
+        _preflight = null;
+      });
+      return;
+    }
+
+    final parsed = parseEnvTransferJson(raw);
+    setState(() {
+      _parsed = parsed;
+      _preflight = parsed.ok
+          ? analyzeEnvImport(
+              items: parsed.items,
+              existing: widget.existing,
+              mode: _mode,
+            )
+          : null;
+    });
+  }
+
+  void _setMode(EnvImportMode mode) {
+    if (_mode == mode) {
+      return;
+    }
+    setState(() => _mode = mode);
+    // 体检结果与模式强相关（压平 / 已存在多条只在 merge 下成立），必须重算。
+    _analyze();
+  }
+
+  Future<void> _pickFile() async {
+    try {
+      // 不限制扩展名：Android 的文档选择器对 .json/.txt 的 MIME 映射各家实现不一，
+      // 限了反而会出现「文件就在那儿但是灰的」。
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: false,
+        withData: true,
+      );
+      if (!mounted) {
+        return;
+      }
+      if (result == null || result.files.isEmpty) {
+        // 用户自己取消了，不提示。
+        return;
+      }
+
+      final file = result.files.first;
+      final bytes = file.bytes;
+      if (bytes == null || bytes.isEmpty) {
+        AppSnack.error(context, '读取文件失败或文件为空');
+        return;
+      }
+
+      _textController.text = utf8.decode(bytes, allowMalformed: true);
+      _analyze();
+      AppSnack.show(context, '已载入 ${file.name}');
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      AppSnack.error(context, extractErrorMessage(error, '选择文件失败'));
+    }
+  }
+
+  Future<bool> _confirmReplace(int total) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('替换导入'),
+        content: Text(
+          '替换会先删除面板上的全部环境变量，再写入这 $total 条。\n'
+          '面板上有、而这份内容里没有的变量将无法找回。',
+        ),
+        actions: [
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 44,
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(dialogCtx).pop(false),
+                    child: const Text('取消'),
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: SizedBox(
+                  height: 44,
+                  child: FilledButton(
+                    onPressed: () => Navigator.of(dialogCtx).pop(true),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.danger,
+                    ),
+                    child: const Text('清空并导入'),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    return confirmed == true;
+  }
+
+  Future<void> _submit() async {
+    final preflight = _preflight;
+    if (_submitting || preflight == null || preflight.blocked) {
+      return;
+    }
+
+    if (_mode == EnvImportMode.replace) {
+      final confirmed = await _confirmReplace(preflight.total);
+      if (!mounted) {
+        return;
+      }
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    final navigator = Navigator.of(context);
+    setState(() => _submitting = true);
+
+    try {
+      final outcome = await widget.submit(_parsed.items, _mode);
+      if (!mounted) {
+        return;
+      }
+      // 先弹提示再关弹层：提示挂在根 ScaffoldMessenger 上，弹层关掉它照样在；
+      // 反过来先 pop 的话，这里的 context 已经失效，AppSnack 会静默什么都不做。
+      if (outcome.errors.isEmpty) {
+        AppSnack.success(context, outcome.message);
+      } else {
+        AppSnack.warn(
+          context,
+          '${outcome.message}；${outcome.errors.length} 条被跳过：'
+          '${outcome.errors.first}',
+        );
+      }
+      navigator.pop();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _submitting = false);
+      AppSnack.error(context, extractErrorMessage(error, '导入环境变量失败'));
+    }
+  }
+
+  List<Widget> _buildCheckWidgets(AppSurfaces surfaces) {
+    final parseError = _parsed.error;
+    if (parseError != null) {
+      return [
+        AppNotice(
+          color: AppColors.danger,
+          icon: Icons.error_outline,
+          text: parseError,
+          accentText: true,
+        ),
+      ];
+    }
+
+    final preflight = _preflight;
+    if (preflight == null) {
+      return [
+        const AppNotice(
+          color: AppColors.primary,
+          icon: Icons.info_outline,
+          text:
+              '粘贴「导出变量」得到的 JSON，或从文件载入。格式与面板 Web 的「导出 JSON / 导入」一致，'
+              '两边可以互导。',
+        ),
+      ];
+    }
+
+    final widgets = <Widget>[
+      AppCard(
+        radius: AppRadius.md,
+        color: surfaces.subtle,
+        borderColor: surfaces.subtleBorder,
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Text(
+          '解析出 ${preflight.total} 条 · ${_formatTransferSize(preflight.payloadBytes)}',
+          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+        ),
+      ),
+    ];
+
+    if (_parsed.skipped > 0) {
+      widgets.add(
+        AppNotice(
+          color: AppColors.warning,
+          icon: Icons.warning_amber_rounded,
+          text: '有 ${_parsed.skipped} 项不是对象，已跳过。',
+          accentText: true,
+        ),
+      );
+    }
+
+    if (preflight.oversized) {
+      widgets.add(
+        AppNotice(
+          color: AppColors.danger,
+          icon: Icons.error_outline,
+          text:
+              '内容 ${_formatTransferSize(preflight.payloadBytes)} '
+              '超过面板 1MB 的请求体上限，请分批导入。',
+          accentText: true,
+        ),
+      );
+    }
+
+    if (preflight.collapsedIdentities.isNotEmpty) {
+      widgets.add(
+        AppNotice(
+          color: AppColors.danger,
+          icon: Icons.error_outline,
+          text:
+              '合并模式按「变量名 + 备注」认领记录，'
+              '${_joinIdentityPreview(preflight.collapsedIdentities)} '
+              '在这份内容里出现了多次，导入后只会剩一条 —— 多账号会被压平。'
+              '请改用「替换」，或给它们填上不同的备注。',
+          accentText: true,
+        ),
+      );
+    }
+
+    if (preflight.ambiguousIdentities.isNotEmpty) {
+      widgets.add(
+        AppNotice(
+          color: AppColors.warning,
+          icon: Icons.warning_amber_rounded,
+          text:
+              '面板上已有多条同名同备注的记录（'
+              '${_joinIdentityPreview(preflight.ambiguousIdentities)}），'
+              '合并只会更新其中一条，其余保持原样。',
+          accentText: true,
+        ),
+      );
+    }
+
+    if (preflight.invalidNames.isNotEmpty) {
+      widgets.add(
+        AppNotice(
+          color: AppColors.warning,
+          icon: Icons.warning_amber_rounded,
+          text:
+              '这些变量名不符合面板规则（只能字母或下划线开头，后接字母数字下划线），'
+              '面板会跳过它们：${_joinIdentityPreview(preflight.invalidNames)}。',
+          accentText: true,
+        ),
+      );
+    }
+
+    if (_mode == EnvImportMode.replace) {
+      widgets.add(
+        const AppNotice(
+          color: AppColors.danger,
+          icon: Icons.delete_forever,
+          text: '替换会先清空面板上的全部环境变量，再写入上面这些。这一步不可撤销。',
+          accentText: true,
+        ),
+      );
+    }
+
+    return widgets;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final surfaces = context.surfaces;
+    final media = MediaQuery.of(context);
+    final preflight = _preflight;
+    final canSubmit =
+        !_submitting && preflight != null && !preflight.blocked;
+
+    final checkWidgets = _buildCheckWidgets(surfaces);
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: media.size.height * 0.86),
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          AppSpacing.xl,
+          0,
+          AppSpacing.xl,
+          media.viewInsets.bottom + AppSpacing.xl,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              '导入环境变量',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Wrap(
+                      spacing: AppSpacing.sm,
+                      children: [
+                        ChoiceChip(
+                          label: const Text('合并'),
+                          selected: _mode == EnvImportMode.merge,
+                          onSelected: (value) {
+                            if (value) {
+                              _setMode(EnvImportMode.merge);
+                            }
+                          },
+                        ),
+                        ChoiceChip(
+                          label: const Text('替换'),
+                          selected: _mode == EnvImportMode.replace,
+                          onSelected: (value) {
+                            if (value) {
+                              _setMode(EnvImportMode.replace);
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    Text(
+                      _mode == EnvImportMode.merge
+                          ? '合并：按「变量名 + 备注」认领面板上已有的记录，命中就更新值 / 分组 / 启用状态，'
+                                '没命中就新增。不会删除这份内容里没有的变量。'
+                          : '替换：先清空面板上的全部环境变量，再按顺序全量写入。同名多条会原样保留。',
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.5,
+                        color: surfaces.mutedText,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    TextField(
+                      controller: _textController,
+                      maxLines: 8,
+                      minLines: 4,
+                      keyboardType: TextInputType.multiline,
+                      textAlignVertical: TextAlignVertical.top,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'JSON 内容',
+                        alignLabelWithHint: true,
+                        hintText:
+                            '[{"name": "JD_COOKIE", "value": "pt_key=...", '
+                            '"remarks": "账号1", "groups": ["京东"], "enabled": true}]',
+                        hintMaxLines: 3,
+                      ),
+                      onChanged: (_) => _scheduleAnalyze(),
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    // 不要把循环变量取名 widget —— 那会遮住 State.widget。
+                    for (final notice in checkWidgets) ...[
+                      notice,
+                      const SizedBox(height: AppSpacing.sm),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _submitting ? null : _pickFile,
+                    icon: const Icon(Icons.folder_open, size: 16),
+                    label: const Text('选择文件'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 44),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: canSubmit ? _submit : null,
+                    icon: const Icon(Icons.file_download_done, size: 16),
+                    label: Text(_submitting ? '导入中…' : '导入'),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(0, 44),
+                      backgroundColor: _mode == EnvImportMode.replace
+                          ? AppColors.danger
+                          : null,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
