@@ -241,5 +241,5 @@ buildTypes {
 
 `.github/workflows/` 下 grep `dart format` / `analyze` / `flutter test` 均无命中。
 也就是说**这三项全靠本地自觉**，CI 不会拦住你。改动后请自己跑。
-- `pubspec.yaml` 的 `version:` 同时是 APP 版本号与 build number（当前 `1.2.6+19`），
+- `pubspec.yaml` 的 `version:` 同时是 APP 版本号与 build number（当前 `1.3.0+20`），
   发版时 `docs/release-notes/` 下要有对应文件。

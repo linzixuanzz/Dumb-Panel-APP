@@ -124,14 +124,23 @@ features/
 > `_User` 与 `User` 并存是真实的重复，且触发了 lint（见 quality-guidelines）。
 > 新代码不要再制造这种同名影子模型。
 
-### `shared/utils/`（4 个）
+### `shared/utils/`（6 个）
 
 | 文件 | 导出 | 被引用 |
 |---|---|---|
-| `api_utils.dart` (100) | `extractData` / `extractPaginated` / `extractErrorMessage` / `extractScriptSaveErrorMessage` | 22 个文件、92 处 |
-| `time_utils.dart` (17) | `formatTimeCn(DateTime?, {short})` | 统一中文时间格式，注释明确「避免页面里混用 MM-dd」 |
-| `ansi_text.dart` (298) | 日志 ANSI 转义 → `TextSpan` | 日志与依赖页 |
-| `log_background.dart` (95) | 日志终端背景色 | 日志相关页 |
+| `api_utils.dart` | `extractData` / `extractPaginated` / `extractErrorMessage` / `extractScriptSaveErrorMessage` / `extractListErrorMessage` | 22 个文件、92 处 |
+| `time_utils.dart` | `formatTimeCn(DateTime?, {short})` | 统一中文时间格式，注释明确「避免页面里混用 MM-dd」 |
+| `ansi_text.dart` | 日志 ANSI 转义 → `TextSpan` | 日志与依赖页 |
+| `log_background.dart` | 日志终端背景色 | 日志相关页 |
+| `panel_enums.dart` | 面板枚举换算（任务状态 / 日志状态 / 依赖类型与状态 / 任务类型） | models 委托过来；**未知值一律回吐原始值**，见 panel-contract.md |
+| `duration_utils.dart` | `formatDurationSeconds(num?)` | 耗时显示，与面板 `web/src/utils/duration.ts` **逐字对齐**（同为向下截断） |
+
+> ⚠️ `duration_utils` 的函数名带 `Seconds` 是有意的：本仓库存在一个毫秒字段
+> （`open_app_logs.duration`，服务端是 `.Milliseconds()`），名字带单位是防误用的有效防线。
+>
+> 这两个新文件都是**纯函数、不 import Flutter**，所以可以直接单测
+> （`test/shared/panel_enums_test.dart`、`test/shared/duration_utils_test.dart`）。
+> 新增这类换算逻辑时照这个形状放，不要长在 model 的 getter 里。
 
 ### `shared/widgets/`
 
