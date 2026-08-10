@@ -31,11 +31,7 @@ class NotifyChannel {
     );
   }
 
-  Map<String, dynamic> toJson() => {
-    'name': name,
-    'type': type,
-    'config': jsonEncode(config),
-  };
+  // 原有的 toJson() 全库无人调用（真实请求体是页面内联字面量），已删。理由见 task.dart。
 }
 
 int _int(dynamic v) => (v is num) ? v.toInt() : 0;

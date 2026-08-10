@@ -43,13 +43,8 @@ class EnvVar {
     );
   }
 
-  Map<String, dynamic> toJson() => {
-    'name': name,
-    'value': value,
-    'remarks': remarks,
-    'group': group,
-    'groups': groups,
-  };
+  // 原有的 toJson() 全库无人调用（真实请求体是页面内联字面量；环境变量导入导出走的是
+  // EnvTransferItem.toJson，不是这个），已删。理由见 task.dart。
 }
 
 int _int(dynamic v) => (v is num) ? v.toInt() : 0;

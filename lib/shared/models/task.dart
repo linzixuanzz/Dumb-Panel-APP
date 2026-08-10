@@ -177,26 +177,9 @@ class Task {
     );
   }
 
-  Map<String, dynamic> toJson() => {
-    'name': name,
-    'command': command,
-    'cron_expression': cronExpression,
-    'task_type': taskType,
-    'python_version': pythonVersion,
-    'labels': labels,
-    'timeout': timeout,
-    'random_delay_seconds': randomDelaySeconds,
-    'max_retries': maxRetries,
-    'retry_interval': retryInterval,
-    'notify_on_failure': notifyOnFailure,
-    'notify_on_success': notifyOnSuccess,
-    'notification_channel_id': notificationChannelId,
-    'depends_on': dependsOn,
-    'sort_order': sortOrder,
-    'task_before': taskBefore,
-    'task_after': taskAfter,
-    'allow_multiple_instances': allowMultipleInstances,
-  };
+  // 这里原本有一份 toJson()，全库无人调用（真实请求体是 task_form_page 里的内联字面量），
+  // 于是同一个实体存在两份字段清单、改一处漏一处。已删，不要再加回来：
+  // 要提交任务就用页面那份，它才是真正发出去的东西。
 }
 
 int _int(dynamic v) => (v is num) ? v.toInt() : 0;

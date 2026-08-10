@@ -55,15 +55,7 @@ class Dependency {
     );
   }
 
-  Map<String, dynamic> toJson() => {
-    'name': name,
-    'version': version,
-    'type': type,
-    'python_version': pythonVersion,
-    'remark': remark,
-    'status': status,
-    'log': log,
-  };
+  // 原有的 toJson() 全库无人调用（真实请求体是页面内联字面量），已删。理由见 task.dart。
 }
 
 int _int(dynamic value) => (value is num) ? value.toInt() : 0;
