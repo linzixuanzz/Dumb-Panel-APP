@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -13,9 +14,12 @@ import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/panel_enums.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_circle_add_button.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_notice.dart';
+import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_snack.dart';
+import '../../../shared/widgets/app_state_views.dart';
 
 // ── Provider ──
 
@@ -28,6 +32,9 @@ final depListProvider = StateNotifierProvider<DepListNotifier, DepListState>((
 class DepListState {
   final List<Dependency> items;
   final bool loading;
+
+  /// 列表加载失败的原因。UI 据此把「拿不到数据」和「真的没有依赖」分开。
+  final String? error;
   final String selectedType;
   final String selectedPythonVersion;
   final String pythonDefaultVersion;
@@ -37,6 +44,7 @@ class DepListState {
   const DepListState({
     this.items = const [],
     this.loading = false,
+    this.error,
     this.selectedType = 'nodejs',
     this.selectedPythonVersion = '3.12',
     this.pythonDefaultVersion = '3.12',
@@ -47,6 +55,7 @@ class DepListState {
   DepListState copyWith({
     List<Dependency>? items,
     bool? loading,
+    String? error,
     String? selectedType,
     String? selectedPythonVersion,
     String? pythonDefaultVersion,
@@ -56,6 +65,8 @@ class DepListState {
     return DepListState(
       items: items ?? this.items,
       loading: loading ?? this.loading,
+      // 刻意是裸 error：不传即清空，否则失败一次之后错误提示永远消不掉。
+      error: error,
       selectedType: selectedType ?? this.selectedType,
       selectedPythonVersion:
           selectedPythonVersion ?? this.selectedPythonVersion,
@@ -130,7 +141,13 @@ class DepMirrorConfig {
 }
 
 class DepListNotifier extends StateNotifier<DepListState> {
-  DepListNotifier() : super(const DepListState());
+  /// [dio] **仅供测试注入**，生产路径不传，仍然走 `DioClient` 单例。
+  /// 单例的 baseUrl 会随切换面板被改写，所以这里不在构造时把它存下来。
+  DepListNotifier({Dio? dio}) : _injectedDio = dio, super(const DepListState());
+
+  final Dio? _injectedDio;
+
+  Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 
   Future<List<Dependency>> fetchByType(
     String type, {
@@ -145,7 +162,7 @@ class DepListNotifier extends StateNotifier<DepListState> {
     if (type == 'python' && (pythonVersion ?? '').trim().isNotEmpty) {
       params['python_version'] = pythonVersion!.trim();
     }
-    final resp = await DioClient.instance.dio.get(
+    final resp = await _dio.get(
       ApiEndpoints.deps,
       queryParameters: params,
     );
@@ -160,6 +177,7 @@ class DepListNotifier extends StateNotifier<DepListState> {
       selectedType: nextType,
       selectedPythonVersion: nextPythonVersion,
       loading: true,
+      error: null,
     );
     try {
       final items = await fetchByType(
@@ -167,8 +185,12 @@ class DepListNotifier extends StateNotifier<DepListState> {
         pythonVersion: nextType == 'python' ? nextPythonVersion : null,
       );
       state = state.copyWith(items: items, loading: false);
-    } catch (_) {
-      state = state.copyWith(loading: false);
+    } catch (e) {
+      // fetchByType 自己不 catch，异常原样抛到这里。
+      state = state.copyWith(
+        loading: false,
+        error: extractListErrorMessage(e, '加载依赖失败'),
+      );
     }
   }
 
@@ -181,9 +203,13 @@ class DepListNotifier extends StateNotifier<DepListState> {
   }
 
   Future<void> loadPythonRuntimes() async {
-    state = state.copyWith(runtimeLoading: true);
+    // 必须显式把 error 传回去。copyWith 是「不传即清空」语义（见 DepListState.copyWith），
+    // 这个方法拉的是 Python 运行时列表、跟依赖列表毫无关系，
+    // 不带上 error 就会顺手把「依赖列表加载失败」那条提示抹掉，页面退回空态。
+    // 现在两个调用点恰好都排在 load() 之前所以看不出问题，但顺序一调换就会静默吞掉错误。
+    state = state.copyWith(runtimeLoading: true, error: state.error);
     try {
-      final resp = await DioClient.instance.dio.get(
+      final resp = await _dio.get(
         ApiEndpoints.depsPythonRuntimes,
       );
       final raw = resp.data;
@@ -218,14 +244,15 @@ class DepListNotifier extends StateNotifier<DepListState> {
             ? state.selectedPythonVersion
             : defaultVersion,
         runtimeLoading: false,
+        error: state.error,
       );
     } catch (_) {
-      state = state.copyWith(runtimeLoading: false);
+      state = state.copyWith(runtimeLoading: false, error: state.error);
     }
   }
 
   Future<void> setDefaultPythonRuntime(String version) async {
-    await DioClient.instance.dio.put(
+    await _dio.put(
       ApiEndpoints.depsPythonRuntimeDefault,
       data: {'version': version},
     );
@@ -234,7 +261,7 @@ class DepListNotifier extends StateNotifier<DepListState> {
   }
 
   Future<void> delete(int id, {bool force = false}) async {
-    await DioClient.instance.dio.delete(
+    await _dio.delete(
       ApiEndpoints.depById(id),
       queryParameters: force ? {'force': true} : null,
     );
@@ -242,7 +269,7 @@ class DepListNotifier extends StateNotifier<DepListState> {
   }
 
   Future<void> batchDelete(List<int> ids) async {
-    await DioClient.instance.dio.post(
+    await _dio.post(
       ApiEndpoints.depsBatchDelete,
       data: {'ids': ids},
     );
@@ -250,12 +277,12 @@ class DepListNotifier extends StateNotifier<DepListState> {
   }
 
   Future<void> reinstall(int id) async {
-    await DioClient.instance.dio.put(ApiEndpoints.depReinstall(id));
+    await _dio.put(ApiEndpoints.depReinstall(id));
     await load();
   }
 
   Future<void> cancel(int id) async {
-    await DioClient.instance.dio.put(ApiEndpoints.depCancel(id));
+    await _dio.put(ApiEndpoints.depCancel(id));
     await load();
   }
 
@@ -263,7 +290,7 @@ class DepListNotifier extends StateNotifier<DepListState> {
     required String type,
     required List<String> names,
   }) async {
-    await DioClient.instance.dio.post(
+    await _dio.post(
       ApiEndpoints.deps,
       data: {
         'type': type,
@@ -275,7 +302,7 @@ class DepListNotifier extends StateNotifier<DepListState> {
   }
 
   Future<Map<String, dynamic>> getStatus(int id) async {
-    final resp = await DioClient.instance.dio.get(ApiEndpoints.depStatus(id));
+    final resp = await _dio.get(ApiEndpoints.depStatus(id));
     final data = extractData(resp.data);
     if (data is Map<String, dynamic>) {
       return data;
@@ -287,7 +314,7 @@ class DepListNotifier extends StateNotifier<DepListState> {
   }
 
   Future<DepMirrorConfig> getMirrors() async {
-    final resp = await DioClient.instance.dio.get(ApiEndpoints.depsMirrors);
+    final resp = await _dio.get(ApiEndpoints.depsMirrors);
     final data = extractData(resp.data);
     if (data is Map<String, dynamic>) {
       return DepMirrorConfig.fromJson(data);
@@ -299,7 +326,7 @@ class DepListNotifier extends StateNotifier<DepListState> {
   }
 
   Future<void> setMirrors(DepMirrorConfig config) async {
-    await DioClient.instance.dio.put(
+    await _dio.put(
       ApiEndpoints.depsMirrors,
       data: config.toRequestJson(),
     );
@@ -469,7 +496,6 @@ class _DepListPageState extends ConsumerState<DepListPage> {
   }
 
   Future<_CreateDepRequest?> _showCreateDialog() async {
-    final messenger = ScaffoldMessenger.of(context);
     final namesController = TextEditingController();
     var createType = ref.read(depListProvider).selectedType;
     var autoSplit = true;
@@ -535,9 +561,12 @@ class _DepListPageState extends ConsumerState<DepListPage> {
               onPressed: () {
                 final names = _parseNames(namesController.text, autoSplit);
                 if (names.isEmpty) {
-                  messenger.showSnackBar(
-                    const SnackBar(content: Text('请输入依赖名称')),
-                  );
+                  // 校验没过，不是请求出错，所以是 warn 不是 error。
+                  // 走页面自己的 _showWarning 而不是这层 builder 的 context：
+                  // builder 的参数也叫 context，会遮蔽 State.context，而全 App
+                  // 只有 MaterialApp 建的那一个 ScaffoldMessenger，页面 context
+                  // 解析到的正是原先提前取的那个 messenger 实例。
+                  _showWarning('请输入依赖名称');
                   return;
                 }
                 Navigator.of(
@@ -1081,10 +1110,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  GestureDetector(
-                    onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
-                  ),
+                  const AppBackButton(),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(
@@ -1108,22 +1134,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                           )
                         : const Icon(Icons.settings_suggest_outlined),
                   ),
-                  GestureDetector(
-                    onTap: _handleCreate,
-                    child: Container(
-                      width: 32,
-                      height: 32,
-                      decoration: const BoxDecoration(
-                        color: AppColors.primary,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.add,
-                        size: 20,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
+                  AppCircleAddButton(onTap: _handleCreate),
                 ],
               ),
             ),
@@ -1247,6 +1258,19 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                             child: CircularProgressIndicator(
                               color: AppColors.primary,
                             ),
+                          ),
+                        ],
+                      )
+                    // 拿不到依赖和当前类型下真的没有依赖是两回事，
+                    // 必须先判 error，否则断网时用户看到的是「暂无 XX 依赖」。
+                    : state.error != null && state.items.isEmpty
+                    ? ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: [
+                          AppErrorView(
+                            title: '依赖加载失败',
+                            message: state.error!,
+                            onRetry: _loadPageData,
                           ),
                         ],
                       )
@@ -1403,6 +1427,11 @@ class _DepCard extends StatelessWidget {
     return AppCard(
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      // 勾选框被 SizedBox 压到 24dp，远低于可用的最小命中区。
+      // 这里不去撑大它——上面那段注释说了这张卡的高度已经没有余量。
+      // 改成整卡可点（任务页与环境变量页的卡本来就是这么做的），
+      // 勾选框仍是 24dp 的视觉尺寸，但用户点卡片任意位置都能选中。
+      onTap: () => onSelected(!selected),
       child: Row(
         children: [
           SizedBox(
@@ -1493,7 +1522,10 @@ class _DepCard extends StatelessWidget {
             icon: const Icon(Icons.terminal, size: 18),
             tooltip: '日志',
             visualDensity: VisualDensity.compact,
-            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+            constraints: const BoxConstraints(
+              minWidth: AppTapTarget.min,
+              minHeight: AppTapTarget.min,
+            ),
           ),
           PopupMenuButton<String>(
             onSelected: (action) {

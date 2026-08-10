@@ -1,8 +1,8 @@
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
@@ -10,7 +10,11 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/notify_channel.dart';
 import '../../../shared/utils/api_utils.dart';
+import '../../../shared/widgets/app_circle_add_button.dart';
+import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_snack.dart';
+import '../../../shared/widgets/app_state_views.dart';
 import '../utils/channel_config.dart';
 import '../utils/frozen_channel_fields_v300.dart';
 import '../utils/notify_field_schema.dart';
@@ -26,6 +30,9 @@ class NotificationListState {
   final List<NotifyChannel> items;
   final bool loading;
 
+  /// 拉取失败的原因，成功时为 null。
+  final String? error;
+
   /// 渠道类型 + 每个类型的字段定义，全部来自面板 `/notifications/types`。
   /// 老面板只回 `{type,name}`，这时每一项的 `fields` 是空的，
   /// 由 [resolveNotifyChannelFields] 回落到 v3.0.0 冻结快照。
@@ -34,29 +41,42 @@ class NotificationListState {
   const NotificationListState({
     this.items = const [],
     this.loading = false,
+    this.error,
     this.types = const [],
   });
 
   NotificationListState copyWith({
     List<NotifyChannel>? items,
     bool? loading,
+    String? error,
     List<NotifyChannelSchema>? types,
   }) {
     return NotificationListState(
       items: items ?? this.items,
       loading: loading ?? this.loading,
+      // 故意不写 `error ?? this.error`：不传 error 就等于清空错误态，
+      // 否则一次失败之后的每次成功刷新都还挂着旧错误。
+      error: error,
       types: types ?? this.types,
     );
   }
 }
 
 class NotificationListNotifier extends StateNotifier<NotificationListState> {
-  NotificationListNotifier() : super(const NotificationListState());
+  /// [dio] **仅供测试注入**，生产路径不传，仍然走 `DioClient` 单例。
+  /// 单例的 baseUrl 会随切换面板被改写，所以这里不在构造时把它存下来。
+  NotificationListNotifier({Dio? dio})
+    : _injectedDio = dio,
+      super(const NotificationListState());
+
+  final Dio? _injectedDio;
+
+  Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 
   Future<void> load() async {
-    state = state.copyWith(loading: true);
+    state = state.copyWith(loading: true, error: null);
     try {
-      final dio = DioClient.instance.dio;
+      final dio = _dio;
       final channelsFuture = dio.get(ApiEndpoints.notifications);
       // 渠道类型表是辅助数据，本来就有冻结快照兜底。收紧 validateStatus 后
       // 它的 4xx 会让 Future.wait 整体失败，连已经取到的渠道列表都会被丢掉，
@@ -75,10 +95,12 @@ class NotificationListNotifier extends StateNotifier<NotificationListState> {
         loading: false,
         types: resolveNotifyChannelTypes(types),
       );
-    } catch (_) {
+    } catch (e) {
       state = state.copyWith(
         loading: false,
+        // 类型表要单独降级（见上面注释），失败时也得保住冻结快照兜底。
         types: resolveNotifyChannelTypes(state.types),
+        error: extractListErrorMessage(e, '加载通知渠道失败'),
       );
     }
   }
@@ -89,9 +111,7 @@ class NotificationListNotifier extends StateNotifier<NotificationListState> {
   /// `fields` 为空的 schema，形状本身就是探测结果。
   Future<List<NotifyChannelSchema>> _fetchTypes() async {
     try {
-      final response = await DioClient.instance.dio.get(
-        ApiEndpoints.notificationTypes,
-      );
+      final response = await _dio.get(ApiEndpoints.notificationTypes);
       return parseNotifyChannelSchemas(extractData(response.data));
     } catch (_) {
       return const [];
@@ -99,7 +119,7 @@ class NotificationListNotifier extends StateNotifier<NotificationListState> {
   }
 
   Future<void> toggle(int id, bool enabled) async {
-    final dio = DioClient.instance.dio;
+    final dio = _dio;
     if (enabled) {
       await dio.put(ApiEndpoints.notificationEnable(id));
     } else {
@@ -109,24 +129,21 @@ class NotificationListNotifier extends StateNotifier<NotificationListState> {
   }
 
   Future<void> test(int id) async {
-    await DioClient.instance.dio.post(ApiEndpoints.notificationTest(id));
+    await _dio.post(ApiEndpoints.notificationTest(id));
   }
 
   Future<void> delete(int id) async {
-    await DioClient.instance.dio.delete(ApiEndpoints.notificationById(id));
+    await _dio.delete(ApiEndpoints.notificationById(id));
     await load();
   }
 
   Future<void> create(Map<String, dynamic> data) async {
-    await DioClient.instance.dio.post(ApiEndpoints.notifications, data: data);
+    await _dio.post(ApiEndpoints.notifications, data: data);
     await load();
   }
 
   Future<void> update(int id, Map<String, dynamic> data) async {
-    await DioClient.instance.dio.put(
-      ApiEndpoints.notificationById(id),
-      data: data,
-    );
+    await _dio.put(ApiEndpoints.notificationById(id), data: data);
     await load();
   }
 }
@@ -161,10 +178,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  GestureDetector(
-                    onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
-                  ),
+                  const AppBackButton(),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(
@@ -175,22 +189,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                       ),
                     ),
                   ),
-                  GestureDetector(
-                    onTap: () => _showChannelDialog(),
-                    child: Container(
-                      width: 32,
-                      height: 32,
-                      decoration: const BoxDecoration(
-                        color: AppColors.primary,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.add,
-                        size: 20,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
+                  AppCircleAddButton(onTap: () => _showChannelDialog()),
                 ],
               ),
             ),
@@ -209,6 +208,20 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                             child: CircularProgressIndicator(
                               color: AppColors.primary,
                             ),
+                          ),
+                        ],
+                      )
+                    // 拿不到数据和真的没有渠道是两回事，必须先判 error。
+                    : state.error != null && state.items.isEmpty
+                    ? ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: [
+                          AppErrorView(
+                            title: '通知渠道加载失败',
+                            message: state.error!,
+                            onRetry: () => ref
+                                .read(notificationListProvider.notifier)
+                                .load(),
                           ),
                         ],
                       )
@@ -266,9 +279,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_extractMessage(error, '修改渠道状态失败'))),
-      );
+      AppSnack.error(context, extractErrorMessage(error, '修改渠道状态失败'));
     }
   }
 
@@ -278,16 +289,12 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('测试通知已发送')));
+      AppSnack.success(context, '测试通知已发送');
     } catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(_extractMessage(error, '测试发送失败'))));
+      AppSnack.error(context, extractErrorMessage(error, '测试发送失败'));
     }
   }
 
@@ -334,9 +341,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
         if (!mounted) {
           return;
         }
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(_extractMessage(error, '删除失败'))));
+        AppSnack.error(context, extractErrorMessage(error, '删除失败'));
       }
     }
   }
@@ -349,7 +354,12 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
   static const String _rawConfigFieldKey = '__raw_json__';
 
   void _showChannelDialog({NotifyChannel? channel}) {
-    final messenger = ScaffoldMessenger.of(context);
+    // 底部弹窗里的提示一律用**本页的 context**（不是 builder 的 ctx）：
+    // 提交成功那条是在 `Navigator.of(ctx).pop()` 之后弹的，那时 ctx 已经失效，
+    // 用它会被 AppSnack 内部的 context.mounted 判空静默丢掉。
+    // 原来这里提前取 `ScaffoldMessenger.of(context)` 就是为了跨 await 不碰 context，
+    // AppSnack 同样要 context，所以改成每个 await 之后先判本页的 mounted —— 行为一致，
+    // 也不会新增 use_build_context_synchronously。
     final nameController = TextEditingController(text: channel?.name ?? '');
     final existingConfig = Map<String, dynamic>.from(channel?.config ?? {});
     final fieldControllers = <String, TextEditingController>{};
@@ -599,8 +609,12 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                       onPressed: () async {
                         final name = nameController.text.trim();
                         if (name.isEmpty) {
-                          messenger.showSnackBar(
-                            const SnackBar(content: Text('名称不能为空')),
+                          // 这颗按钮可以连点，下面几条提示统一 replaceCurrent：
+                          // 不顶掉上一条的话，用户改完再点，先看到的还是上一次的过期结论。
+                          AppSnack.warn(
+                            context,
+                            '名称不能为空',
+                            replaceCurrent: true,
                           );
                           return;
                         }
@@ -619,8 +633,10 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                             values: draft,
                           );
                           if (invalid != null) {
-                            messenger.showSnackBar(
-                              SnackBar(content: Text(invalid)),
+                            AppSnack.warn(
+                              context,
+                              invalid,
+                              replaceCurrent: true,
                             );
                             return;
                           }
@@ -646,8 +662,10 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                           );
                           if (parsed == null) {
                             // JSON 写错时原来会静默退化成 {}，等于把整份配置清空。
-                            messenger.showSnackBar(
-                              const SnackBar(content: Text('配置 JSON 格式不正确')),
+                            AppSnack.warn(
+                              context,
+                              '配置 JSON 格式不正确',
+                              replaceCurrent: true,
                             );
                             return;
                           }
@@ -672,22 +690,20 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                           }
                           if (!mounted) return;
                           Navigator.of(ctx).pop();
-                          messenger.showSnackBar(
-                            SnackBar(
-                              content: Text(channel == null ? '创建成功' : '保存成功'),
-                            ),
+                          AppSnack.success(
+                            context,
+                            channel == null ? '创建成功' : '保存成功',
+                            replaceCurrent: true,
                           );
                         } catch (error) {
                           if (!mounted) return;
-                          messenger.showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                _extractMessage(
-                                  error,
-                                  channel == null ? '创建失败' : '保存失败',
-                                ),
-                              ),
+                          AppSnack.error(
+                            context,
+                            extractErrorMessage(
+                              error,
+                              channel == null ? '创建失败' : '保存失败',
                             ),
+                            replaceCurrent: true,
                           );
                         }
                       },
@@ -854,17 +870,4 @@ String _typeName(List<NotifyChannelSchema> types, String type) {
     }
   }
   return type;
-}
-
-String _extractMessage(dynamic error, String fallback) {
-  try {
-    final data = (error as dynamic).response?.data;
-    if (data is Map && data['error'] != null) {
-      return data['error'].toString();
-    }
-    if (data is Map && data['message'] != null) {
-      return data['message'].toString();
-    }
-  } catch (_) {}
-  return fallback;
 }

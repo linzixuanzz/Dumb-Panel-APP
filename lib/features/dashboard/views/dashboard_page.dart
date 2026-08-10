@@ -401,15 +401,17 @@ class _ServerInfoCard extends StatelessWidget {
               // 主机名前的圆点语义是「在线」，属于 success 绿；primary 是品牌色
               // 与「运行中」，不承担「在线 / 健康」。
               //
-              // ⚠️ 已知缺口（本期不修）：这个圆点**不绑定任何连接或健康状态**，
-              // 面板不可达、接口报错时它同样常亮 —— 它现在只是个装饰。
-              // 要真正表示在线，得接 dashboardProvider 的 error / 心跳状态，
-              // 那是行为改动，不属于本期的配色语义修正。
+              // ⚠️ 它的准确语义是「最近一次拉取成功与否」，**不是心跳**：
+              // 面板刚挂、而下一次拉取还没发生时，它仍然是绿的。
+              // 这条只负责消掉「明明加载失败了还亮绿灯」这种主动骗人的情形；
+              // 要真正的在线语义得单独接心跳，那是另一件事。
               Container(
                 width: 8,
                 height: 8,
-                decoration: const BoxDecoration(
-                  color: AppColors.success,
+                decoration: BoxDecoration(
+                  color: data.error == null
+                      ? AppColors.success
+                      : AppColors.danger,
                   shape: BoxShape.circle,
                 ),
               ),

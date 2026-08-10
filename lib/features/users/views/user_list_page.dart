@@ -1,6 +1,6 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
@@ -8,7 +8,11 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_circle_add_button.dart';
+import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_snack.dart';
+import '../../../shared/widgets/app_state_views.dart';
 
 // ── Provider ──
 
@@ -69,24 +73,40 @@ class _User {
 class UserListState {
   final List<_User> items;
   final bool loading;
+  final String? error;
 
-  const UserListState({this.items = const [], this.loading = false});
+  const UserListState({
+    this.items = const [],
+    this.loading = false,
+    this.error,
+  });
 
-  UserListState copyWith({List<_User>? items, bool? loading}) {
+  /// [error] 刻意不写 `error ?? this.error`：语义是「不传即清空」，
+  /// 否则一次失败之后的所有 `copyWith` 都会把旧错误粘住，重试成功了还在报错。
+  UserListState copyWith({List<_User>? items, bool? loading, String? error}) {
     return UserListState(
       items: items ?? this.items,
       loading: loading ?? this.loading,
+      error: error,
     );
   }
 }
 
 class UserListNotifier extends StateNotifier<UserListState> {
-  UserListNotifier() : super(const UserListState());
+  /// [dio] **仅供测试注入**，生产路径不传，仍然走 `DioClient` 单例。
+  /// 单例的 baseUrl 会随切换面板被改写，所以这里不在构造时把它存下来。
+  UserListNotifier({Dio? dio})
+    : _injectedDio = dio,
+      super(const UserListState());
+
+  final Dio? _injectedDio;
+
+  Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 
   Future<void> load() async {
-    state = state.copyWith(loading: true);
+    state = state.copyWith(loading: true, error: null);
     try {
-      final resp = await DioClient.instance.dio.get(ApiEndpoints.users);
+      final resp = await _dio.get(ApiEndpoints.users);
       final data = extractData(resp.data);
       List<_User> items = [];
       if (data is List) {
@@ -96,13 +116,16 @@ class UserListNotifier extends StateNotifier<UserListState> {
             .toList();
       }
       state = state.copyWith(items: items, loading: false);
-    } catch (_) {
-      state = state.copyWith(loading: false);
+    } catch (e) {
+      state = state.copyWith(
+        loading: false,
+        error: extractListErrorMessage(e, '加载用户失败'),
+      );
     }
   }
 
   Future<void> create(String username, String password, String role) async {
-    await DioClient.instance.dio.post(
+    await _dio.post(
       ApiEndpoints.users,
       data: {'username': username, 'password': password, 'role': role},
     );
@@ -113,17 +136,17 @@ class UserListNotifier extends StateNotifier<UserListState> {
     final data = <String, dynamic>{};
     if (role != null) data['role'] = role;
     if (enabled != null) data['enabled'] = enabled;
-    await DioClient.instance.dio.put(ApiEndpoints.userById(id), data: data);
+    await _dio.put(ApiEndpoints.userById(id), data: data);
     await load();
   }
 
   Future<void> delete(int id) async {
-    await DioClient.instance.dio.delete(ApiEndpoints.userById(id));
+    await _dio.delete(ApiEndpoints.userById(id));
     await load();
   }
 
   Future<void> resetPassword(int id, String password) async {
-    await DioClient.instance.dio.put(
+    await _dio.put(
       ApiEndpoints.userResetPassword(id),
       data: {'password': password},
     );
@@ -162,10 +185,7 @@ class _UserListPageState extends ConsumerState<UserListPage> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  GestureDetector(
-                    onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
-                  ),
+                  const AppBackButton(),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(
@@ -176,22 +196,7 @@ class _UserListPageState extends ConsumerState<UserListPage> {
                       ),
                     ),
                   ),
-                  GestureDetector(
-                    onTap: () => _showCreateDialog(),
-                    child: Container(
-                      width: 32,
-                      height: 32,
-                      decoration: const BoxDecoration(
-                        color: AppColors.primary,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.add,
-                        size: 20,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
+                  AppCircleAddButton(onTap: () => _showCreateDialog()),
                 ],
               ),
             ),
@@ -209,6 +214,20 @@ class _UserListPageState extends ConsumerState<UserListPage> {
                             child: CircularProgressIndicator(
                               color: AppColors.primary,
                             ),
+                          ),
+                        ],
+                      )
+                    // 拿不到数据和真的没有用户是两回事，必须先判 error，
+                    // 否则面板离线时页面只会显示一句「暂无用户」。
+                    : state.error != null && state.items.isEmpty
+                    ? ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: [
+                          AppErrorView(
+                            title: '用户加载失败',
+                            message: state.error!,
+                            onRetry: () =>
+                                ref.read(userListProvider.notifier).load(),
                           ),
                         ],
                       )
@@ -312,16 +331,12 @@ class _UserListPageState extends ConsumerState<UserListPage> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('角色更新成功')));
+      AppSnack.success(context, '角色更新成功');
     } catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(extractErrorMessage(error, '角色更新失败'))),
-      );
+      AppSnack.error(context, extractErrorMessage(error, '角色更新失败'));
     }
   }
 
@@ -337,7 +352,6 @@ class _UserListPageState extends ConsumerState<UserListPage> {
       useRootNavigator: true,
       builder: (ctx) {
         final navigator = Navigator.of(ctx);
-        final rootMessenger = ScaffoldMessenger.of(context);
         return StatefulBuilder(
           builder: (ctx, setSheetState) => Padding(
             padding: EdgeInsets.fromLTRB(
@@ -410,17 +424,17 @@ class _UserListPageState extends ConsumerState<UserListPage> {
                           return;
                         }
                         navigator.pop();
-                        rootMessenger.showSnackBar(
-                          const SnackBar(content: Text('用户已创建')),
-                        );
+                        // 这里用页面级 context 而不是 sheet 的 ctx：sheet 刚被 pop，
+                        // ctx 已失效。原先提前取 rootMessenger 就是为了绕开这点，
+                        // 换成 AppSnack 后由上面的 mounted 判断承担同样的作用。
+                        AppSnack.success(context, '用户已创建');
                       } catch (error) {
                         if (!mounted) {
                           return;
                         }
-                        rootMessenger.showSnackBar(
-                          SnackBar(
-                            content: Text(extractErrorMessage(error, '创建用户失败')),
-                          ),
+                        AppSnack.error(
+                          context,
+                          extractErrorMessage(error, '创建用户失败'),
                         );
                       }
                     },
@@ -448,7 +462,6 @@ class _UserListPageState extends ConsumerState<UserListPage> {
     showDialog(
       context: context,
       builder: (dialogCtx) {
-        final rootMessenger = ScaffoldMessenger.of(context);
         return AlertDialog(
           title: Text('重置 ${user.username} 的密码'),
           content: TextField(
@@ -483,19 +496,16 @@ class _UserListPageState extends ConsumerState<UserListPage> {
                             return;
                           }
                           Navigator.of(dialogCtx).pop();
-                          rootMessenger.showSnackBar(
-                            const SnackBar(content: Text('密码已重置')),
-                          );
+                          // 同上：弹窗已 pop，dialogCtx 失效，改用页面级 context，
+                          // 由前面的 mounted 判断守住 async gap。
+                          AppSnack.success(context, '密码已重置');
                         } catch (error) {
                           if (!mounted) {
                             return;
                           }
-                          rootMessenger.showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                extractErrorMessage(error, '重置密码失败'),
-                              ),
-                            ),
+                          AppSnack.error(
+                            context,
+                            extractErrorMessage(error, '重置密码失败'),
                           );
                         }
                       },
@@ -553,16 +563,12 @@ class _UserListPageState extends ConsumerState<UserListPage> {
         if (!mounted) {
           return;
         }
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('用户已删除')));
+        AppSnack.success(context, '用户已删除');
       } catch (error) {
         if (!mounted) {
           return;
         }
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(extractErrorMessage(error, '删除用户失败'))),
-        );
+        AppSnack.error(context, extractErrorMessage(error, '删除用户失败'));
       }
     }
   }
@@ -725,21 +731,19 @@ class _UserCard extends StatelessWidget {
                     if (!context.mounted) {
                       return;
                     }
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(user.enabled ? '用户已禁用' : '用户已启用')),
+                    AppSnack.success(
+                      context,
+                      user.enabled ? '用户已禁用' : '用户已启用',
                     );
                   } catch (error) {
                     if (!context.mounted) {
                       return;
                     }
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          extractErrorMessage(
-                            error,
-                            user.enabled ? '禁用用户失败' : '启用用户失败',
-                          ),
-                        ),
+                    AppSnack.error(
+                      context,
+                      extractErrorMessage(
+                        error,
+                        user.enabled ? '禁用用户失败' : '启用用户失败',
                       ),
                     );
                   }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +12,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/env_var.dart';
 import '../../../shared/utils/api_utils.dart';
+import '../../../shared/widgets/app_circle_add_button.dart';
 import '../../../shared/widgets/app_buttons.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_notice.dart';
@@ -81,12 +83,18 @@ class EnvListState {
 }
 
 class EnvListNotifier extends StateNotifier<EnvListState> {
-  EnvListNotifier() : super(const EnvListState());
+  /// [dio] **仅供测试注入**，生产路径不传，仍然走 `DioClient` 单例。
+  /// 单例的 baseUrl 会随切换面板被改写，所以这里不在构造时把它存下来。
+  EnvListNotifier({Dio? dio}) : _injectedDio = dio, super(const EnvListState());
+
+  final Dio? _injectedDio;
+
+  Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 
   Future<void> load() async {
     state = state.copyWith(loading: true, error: null);
     try {
-      final dio = DioClient.instance.dio;
+      final dio = _dio;
       // The panel backend caps page_size at 100. Requesting a larger value
       // silently falls back to 20, which previously made the app stop after 40 rows.
       const pageSize = 100;
@@ -146,7 +154,7 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
   /// 不能因此把整个环境变量列表判成加载失败。
   Future<List<String>> _fetchGroups() async {
     try {
-      final response = await DioClient.instance.dio.get(
+      final response = await _dio.get(
         ApiEndpoints.envsGroups,
       );
       final raw = response.data;
@@ -175,7 +183,7 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
   }
 
   Future<void> toggle(int id, bool enabled) async {
-    final dio = DioClient.instance.dio;
+    final dio = _dio;
     if (enabled) {
       await dio.put(ApiEndpoints.envEnable(id));
     } else {
@@ -185,12 +193,12 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
   }
 
   Future<void> delete(int id) async {
-    await DioClient.instance.dio.delete(ApiEndpoints.envById(id));
+    await _dio.delete(ApiEndpoints.envById(id));
     await load();
   }
 
   Future<void> batchDelete(List<int> ids) async {
-    await DioClient.instance.dio.delete(
+    await _dio.delete(
       ApiEndpoints.envsBatchDelete,
       data: {'ids': ids},
     );
@@ -198,7 +206,7 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
   }
 
   Future<void> batchEnable(List<int> ids) async {
-    await DioClient.instance.dio.put(
+    await _dio.put(
       ApiEndpoints.envsBatchEnable,
       data: {'ids': ids},
     );
@@ -206,7 +214,7 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
   }
 
   Future<void> batchDisable(List<int> ids) async {
-    await DioClient.instance.dio.put(
+    await _dio.put(
       ApiEndpoints.envsBatchDisable,
       data: {'ids': ids},
     );
@@ -214,7 +222,7 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
   }
 
   Future<void> batchSetGroup(List<int> ids, List<String> groups) async {
-    await DioClient.instance.dio.put(
+    await _dio.put(
       ApiEndpoints.envsBatchGroup,
       data: {'ids': ids, 'groups': groups},
     );
@@ -227,7 +235,7 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
     String remarks = '',
     List<String> groups = const [],
   }) async {
-    await DioClient.instance.dio.post(
+    await _dio.post(
       ApiEndpoints.envs,
       data: {
         'name': name,
@@ -247,7 +255,7 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
     String remarks = '',
     List<String> groups = const [],
   }) async {
-    await DioClient.instance.dio.put(
+    await _dio.put(
       ApiEndpoints.envById(id),
       data: {
         'name': name,
@@ -261,7 +269,7 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
   }
 
   Future<void> sortEnvs(int sourceId, int? targetId) async {
-    await DioClient.instance.dio.put(
+    await _dio.put(
       ApiEndpoints.envsSort,
       data: {'source_id': sourceId, 'target_id': targetId},
     );
@@ -277,7 +285,7 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
   /// [ids] 非空时只导这些 id（对应列表页的多选）。失败**不静默降级**成本地列表：
   /// 宁可报错，也不能让用户拿到一份少了几条却毫无提示的备份。
   Future<List<EnvTransferItem>> exportAll({List<int>? ids}) async {
-    final response = await DioClient.instance.dio.get(
+    final response = await _dio.get(
       ApiEndpoints.envsExportAll,
       queryParameters: (ids == null || ids.isEmpty)
           ? null
@@ -299,7 +307,7 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
     required List<EnvTransferItem> items,
     required EnvImportMode mode,
   }) async {
-    final response = await DioClient.instance.dio.post(
+    final response = await _dio.post(
       ApiEndpoints.envsImport,
       data: buildEnvImportRequest(items: items, mode: mode),
     );
@@ -565,18 +573,15 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(enabled ? '已启用 ${env.name}' : '已禁用 ${env.name}'),
-        ),
+      AppSnack.success(
+        context,
+        enabled ? '已启用 ${env.name}' : '已禁用 ${env.name}',
       );
     } catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(extractErrorMessage(error, '修改环境变量状态失败'))),
-      );
+      AppSnack.error(context, extractErrorMessage(error, '修改环境变量状态失败'));
     }
   }
 
@@ -591,16 +596,12 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('已删除 ${env.name}')));
+      AppSnack.success(context, '已删除 ${env.name}');
     } catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(extractErrorMessage(error, '删除环境变量失败'))),
-      );
+      AppSnack.error(context, extractErrorMessage(error, '删除环境变量失败'));
     }
   }
 
@@ -641,16 +642,14 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
         _EnvBatchAction.disable => '已批量禁用 ${ids.length} 个环境变量',
         _EnvBatchAction.delete => '已批量删除 ${ids.length} 个环境变量',
       };
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
-    } catch (_) {
+      AppSnack.success(context, message);
+    } catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('批量操作失败，请稍后重试')));
+      // 原来是 catch (_) 配一句固定文案，服务端说的「哪一条删不掉」被整个丢掉。
+      // 与本文件其余写操作一致，先用服务端消息，拿不到再退回这句。
+      AppSnack.error(context, extractErrorMessage(error, '批量操作失败，请稍后重试'));
     }
   }
 
@@ -670,16 +669,13 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
       final message = groups.isEmpty
           ? '已清空 ${ids.length} 个环境变量的分组'
           : '已将 ${ids.length} 个环境变量分组到“${groups.join(' / ')}”';
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
-    } catch (_) {
+      AppSnack.success(context, message);
+    } catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('批量分组失败，请稍后重试')));
+      // 同上：分组失败时服务端的具体原因比一句「请稍后重试」有用。
+      AppSnack.error(context, extractErrorMessage(error, '批量分组失败，请稍后重试'));
     }
   }
 
@@ -794,6 +790,33 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     }
 
     await _performBatchGroup(result);
+  }
+
+  /// 保存排序结果。
+  ///
+  /// 从「完成」按钮的 onTap 里提出来，是因为提示要用页面自己的 context：
+  /// build 的 context 形参在分析器眼里和 State.mounted 不是一回事，
+  /// 写在 build 里就会多两条 use_build_context_synchronously 告警。
+  ///
+  /// 异常在这里就地消化，不往外抛：调用方在它之后还要 setState 退出排序模式，
+  /// 让异常冒出去会把界面卡在排序态。
+  Future<void> _saveSortOrder() async {
+    try {
+      if (_lastMovedSourceId != null) {
+        await ref
+            .read(envListProvider.notifier)
+            .sortEnvs(_lastMovedSourceId!, _lastMovedTargetId);
+      }
+      if (!mounted) {
+        return;
+      }
+      AppSnack.success(context, '排序已保存');
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      AppSnack.error(context, extractErrorMessage(error, '保存排序失败'));
+    }
   }
 
   Future<void> _refresh() async {
@@ -917,7 +940,6 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     final state = ref.watch(envListProvider);
     final theme = Theme.of(context);
     final isLight = theme.brightness == Brightness.light;
-    final messenger = ScaffoldMessenger.of(context);
     final selectedCount = _selectedIds.length;
     final allSelected = _isAllSelected(state.envs);
 
@@ -950,31 +972,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                           icon: _sortMode ? Icons.check : Icons.swap_vert,
                           onTap: () async {
                             if (_sortMode) {
-                              try {
-                                if (_lastMovedSourceId != null) {
-                                  await ref
-                                      .read(envListProvider.notifier)
-                                      .sortEnvs(
-                                        _lastMovedSourceId!,
-                                        _lastMovedTargetId,
-                                      );
-                                }
-                                if (mounted) {
-                                  messenger.showSnackBar(
-                                    const SnackBar(content: Text('排序已保存')),
-                                  );
-                                }
-                              } catch (error) {
-                                if (mounted) {
-                                  messenger.showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        extractErrorMessage(error, '保存排序失败'),
-                                      ),
-                                    ),
-                                  );
-                                }
-                              }
+                              await _saveSortOrder();
                             }
                             setState(() {
                               _sortMode = !_sortMode;
@@ -992,22 +990,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                       ],
                       if (!_selectionMode && !_sortMode) ...[
                         const SizedBox(width: 8),
-                        GestureDetector(
-                          onTap: () => _showCreateDialog(),
-                          child: Container(
-                            width: 32,
-                            height: 32,
-                            decoration: const BoxDecoration(
-                              color: AppColors.primary,
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.add,
-                              size: 20,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
+                        AppCircleAddButton(onTap: () => _showCreateDialog()),
                       ],
                     ],
                   ),
@@ -1416,9 +1399,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                             onSelectedChanged: () => _toggleSelection(env.id),
                             onCopy: () {
                               Clipboard.setData(ClipboardData(text: env.value));
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('已复制值')),
-                              );
+                              AppSnack.success(context, '已复制值');
                             },
                             onEnable: () => _setEnvEnabled(env, true),
                             onDisable: () => _setEnvEnabled(env, false),
@@ -1435,7 +1416,6 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
   }
 
   void _showDetailSheet(EnvVar env) {
-    final messenger = ScaffoldMessenger.of(context);
     final nameC = TextEditingController(text: env.name);
     final valueC = TextEditingController(text: env.value);
     final remarksC = TextEditingController(text: env.remarks);
@@ -1513,25 +1493,20 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                             return;
                           }
                           navigator.pop();
-                          messenger.showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                env.enabled
-                                    ? '已禁用 ${env.name}'
-                                    : '已启用 ${env.name}',
-                              ),
-                            ),
+                          // 传页面自己的 context 而不是弹层的 ctx：提示挂在根
+                          // ScaffoldMessenger 上，弹层已经 pop 掉了，用 ctx 只会
+                          // 因为它不再挂在树上而被静默丢弃。
+                          AppSnack.success(
+                            context,
+                            env.enabled ? '已禁用 ${env.name}' : '已启用 ${env.name}',
                           );
                         } catch (error) {
                           if (!mounted) {
                             return;
                           }
-                          messenger.showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                extractErrorMessage(error, '修改环境变量状态失败'),
-                              ),
-                            ),
+                          AppSnack.error(
+                            context,
+                            extractErrorMessage(error, '修改环境变量状态失败'),
                           );
                         }
                       },
@@ -1613,9 +1588,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                       child: OutlinedButton.icon(
                         onPressed: () {
                           Clipboard.setData(ClipboardData(text: valueC.text));
-                          ScaffoldMessenger.of(
-                            ctx,
-                          ).showSnackBar(const SnackBar(content: Text('已复制值')));
+                          AppSnack.success(ctx, '已复制值');
                         },
                         icon: const Icon(Icons.copy, size: 16),
                         label: const Text('复制'),
@@ -1630,7 +1603,6 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                     Expanded(
                       child: FilledButton.icon(
                         onPressed: () async {
-                          final rootMessenger = ScaffoldMessenger.of(context);
                           final navigator = Navigator.of(ctx);
                           try {
                             await ref
@@ -1646,19 +1618,15 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                               return;
                             }
                             navigator.pop();
-                            rootMessenger.showSnackBar(
-                              const SnackBar(content: Text('已保存')),
-                            );
+                            // 同上：弹层已 pop，只有页面自己的 context 还能弹提示。
+                            AppSnack.success(context, '已保存');
                           } catch (error) {
                             if (!mounted) {
                               return;
                             }
-                            rootMessenger.showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  extractErrorMessage(error, '保存环境变量失败'),
-                                ),
-                              ),
+                            AppSnack.error(
+                              context,
+                              extractErrorMessage(error, '保存环境变量失败'),
                             );
                           }
                         },
@@ -1700,7 +1668,6 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) {
           final navigator = Navigator.of(ctx);
-          final rootMessenger = ScaffoldMessenger.of(context);
           if (valueEditorOpen) {
             return _EnvValueSheetEditor(
               title: '新建变量值',
@@ -1787,17 +1754,15 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         return;
                       }
                       navigator.pop();
-                      rootMessenger.showSnackBar(
-                        const SnackBar(content: Text('环境变量已创建')),
-                      );
+                      // 同上：弹层已 pop，只有页面自己的 context 还能弹提示。
+                      AppSnack.success(context, '环境变量已创建');
                     } catch (error) {
                       if (!mounted) {
                         return;
                       }
-                      rootMessenger.showSnackBar(
-                        SnackBar(
-                          content: Text(extractErrorMessage(error, '创建环境变量失败')),
-                        ),
+                      AppSnack.error(
+                        context,
+                        extractErrorMessage(error, '创建环境变量失败'),
                       );
                     }
                   },

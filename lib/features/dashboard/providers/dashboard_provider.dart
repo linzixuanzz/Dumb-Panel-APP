@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
@@ -86,7 +87,15 @@ class DashboardData {
 }
 
 class DashboardNotifier extends StateNotifier<DashboardData> {
-  DashboardNotifier() : super(const DashboardData());
+  /// [dio] **仅供测试注入**，生产路径不传，仍然走 `DioClient` 单例。
+  /// 单例的 baseUrl 会随切换面板被改写，所以这里不在构造时把它存下来。
+  DashboardNotifier({Dio? dio})
+    : _injectedDio = dio,
+      super(const DashboardData());
+
+  final Dio? _injectedDio;
+
+  Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 
   /// 把「可选接口」的失败吃掉，返回 null。用于只做锦上添花的请求，
   /// 避免它们的 4xx 把主数据一起拖垮。
@@ -102,7 +111,8 @@ class DashboardNotifier extends StateNotifier<DashboardData> {
   Future<void> load() async {
     state = state.copyWith(loading: true, error: null);
     try {
-      final dio = DioClient.instance.dio;
+      // 四个并发请求共用同一个实例，避免 getter 中途读到被切面板改写的单例。
+      final dio = _dio;
       // 主数据：系统信息 + 仪表盘统计，失败就是整页失败。
       final systemFuture = dio.get(ApiEndpoints.systemInfo);
       final dashboardFuture = dio.get(ApiEndpoints.dashboard);

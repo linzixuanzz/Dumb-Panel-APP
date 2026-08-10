@@ -17,8 +17,10 @@ import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_snack.dart';
+import '../../../shared/widgets/app_state_views.dart';
 import '../../tasks/views/task_form_page.dart';
 
 final scriptProvider = StateNotifierProvider<ScriptNotifier, ScriptState>((
@@ -113,6 +115,15 @@ class ScriptVersionRecord {
 class ScriptState {
   final List<ScriptFile> tree;
   final bool loading;
+
+  /// 脚本树加载失败的原因，成功或重新加载时清空。
+  ///
+  /// ⚠️ 它在 [copyWith] 里是**「不传即清空」**语义（与 `selectedPath` 的哨兵语义相反）。
+  /// 这是有意的：`loadTree()` 开头一句 `copyWith(loading: true)` 就能顺手清掉上次的错误。
+  /// 代价是**任何**不传 error 的 `copyWith` 都会把它抹掉 —— 所以与脚本树无关的状态更新
+  /// （改搜索词、加载文件内容、保存文件）必须显式写 `error: state.error` 把它带回去，
+  /// 否则用户会看到「加载失败」莫名其妙变成「暂无脚本」。
+  final String? error;
   final String keyword;
   final String? selectedPath;
   final String content;
@@ -123,6 +134,7 @@ class ScriptState {
   const ScriptState({
     this.tree = const [],
     this.loading = false,
+    this.error,
     this.keyword = '',
     this.selectedPath,
     this.content = '',
@@ -134,6 +146,7 @@ class ScriptState {
   ScriptState copyWith({
     List<ScriptFile>? tree,
     bool? loading,
+    String? error,
     String? keyword,
     Object? selectedPath = _stateUnset,
     String? content,
@@ -144,6 +157,10 @@ class ScriptState {
     return ScriptState(
       tree: tree ?? this.tree,
       loading: loading ?? this.loading,
+      // 刻意不写 `error ?? this.error`：不传就是清空，
+      // 否则失败一次之后错误提示永远消不掉。
+      // 这条语义被 test/features/list_error_state_test.dart 锁死。
+      error: error,
       keyword: keyword ?? this.keyword,
       selectedPath: identical(selectedPath, _stateUnset)
           ? this.selectedPath
@@ -157,16 +174,25 @@ class ScriptState {
 }
 
 class ScriptNotifier extends StateNotifier<ScriptState> {
-  ScriptNotifier() : super(const ScriptState());
+  /// [dio] **仅供测试注入**，生产路径不传，仍然走 `DioClient` 单例。
+  /// 单例的 baseUrl 会随切换面板被改写，所以这里不在构造时把它存下来。
+  ScriptNotifier({Dio? dio}) : _injectedDio = dio, super(const ScriptState());
+
+  final Dio? _injectedDio;
+
+  Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 
   void setKeyword(String keyword) {
-    state = state.copyWith(keyword: keyword);
+    // 必须显式回传 error：copyWith 是「不传即清空」语义（见 ScriptState.copyWith 的注释）。
+    // 不带上的话，树加载失败之后用户一敲搜索框，错误提示就被抹掉、页面退回「暂无脚本」——
+    // 看起来像是搜不到结果，实际上是根本没加载成功。
+    state = state.copyWith(keyword: keyword, error: state.error);
   }
 
   Future<void> loadTree() async {
-    state = state.copyWith(loading: true);
+    state = state.copyWith(loading: true, error: null);
     try {
-      final resp = await DioClient.instance.dio.get(ApiEndpoints.scriptsTree);
+      final resp = await _dio.get(ApiEndpoints.scriptsTree);
       final data = extractData(resp.data);
       final tree = data is List
           ? data
@@ -178,15 +204,18 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
                 .toList()
           : <ScriptFile>[];
       state = state.copyWith(tree: tree, loading: false);
-    } catch (_) {
-      state = state.copyWith(loading: false);
+    } catch (e) {
+      state = state.copyWith(
+        loading: false,
+        error: extractListErrorMessage(e, '加载脚本失败'),
+      );
     }
   }
 
   Future<void> loadContent(String path) async {
     state = state.copyWith(selectedPath: path, loadingContent: true);
     try {
-      final resp = await DioClient.instance.dio.get(
+      final resp = await _dio.get(
         ApiEndpoints.scriptsContent,
         queryParameters: {'path': path},
       );
@@ -224,7 +253,7 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
   }) async {
     state = state.copyWith(saving: true);
     try {
-      await DioClient.instance.dio.put(
+      await _dio.put(
         ApiEndpoints.scriptsContent,
         data: {'path': path, 'content': content, 'message': message},
       );
@@ -236,7 +265,7 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
   }
 
   Future<void> createFile(String path) async {
-    await DioClient.instance.dio.put(
+    await _dio.put(
       ApiEndpoints.scriptsContent,
       data: {'path': path, 'content': '', 'message': 'V1 初始版本'},
     );
@@ -244,10 +273,7 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
   }
 
   Future<void> createDirectory(String path) async {
-    await DioClient.instance.dio.post(
-      ApiEndpoints.scriptsDirectory,
-      data: {'path': path},
-    );
+    await _dio.post(ApiEndpoints.scriptsDirectory, data: {'path': path});
     await loadTree();
   }
 
@@ -269,7 +295,7 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
       formData.fields.add(MapEntry('dir', dir.trim()));
     }
 
-    final resp = await DioClient.instance.dio.post(
+    final resp = await _dio.post(
       ApiEndpoints.scriptsUpload,
       data: formData,
       options: Options(contentType: 'multipart/form-data'),
@@ -286,7 +312,7 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
   }
 
   Future<String> renamePath(String oldPath, String newName) async {
-    final resp = await DioClient.instance.dio.put(
+    final resp = await _dio.put(
       ApiEndpoints.scriptsRename,
       data: {'old_path': oldPath, 'new_name': newName},
     );
@@ -311,7 +337,7 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
   }
 
   Future<String> movePath(String sourcePath, {String targetDir = ''}) async {
-    final response = await DioClient.instance.dio.put(
+    final response = await _dio.put(
       ApiEndpoints.scriptsMove,
       data: {'source_path': sourcePath, 'target_dir': targetDir},
     );
@@ -337,7 +363,7 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
     String targetDir = '',
     String newName = '',
   }) async {
-    final response = await DioClient.instance.dio.post(
+    final response = await _dio.post(
       ApiEndpoints.scriptsCopy,
       data: {
         'source_path': sourcePath,
@@ -357,7 +383,7 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
   }
 
   Future<void> deletePath(String path, {required bool isDirectory}) async {
-    await DioClient.instance.dio.delete(
+    await _dio.delete(
       ApiEndpoints.scripts,
       queryParameters: {
         'path': path,
@@ -373,7 +399,7 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
   }
 
   Future<List<ScriptVersionRecord>> listVersions(String path) async {
-    final resp = await DioClient.instance.dio.get(
+    final resp = await _dio.get(
       ApiEndpoints.scriptsVersions,
       queryParameters: {'path': path},
     );
@@ -391,9 +417,7 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
   }
 
   Future<void> rollbackVersion(int versionId, String path) async {
-    await DioClient.instance.dio.put(
-      ApiEndpoints.scriptVersionRollback(versionId),
-    );
+    await _dio.put(ApiEndpoints.scriptVersionRollback(versionId));
     await loadTree();
     await loadContent(path);
   }
@@ -403,7 +427,7 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
     if (language == null) {
       throw StateError('该文件类型不支持格式化');
     }
-    final resp = await DioClient.instance.dio.post(
+    final resp = await _dio.post(
       ApiEndpoints.scriptsFormat,
       data: {'content': content, 'language': language},
     );
@@ -586,10 +610,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  GestureDetector(
-                    onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
-                  ),
+                  const AppBackButton(),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(
@@ -691,6 +712,24 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                   ? const Center(
                       child: CircularProgressIndicator(
                         color: AppColors.primary,
+                      ),
+                    )
+                  // 拿不到数据和真的没有脚本是两回事，必须先判 error。
+                  : state.error != null && state.tree.isEmpty
+                  ? RefreshIndicator(
+                      color: AppColors.primary,
+                      onRefresh: () =>
+                          ref.read(scriptProvider.notifier).loadTree(),
+                      child: ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: [
+                          AppErrorView(
+                            title: '脚本加载失败',
+                            message: state.error!,
+                            onRetry: () =>
+                                ref.read(scriptProvider.notifier).loadTree(),
+                          ),
+                        ],
                       ),
                     )
                   : visibleTree.isEmpty
@@ -979,7 +1018,6 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
   }
 
   Future<void> _showRenameDialog(ScriptFile file) async {
-    final messenger = ScaffoldMessenger.of(context);
     final controller = TextEditingController(text: file.name);
     final parent = _defaultScriptDirectory(file.path);
     await showDialog<void>(
@@ -1017,9 +1055,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
               onPressed: () async {
                 final newName = controller.text.trim();
                 if (newName.isEmpty) {
-                  messenger.showSnackBar(
-                    const SnackBar(content: Text('名称不能为空')),
-                  );
+                  _showWarning('名称不能为空');
                   return;
                 }
                 try {
@@ -1035,11 +1071,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                   if (!mounted) {
                     return;
                   }
-                  messenger.showSnackBar(
-                    SnackBar(
-                      content: Text(_extractRequestError(error, '重命名失败')),
-                    ),
-                  );
+                  _showError(_extractRequestError(error, '重命名失败'));
                 }
               },
               child: const Text('保存'),
@@ -1119,7 +1151,6 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
   }
 
   Future<void> _showMoveDialog(ScriptFile file, ScriptState state) async {
-    final messenger = ScaffoldMessenger.of(context);
     final folders = _scriptFolders(
       state.tree,
     ).where((folder) => folder != file.path).toList();
@@ -1180,11 +1211,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     if (!mounted) {
                       return;
                     }
-                    messenger.showSnackBar(
-                      SnackBar(
-                        content: Text(_extractScriptError(error, '移动失败')),
-                      ),
-                    );
+                    _showError(_extractScriptError(error, '移动失败'));
                   }
                 },
                 child: const Text('移动'),
@@ -1197,7 +1224,6 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
   }
 
   Future<void> _showCopyDialog(ScriptFile file, ScriptState state) async {
-    final messenger = ScaffoldMessenger.of(context);
     final folders = _scriptFolders(state.tree);
     final nameController = TextEditingController(text: file.name);
     String targetDir = _defaultScriptDirectory(file.path);
@@ -1257,9 +1283,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                 onPressed: () async {
                   final newName = nameController.text.trim();
                   if (newName.isEmpty) {
-                    messenger.showSnackBar(
-                      const SnackBar(content: Text('名称不能为空')),
-                    );
+                    _showWarning('名称不能为空');
                     return;
                   }
                   try {
@@ -1279,11 +1303,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     if (!mounted) {
                       return;
                     }
-                    messenger.showSnackBar(
-                      SnackBar(
-                        content: Text(_extractScriptError(error, '复制失败')),
-                      ),
-                    );
+                    _showError(_extractScriptError(error, '复制失败'));
                   }
                 },
                 child: const Text('复制'),
@@ -1311,7 +1331,6 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
     ScriptState state, {
     String? initialParent,
   }) async {
-    final messenger = ScaffoldMessenger.of(context);
     final nameController = TextEditingController();
     final folders = _scriptFolders(state.tree);
     String parent =
@@ -1366,9 +1385,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                 onPressed: () async {
                   final fileName = nameController.text.trim();
                   if (fileName.isEmpty) {
-                    messenger.showSnackBar(
-                      const SnackBar(content: Text('文件名不能为空')),
-                    );
+                    _showWarning('文件名不能为空');
                     return;
                   }
                   final fullPath = _joinScriptPath(parent, fileName);
@@ -1385,11 +1402,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     if (!mounted) {
                       return;
                     }
-                    messenger.showSnackBar(
-                      SnackBar(
-                        content: Text(_extractRequestError(error, '创建脚本失败')),
-                      ),
-                    );
+                    _showError(_extractRequestError(error, '创建脚本失败'));
                   }
                 },
                 child: const Text('创建'),
@@ -1405,7 +1418,6 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
     ScriptState state, {
     String? initialParent,
   }) async {
-    final messenger = ScaffoldMessenger.of(context);
     final nameController = TextEditingController();
     final folders = _scriptFolders(state.tree);
     String parent =
@@ -1457,9 +1469,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                 onPressed: () async {
                   final name = nameController.text.trim();
                   if (name.isEmpty) {
-                    messenger.showSnackBar(
-                      const SnackBar(content: Text('文件夹名称不能为空')),
-                    );
+                    _showWarning('文件夹名称不能为空');
                     return;
                   }
                   try {
@@ -1475,11 +1485,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     if (!mounted) {
                       return;
                     }
-                    messenger.showSnackBar(
-                      SnackBar(
-                        content: Text(_extractRequestError(error, '创建文件夹失败')),
-                      ),
-                    );
+                    _showError(_extractRequestError(error, '创建文件夹失败'));
                   }
                 },
                 child: const Text('创建'),
@@ -1510,7 +1516,6 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
     List<PlatformFile> files, {
     String initialDir = '',
   }) async {
-    final messenger = ScaffoldMessenger.of(context);
     final folders = _scriptFolders(state.tree);
     String targetDir = initialDir.isNotEmpty
         ? initialDir
@@ -1617,11 +1622,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     if (!mounted) {
                       return;
                     }
-                    messenger.showSnackBar(
-                      SnackBar(
-                        content: Text(_extractScriptError(error, '上传失败')),
-                      ),
-                    );
+                    _showError(_extractScriptError(error, '上传失败'));
                   }
                 },
                 child: const Text('上传'),
@@ -1721,7 +1722,9 @@ class _FileTreeItemState extends State<_FileTreeItem> {
               IconButton(
                 onPressed: () => widget.onAction(file),
                 icon: const Icon(Icons.more_vert, size: 18),
-                visualDensity: VisualDensity.compact,
+                // compact 是 -2 档，把 48 压到 40。取 -1 档的 44：过线，
+                // 又不像直接删掉那样让每个文件行都长高 8dp。
+                visualDensity: const VisualDensity(horizontal: -1, vertical: -1),
                 color: AppColors.slate400,
                 splashRadius: 18,
               ),
@@ -2363,16 +2366,12 @@ class _ScriptVersionSheetState extends ConsumerState<_ScriptVersionSheet> {
         return;
       }
       Navigator.pop(context);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('已回滚到 v${version.version}')));
+      AppSnack.success(context, '已回滚到 v${version.version}');
     } catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_extractRequestError(error, '回滚失败'))),
-      );
+      AppSnack.error(context, _extractRequestError(error, '回滚失败'));
     }
   }
 
@@ -2705,9 +2704,7 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(extractScriptSaveErrorMessage(error, '停止调试失败'))),
-      );
+      AppSnack.error(context, extractScriptSaveErrorMessage(error, '停止调试失败'));
     }
   }
 
@@ -2756,9 +2753,7 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
                               ClipboardData(text: _logs.join('\n')),
                             );
                             if (!mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('已复制调试日志')),
-                            );
+                            AppSnack.success(context, '已复制调试日志');
                           },
                     icon: const Icon(Icons.copy_all_outlined),
                   ),

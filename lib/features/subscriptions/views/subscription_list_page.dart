@@ -15,8 +15,12 @@ import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/duration_utils.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_circle_add_button.dart';
+import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_notice.dart';
+import '../../../shared/widgets/app_snack.dart';
+import '../../../shared/widgets/app_state_views.dart';
 import '../utils/subscription_auth.dart';
 
 // ── Provider ──
@@ -57,12 +61,20 @@ class SubscriptionListState {
 }
 
 class SubscriptionListNotifier extends StateNotifier<SubscriptionListState> {
-  SubscriptionListNotifier() : super(const SubscriptionListState());
+  /// [dio] **仅供测试注入**，生产路径不传，仍然走 `DioClient` 单例。
+  /// 单例的 baseUrl 会随切换面板被改写，所以这里不在构造时把它存下来。
+  SubscriptionListNotifier({Dio? dio})
+    : _injectedDio = dio,
+      super(const SubscriptionListState());
+
+  final Dio? _injectedDio;
+
+  Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 
   Future<void> load() async {
     state = state.copyWith(loading: true);
     try {
-      final dio = DioClient.instance.dio;
+      final dio = _dio;
       // 面板把 page_size 卡在 100：`if pageSize < 1 || pageSize > 100 { pageSize = 20 }`
       // （server/handler/subscription.go:139-141）。原来这里写 200，超限后被**静默**
       // 回落到 20 —— 订阅超过 20 条，第 21 条起在 APP 上根本看不见，而且没有任何报错。
@@ -78,8 +90,11 @@ class SubscriptionListNotifier extends StateNotifier<SubscriptionListState> {
           .map((e) => Subscription.fromJson(e))
           .toList();
       state = state.copyWith(items: items, loading: false, error: null);
-    } catch (_) {
-      state = state.copyWith(loading: false, error: '加载订阅失败');
+    } catch (e) {
+      state = state.copyWith(
+        loading: false,
+        error: extractListErrorMessage(e, '加载订阅失败'),
+      );
     }
   }
 
@@ -89,7 +104,7 @@ class SubscriptionListNotifier extends StateNotifier<SubscriptionListState> {
   }
 
   Future<void> toggle(int id, bool enabled) async {
-    final dio = DioClient.instance.dio;
+    final dio = _dio;
     if (enabled) {
       await dio.put(ApiEndpoints.subscriptionEnable(id));
     } else {
@@ -99,7 +114,7 @@ class SubscriptionListNotifier extends StateNotifier<SubscriptionListState> {
   }
 
   Future<void> pull(Subscription sub) async {
-    final dio = DioClient.instance.dio;
+    final dio = _dio;
     if (sub.type != sub.normalizedType) {
       await dio.put(
         ApiEndpoints.subscriptionById(sub.id),
@@ -111,25 +126,22 @@ class SubscriptionListNotifier extends StateNotifier<SubscriptionListState> {
   }
 
   Future<void> stopPull(int id) async {
-    await DioClient.instance.dio.put(ApiEndpoints.subscriptionPullStop(id));
+    await _dio.put(ApiEndpoints.subscriptionPullStop(id));
     await load();
   }
 
   Future<void> delete(int id) async {
-    await DioClient.instance.dio.delete(ApiEndpoints.subscriptionById(id));
+    await _dio.delete(ApiEndpoints.subscriptionById(id));
     await load();
   }
 
   Future<void> create(Map<String, dynamic> data) async {
-    await DioClient.instance.dio.post(ApiEndpoints.subscriptions, data: data);
+    await _dio.post(ApiEndpoints.subscriptions, data: data);
     await load();
   }
 
   Future<void> update(int id, Map<String, dynamic> data) async {
-    await DioClient.instance.dio.put(
-      ApiEndpoints.subscriptionById(id),
-      data: data,
-    );
+    await _dio.put(ApiEndpoints.subscriptionById(id), data: data);
     await load();
   }
 }
@@ -234,10 +246,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  GestureDetector(
-                    onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
-                  ),
+                  const AppBackButton(),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(
@@ -248,22 +257,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                       ),
                     ),
                   ),
-                  GestureDetector(
-                    onTap: () => _showCreateDialog(),
-                    child: Container(
-                      width: 32,
-                      height: 32,
-                      decoration: const BoxDecoration(
-                        color: AppColors.primary,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.add,
-                        size: 20,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
+                  AppCircleAddButton(onTap: () => _showCreateDialog()),
                 ],
               ),
             ),
@@ -359,6 +353,21 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                           ),
                         ],
                       )
+                    // SubscriptionListState 一直有 error 字段，但从来没有被渲染过：
+                    // 拿不到数据和真的没有订阅是两回事，必须先判 error。
+                    : state.error != null && state.items.isEmpty
+                    ? ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: [
+                          AppErrorView(
+                            title: '订阅加载失败',
+                            message: state.error!,
+                            onRetry: () => ref
+                                .read(subscriptionListProvider.notifier)
+                                .load(),
+                          ),
+                        ],
+                      )
                     : state.items.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
@@ -414,11 +423,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_extractRequestErrorMessage(error, '修改订阅状态失败')),
-        ),
-      );
+      AppSnack.error(context, _extractRequestErrorMessage(error, '修改订阅状态失败'));
     }
   }
 
@@ -428,9 +433,7 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('已触发拉取')));
+      AppSnack.success(context, '已触发拉取');
       context.push('/subscriptions/${sub.id}/pull-stream');
     } catch (error) {
       final message = _extractRequestErrorMessage(error, '拉取失败');
@@ -438,15 +441,13 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
         return;
       }
       if (message.contains('拉取中')) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('该订阅已在拉取中')));
+        // 服务端拒了这次请求，但用户想要的结果（有拉取在跑、能看日志）本来就已经成立，
+        // 下一行紧接着就跳进实时日志页。所以这里不表态：既不报红也不算成功。
+        AppSnack.show(context, '该订阅已在拉取中');
         context.push('/subscriptions/${sub.id}/pull-stream');
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      AppSnack.error(context, message);
     }
   }
 
@@ -456,16 +457,12 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('已停止拉取')));
+      AppSnack.success(context, '已停止拉取');
     } catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_extractRequestErrorMessage(error, '停止拉取失败'))),
-      );
+      AppSnack.error(context, _extractRequestErrorMessage(error, '停止拉取失败'));
     }
   }
 
@@ -515,16 +512,12 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
         if (!mounted) {
           return;
         }
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('订阅已删除')));
+        AppSnack.success(context, '订阅已删除');
       } catch (error) {
         if (!mounted) {
           return;
         }
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_extractRequestErrorMessage(error, '删除订阅失败'))),
-        );
+        AppSnack.error(context, _extractRequestErrorMessage(error, '删除订阅失败'));
       }
     }
   }
@@ -561,7 +554,11 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
       useRootNavigator: true,
       builder: (ctx) {
         final navigator = Navigator.of(ctx);
-        final rootMessenger = ScaffoldMessenger.of(context);
+        // 原来这里提前取了一个 rootMessenger，为的是弹窗 pop 之后还能弹提示，
+        // 顺带避开 async gap。AppSnack 收的是 context 而不是 messenger，所以改成
+        // 一律传页面自己的 context（不是弹窗的 ctx）：ctx 在 pop 之后就废了，而页面
+        // context 往上找到的仍然是同一个根 ScaffoldMessenger，效果与原来一致；
+        // async gap 那一半则由每处 await 后已有的 mounted 判断兜住。
         return StatefulBuilder(
           builder: (ctx, setSheetState) {
             final theme = Theme.of(ctx);
@@ -776,8 +773,13 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                                 // 省掉一个「点保存 → 等一个来回 → 看到同一句话」。
                                 final authError = auth.validate(selectedType);
                                 if (authError != null) {
-                                  rootMessenger.showSnackBar(
-                                    SnackBar(content: Text(authError)),
+                                  // 校验没过不是「出错」，用 warn 不报红。
+                                  // 顶掉上一条：用户改完还会再点一次提交，不然新提示
+                                  // 得排在旧提示后面等 4 秒才露脸。
+                                  AppSnack.warn(
+                                    context,
+                                    authError,
+                                    replaceCurrent: true,
                                   );
                                   return;
                                 }
@@ -804,21 +806,16 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                                     return;
                                   }
                                   navigator.pop();
-                                  rootMessenger.showSnackBar(
-                                    const SnackBar(content: Text('订阅已创建')),
-                                  );
+                                  AppSnack.success(context, '订阅已创建');
                                 } catch (error) {
                                   if (!mounted) {
                                     return;
                                   }
-                                  rootMessenger.showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        _extractRequestErrorMessage(
-                                          error,
-                                          '创建订阅失败',
-                                        ),
-                                      ),
+                                  AppSnack.error(
+                                    context,
+                                    _extractRequestErrorMessage(
+                                      error,
+                                      '创建订阅失败',
                                     ),
                                   );
                                 }
@@ -879,7 +876,11 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
       useRootNavigator: true,
       builder: (ctx) {
         final navigator = Navigator.of(ctx);
-        final rootMessenger = ScaffoldMessenger.of(context);
+        // 原来这里提前取了一个 rootMessenger，为的是弹窗 pop 之后还能弹提示，
+        // 顺带避开 async gap。AppSnack 收的是 context 而不是 messenger，所以改成
+        // 一律传页面自己的 context（不是弹窗的 ctx）：ctx 在 pop 之后就废了，而页面
+        // context 往上找到的仍然是同一个根 ScaffoldMessenger，效果与原来一致；
+        // async gap 那一半则由每处 await 后已有的 mounted 判断兜住。
         return StatefulBuilder(
           builder: (ctx, setSheetState) {
             final theme = Theme.of(ctx);
@@ -1099,8 +1100,13 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                               onPressed: () async {
                                 final authError = auth.validate(selectedType);
                                 if (authError != null) {
-                                  rootMessenger.showSnackBar(
-                                    SnackBar(content: Text(authError)),
+                                  // 校验没过不是「出错」，用 warn 不报红。
+                                  // 顶掉上一条：用户改完还会再点一次提交，不然新提示
+                                  // 得排在旧提示后面等 4 秒才露脸。
+                                  AppSnack.warn(
+                                    context,
+                                    authError,
+                                    replaceCurrent: true,
                                   );
                                   return;
                                 }
@@ -1127,21 +1133,16 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                                     return;
                                   }
                                   navigator.pop();
-                                  rootMessenger.showSnackBar(
-                                    const SnackBar(content: Text('订阅已保存')),
-                                  );
+                                  AppSnack.success(context, '订阅已保存');
                                 } catch (error) {
                                   if (!mounted) {
                                     return;
                                   }
-                                  rootMessenger.showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        _extractRequestErrorMessage(
-                                          error,
-                                          '保存订阅失败',
-                                        ),
-                                      ),
+                                  AppSnack.error(
+                                    context,
+                                    _extractRequestErrorMessage(
+                                      error,
+                                      '保存订阅失败',
                                     ),
                                   );
                                 }
@@ -1548,11 +1549,19 @@ class _SmallIconBtn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 原本是 Padding(all: 6) 包 18dp 图标 = 30dp 命中区，是全库最小的几处之一，
+    // 而这个组件有 4 个调用点（订阅卡片上的编辑/日志/拉取/删除，彼此挨得很近）。
+    // 用 SizedBox 撑到 44 并让图标居中：图标视觉尺寸不变，只是不再需要瞄准。
+    // opaque 是必须的，否则图标笔画之间的透明像素不响应点击。
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.all(6),
-        child: Icon(icon, size: 18, color: color ?? AppColors.slate400),
+      child: SizedBox(
+        width: AppTapTarget.min,
+        height: AppTapTarget.min,
+        child: Center(
+          child: Icon(icon, size: 18, color: color ?? AppColors.slate400),
+        ),
       ),
     );
   }
