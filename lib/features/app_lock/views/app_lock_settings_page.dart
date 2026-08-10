@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../providers/app_lock_provider.dart';
 import '../widgets/pattern_pad.dart';
@@ -243,10 +243,7 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  GestureDetector(
-                    onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
-                  ),
+                  const AppBackButton(),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(

@@ -8,6 +8,7 @@ import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_snack.dart';
 
 class PanelLogPage extends StatefulWidget {
   const PanelLogPage({super.key});
@@ -88,9 +89,7 @@ class _PanelLogPageState extends State<PanelLogPage> {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('已复制日志内容')));
+    AppSnack.success(context, '已复制日志内容');
   }
 
   @override

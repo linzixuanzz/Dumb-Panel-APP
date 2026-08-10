@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_circle_add_button.dart';
+import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_snack.dart';
 
 class _ApiScopeOption {
   final String value;
@@ -18,6 +20,10 @@ class _ApiScopeOption {
   const _ApiScopeOption(this.value, this.label, this.description);
 }
 
+// 必须与面板服务端 middleware.OpenAPIAccess("...") 实际强制的 8 个 scope 一致。
+// 少一项的表现不是报错，而是「这个权限永远勾不上」——建出来的应用调该类接口一律 403，
+// 而界面上完全看不出少了什么。notifications 与 backup 就曾经这样漏了两版。
+// 面板 v3.0.2 起有测试锁住服务端与面板 Web 的一致性，但**管不到这个仓库**，改前请核对。
 const _apiScopeOptions = [
   _ApiScopeOption('tasks', '任务管理', '读取与操作定时任务'),
   _ApiScopeOption('scripts', '脚本管理', '访问脚本目录和执行入口'),
@@ -25,6 +31,8 @@ const _apiScopeOptions = [
   _ApiScopeOption('subscriptions', '订阅管理', '管理订阅仓库和文件'),
   _ApiScopeOption('logs', '日志查看', '读取执行日志和流式输出'),
   _ApiScopeOption('system', '系统信息', '读取系统信息和状态数据'),
+  _ApiScopeOption('notifications', '通知渠道', '发送通知与管理渠道'),
+  _ApiScopeOption('backup', '系统备份', '创建、下载与恢复备份'),
 ];
 
 class OpenApiPage extends ConsumerStatefulWidget {
@@ -92,10 +100,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  GestureDetector(
-                    onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
-                  ),
+                  const AppBackButton(),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(
@@ -106,22 +111,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                       ),
                     ),
                   ),
-                  GestureDetector(
-                    onTap: _showCreateDialog,
-                    child: Container(
-                      width: 32,
-                      height: 32,
-                      decoration: const BoxDecoration(
-                        color: AppColors.primary,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.add,
-                        size: 20,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
+                  AppCircleAddButton(onTap: _showCreateDialog),
                 ],
               ),
             ),
@@ -187,7 +177,6 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) {
           final navigator = Navigator.of(ctx);
-          final rootMessenger = ScaffoldMessenger.of(context);
           return Padding(
             padding: EdgeInsets.fromLTRB(
               20,
@@ -281,12 +270,11 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                         if (!mounted) {
                           return;
                         }
-                        rootMessenger.showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              extractErrorMessage(error, '创建 API 应用失败'),
-                            ),
-                          ),
+                        // 弹窗自己的 ctx 在 pop 之后就失效了，这里一律用 State 的
+                        // context，由上面的 mounted 判断兜住 async gap。
+                        AppSnack.error(
+                          context,
+                          extractErrorMessage(error, '创建 API 应用失败'),
                         );
                       }
                     },
@@ -411,9 +399,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                     GestureDetector(
                       onTap: () {
                         Clipboard.setData(ClipboardData(text: appKey));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('App Key 已复制')),
-                        );
+                        AppSnack.success(context, 'App Key 已复制');
                       },
                       child: Row(
                         children: [
@@ -528,23 +514,19 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                           if (!mounted) {
                             return;
                           }
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(enabled ? '应用已禁用' : '应用已启用'),
-                            ),
+                          AppSnack.success(
+                            context,
+                            enabled ? '应用已禁用' : '应用已启用',
                           );
                         } catch (error) {
                           if (!mounted) {
                             return;
                           }
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                extractErrorMessage(
-                                  error,
-                                  enabled ? '禁用应用失败' : '启用应用失败',
-                                ),
-                              ),
+                          AppSnack.error(
+                            context,
+                            extractErrorMessage(
+                              error,
+                              enabled ? '禁用应用失败' : '启用应用失败',
                             ),
                           );
                         }
@@ -566,10 +548,9 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                         if (!mounted) {
                           return;
                         }
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(extractErrorMessage(error, '重置密钥失败')),
-                          ),
+                        AppSnack.error(
+                          context,
+                          extractErrorMessage(error, '重置密钥失败'),
                         );
                       }
                       break;
@@ -624,19 +605,14 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                           if (!mounted) {
                             return;
                           }
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('应用已删除')),
-                          );
+                          AppSnack.success(context, '应用已删除');
                         } catch (error) {
                           if (!mounted) {
                             return;
                           }
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                extractErrorMessage(error, '删除应用失败'),
-                              ),
-                            ),
+                          AppSnack.error(
+                            context,
+                            extractErrorMessage(error, '删除应用失败'),
                           );
                         }
                       }
@@ -672,7 +648,6 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) {
           final navigator = Navigator.of(ctx);
-          final rootMessenger = ScaffoldMessenger.of(context);
           return Padding(
             padding: EdgeInsets.fromLTRB(
               20,
@@ -747,17 +722,19 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                         }
                         navigator.pop();
                         await _load();
-                        rootMessenger.showSnackBar(
-                          const SnackBar(content: Text('应用已保存')),
-                        );
+                        // _load() 又是一次 await，弹窗的 ctx 此时已随 pop 失效，
+                        // 用 State 的 context 前再判一次 mounted。
+                        if (!mounted) {
+                          return;
+                        }
+                        AppSnack.success(context, '应用已保存');
                       } catch (error) {
                         if (!mounted) {
                           return;
                         }
-                        rootMessenger.showSnackBar(
-                          SnackBar(
-                            content: Text(extractErrorMessage(error, '保存应用失败')),
-                          ),
+                        AppSnack.error(
+                          context,
+                          extractErrorMessage(error, '保存应用失败'),
                         );
                       }
                     },
@@ -838,12 +815,9 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                         }
                       } catch (error) {
                         if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                extractErrorMessage(error, '查看密钥失败'),
-                              ),
-                            ),
+                          AppSnack.error(
+                            context,
+                            extractErrorMessage(error, '查看密钥失败'),
                           );
                         }
                       }
@@ -870,9 +844,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
       logs = paginated.items;
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(extractErrorMessage(error, '加载调用日志失败'))),
-        );
+        AppSnack.error(context, extractErrorMessage(error, '加载调用日志失败'));
       }
     }
 
@@ -1021,9 +993,7 @@ class _CopyableField extends StatelessWidget {
         GestureDetector(
           onTap: () {
             Clipboard.setData(ClipboardData(text: value));
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(SnackBar(content: Text('已复制 $label')));
+            AppSnack.success(context, '已复制 $label');
           },
           child: Container(
             width: double.infinity,
@@ -1104,10 +1074,7 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  GestureDetector(
-                    onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
-                  ),
+                  const AppBackButton(),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(

@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_snack.dart';
 
 // ── Security Page (Tabbed) ──
 
@@ -46,10 +47,7 @@ class _SecurityPageState extends ConsumerState<SecurityPage>
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  GestureDetector(
-                    onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
-                  ),
+                  const AppBackButton(),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(
@@ -185,16 +183,12 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('登录日志已清理')));
+      AppSnack.success(context, '登录日志已清理');
     } catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(extractErrorMessage(error, '清理登录日志失败'))),
-      );
+      AppSnack.error(context, extractErrorMessage(error, '清理登录日志失败'));
     }
   }
 
@@ -419,16 +413,12 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('其他会话已撤销')));
+      AppSnack.success(context, '其他会话已撤销');
     } catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(extractErrorMessage(error, '撤销其他会话失败'))),
-      );
+      AppSnack.error(context, extractErrorMessage(error, '撤销其他会话失败'));
     }
   }
 
@@ -460,16 +450,12 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('会话已撤销')));
+      AppSnack.success(context, '会话已撤销');
     } catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(extractErrorMessage(error, '撤销会话失败'))),
-      );
+      AppSnack.error(context, extractErrorMessage(error, '撤销会话失败'));
     }
   }
 
@@ -701,16 +687,12 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('IP 白名单已删除')));
+      AppSnack.success(context, 'IP 白名单已删除');
     } catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(extractErrorMessage(error, '删除 IP 白名单失败'))),
-      );
+      AppSnack.error(context, extractErrorMessage(error, '删除 IP 白名单失败'));
     }
   }
 
@@ -892,19 +874,14 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
                         if (!mounted) {
                           return;
                         }
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('IP 白名单已添加')),
-                        );
+                        AppSnack.success(context, 'IP 白名单已添加');
                       } catch (error) {
                         if (!mounted) {
                           return;
                         }
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              extractErrorMessage(error, '添加 IP 白名单失败'),
-                            ),
-                          ),
+                        AppSnack.error(
+                          context,
+                          extractErrorMessage(error, '添加 IP 白名单失败'),
                         );
                       }
                     },
@@ -1068,9 +1045,7 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(extractErrorMessage(error, '获取 2FA 密钥失败'))),
-      );
+      AppSnack.error(context, extractErrorMessage(error, '获取 2FA 密钥失败'));
     }
   }
 
@@ -1085,15 +1060,14 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
         _secret = null;
       });
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('2FA 已启用')));
+        // 「验证」按钮可以连点重试，覆盖掉上一条结果，
+        // 否则改完验证码再点一次，看到的仍是上一次排队中的旧提示。
+        AppSnack.success(context, '2FA 已启用', replaceCurrent: true);
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('验证码错误')));
+        // 验证码不对属于校验没过，不是请求出错，不报红。
+        AppSnack.warn(context, '验证码错误', replaceCurrent: true);
       }
     }
   }
@@ -1148,16 +1122,12 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
         return;
       }
       setState(() => _enabled = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('2FA 已禁用')));
+      AppSnack.success(context, '2FA 已禁用');
     } catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(extractErrorMessage(error, '禁用 2FA 失败'))),
-      );
+      AppSnack.error(context, extractErrorMessage(error, '禁用 2FA 失败'));
     }
   }
 }

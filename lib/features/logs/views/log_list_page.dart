@@ -865,7 +865,9 @@ class _LogItem extends StatelessWidget {
           IconButton(
             tooltip: '删除日志',
             onPressed: onDelete,
-            visualDensity: VisualDensity.compact,
+            // compact 是 -2 档，把 IconButton 的 48 压到 40。改成 -1 档取 44：
+            // 既过了 44dp 这条线，又不像直接删掉那样让每行都长高 8dp、一屏少显示条数。
+            visualDensity: const VisualDensity(horizontal: -1, vertical: -1),
             splashRadius: 20,
             icon: const Icon(Icons.delete_outline, size: 20),
             color: AppColors.red500,

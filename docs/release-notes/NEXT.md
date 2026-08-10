@@ -2,13 +2,13 @@
 
 ## 目标版本
 
-- **预计 APP 版本**：v1.3.1
-- **当前基线版本**：v1.3.0+20
-- **记录日期**：2026-08-08
+- **预计 APP 版本**：v1.3.2
+- **当前基线版本**：v1.3.1+21
+- **记录日期**：2026-08-10
 
 ## 更新内容
 
-> 待发布版本草稿。后续每修复一个问题、优化一个体验或新增一个功能，都先记录到这里；最终发版时再整理为正式版本号文件，例如 `v1.3.1.md`。
+> 待发布版本草稿。后续每修复一个问题、优化一个体验或新增一个功能，都先记录到这里；最终发版时再整理为正式版本号文件，例如 `v1.3.2.md`。
 
 ### 新增
 
@@ -26,40 +26,35 @@
 
 - 本文件用于收集下一轮 APP 端更新内容，正式发布前会根据实际改动整理成用户可读版本。
 
-## v1.3.0 遗留的已知项
+## v1.3.1 遗留的已知项
 
-发版时明确记录、但没有做的事，避免下一轮重新调查一遍：
+v1.3.0 那份 7 条遗留**已全部处理完**（见 `v1.3.1.md` 末尾的对照表）。下面是本轮做完之后**新发现**、但没有在本轮解决的：
 
-- **4 个 State 仍无 `error` 字段**：`NotificationListState` / `UserListState` / `DepListState` / `ScriptState`，断网时静默变空。
-  另有两处是**改了一半**，比原样更危险：`SubscriptionListState` 的字段在（`subscription_list_page.dart:35`）、`load()` 的
-  catch 也确实 set 了（`:82`），但整个 build 一次都没读过它，`:375` 仍然写死 `Text('暂无订阅')`；`DashboardData`
-  同样是有字段、有 set、UI 不读（`dashboard_provider.dart:29` / `:139`）。**下次不要只 grep `final String? error` 就判定已修好**，
-  要跟到 build 里确认它被消费。
-- **补 `error` 之前得先让这些 Notifier 能注入 `Dio`**：11 个 StateNotifier 里只有 `TaskNotifier` / `LogListNotifier` 带
-  `{Dio? dio}`，Dep / Script / Notification / User / Subscription / Dashboard / Env 七个都是直接取 `DioClient.instance.dio`
-  单例，假 dio 注不进去。而 `quality-guidelines.md:156` 已经把「触碰列表 provider 必须有测试证明 `error` 被设置且能被 UI
-  消费」写成硬性要求 —— 先动 `error` 会在写测试时卡住。改造形状照 `quality-guidelines.md:136-146`（可选 `Dio` 构造参数）抄。
-- **111 处裸 `showSnackBar(`**（14 个文件）：绕过 `AppSnack`。其中 8 个文件**一次都没用过** `AppSnack` ——
-  `security_page`(15) / `subscription_list_page`(14) / `open_api_page`(12) / `user_list_page`(10) /
-  `notification_list_page`(9) / `more_page`(2) / `task_form_page`(2) / `panel_log_page`(1)，合计 65 处。
-  `env_list_page` 裸调用最多（18）但已经用了 11 次 `AppSnack`，属于迁了一半，不是零使用。
-- **4 个 model 的 `toJson()` 是死代码**：真实请求体是页面内联字面量，每个实体两份字段清单。`Subscription` 那份已删。
-- **13 处点击区低于 48dp，其中 8 处 ≤36dp**：最糟的是 `task_list_page.dart:3064-3067` 的分组 `PopupMenuButton` ——
-  `padding: EdgeInsets.zero` 配 `constraints: const BoxConstraints()`，**空约束等于把 IconButton 默认的 48×48 取消掉**，
-  实际点击区就是那个 18dp 图标。其余 ≤36dp 的是：`subscription_list_page.dart:1542` 的 `_SmallIconBtn` 30dp（4 个调用点）、
-  `app_buttons.dart` 的 `AppChipButton` ≈32dp **与 `AppTintedActionButton` ≈36dp（两个组件都不达标，不只是 chip 那个）**、
-  `main_scaffold.dart:161` 导航项 36dp、以及 `dep_list_page.dart:1496` / `system_settings_page.dart:792` /
-  `task_form_page.dart:806` 三个写死 36×36 的 IconButton。
-  剩下 5 处在 40dp 档：`log_list_page.dart:865` 与 `script_list_page.dart:1721` 两个 `VisualDensity.compact` IconButton，
-  加上 3 个被 `SizedBox(24, 24)` 夹住的选择框（`task_list_page.dart:1865` / `env_list_page.dart:2876` /
-  `dep_list_page.dart:1408` —— 这三处整张卡的 `onTap` 覆盖同一动作，够不着的风险低，单列在这里只是别漏统计）。
-  都是本轮之前就存在的。修它们要还回密度。
-- **仪表盘「在线」圆点不绑定任何状态**：`dashboard_page.dart:408-415` 是写死的
-  `const BoxDecoration(color: AppColors.success)`，面板不可达时照样常亮。
-  **改动比想象中小**：`DashboardData.error` 已经在 set（`dashboard_provider.dart:139`），
-  页面 `:118` 也已经 `watch` 了 `dashboardProvider`，缺的只是把 `const` 去掉、颜色改成读
-  `data.error == null`。
-  > 但别把它当成「在线状态」：`error` 反映的是**最后一次拉取失败**，不是心跳。
-  > 面板刚挂、下一次轮询还没发生时它仍是绿的。要真实的在线语义得另做，
-  > 这一条只负责去掉「明明加载失败了还亮绿灯」这个主动骗人的情形。
-- **`FormData` 请求重发不可靠**：脚本上传、备份上传的流已被消费过，401 续期后重发大概率失败。改动前后都存在。
+- **`copyWith` 的「不传即清空」语义是个反复踩的陷阱**。六个列表 State 的 `error` 都是裸赋值
+  （`error: error` 而不是 `error ?? this.error`），这是有意的：`load()` 开头一句
+  `copyWith(loading: true)` 就能顺手清掉上次的错误。代价是**任何**不传 `error` 的
+  `copyWith` 都会把它抹掉。本轮已修掉两处会造成用户可见问题的
+  （`DepListNotifier.loadPythonRuntimes` 与 `ScriptNotifier.setKeyword`），
+  但 `ScriptNotifier` 里还有约 10 处同形状的调用（`loadContent` / `saveContent` /
+  重命名与移动后的 `selectedPath` 更新等）没有显式回传 `error`。
+  它们目前都发生在「树已经加载成功」之后所以看不出问题，**但这个陷阱会一直在**。
+  彻底的解法是把 `copyWith` 改成哨兵语义、让 `load()` 显式写 `error: null`，
+  那要同时改 6 个 State、11 个 Notifier 和 25 条测试，本轮没做。
+
+- **通知渠道页在「渠道列表失败但类型表成功」时会丢掉已取回的类型表**。
+  `NotificationListNotifier.load()` 并发打两个接口，渠道列表失败时 `typesFuture`
+  被直接丢弃、从不 await，catch 分支只能回落到内置快照。不会崩（`_fetchTypes`
+  内部吞掉所有异常），但那份已经拿到手的数据白白浪费了。注释里写明类型表要单独降级，
+  所以这可能是有意的，值得确认一次。
+
+- **`open_api_page.dart` 的权限范围仍是硬编码**，与面板服务端的 `OpenAPIAccess`
+  没有任何机制绑定。面板侧 `v3.0.2` 加了测试把服务端与面板 Web 双向锁死，
+  但**管不到这个仓库** —— 面板将来加第 9 个权限范围时，APP 还是会漏。
+  要根治得让面板下发 scope 字典（那是另一期的事，且第 2 期方案 §6.b 已经
+  明确砍掉过 `/api/system/enums`，要重新论证）。
+
+- **`user_list_page.dart` 的两个 `library_private_types_in_public_api`**
+  仍在基线 7 个 info 里。根因是 `UserListState.items` 用了私有类型 `List<_User>`。
+
+- **APP 全仓没有任何 CI 门禁**：`.github/workflows/` 下 grep 不到 `dart format` /
+  `analyze` / `flutter test`，三项全靠本地自觉。面板那边 release 前有 checks job 挡着。

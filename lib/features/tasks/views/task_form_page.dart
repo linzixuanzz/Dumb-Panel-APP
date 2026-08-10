@@ -13,6 +13,7 @@ import '../../../shared/models/task.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_snack.dart';
 import '../utils/cron_schema.dart';
 import '../providers/task_provider.dart';
 
@@ -508,9 +509,8 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
 
     if (_randomDelayMode == _RandomDelayMode.custom &&
         (randomDelay == null || randomDelay <= 0)) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('请输入大于 0 的随机延迟秒数')));
+      // 校验没过，不是请求出错，所以用 warn 而不是 error。
+      AppSnack.warn(context, '请输入大于 0 的随机延迟秒数');
       return;
     }
 
@@ -556,9 +556,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
       if (mounted) context.pop();
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(extractErrorMessage(error, '保存失败'))),
-        );
+        AppSnack.error(context, extractErrorMessage(error, '保存失败'));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -803,8 +801,8 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                           icon: const Icon(Icons.add, size: 16),
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(
-                            minWidth: 36,
-                            minHeight: 36,
+                            minWidth: AppTapTarget.min,
+                            minHeight: AppTapTarget.min,
                           ),
                         ),
                       ),

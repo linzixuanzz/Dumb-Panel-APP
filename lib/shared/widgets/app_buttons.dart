@@ -27,7 +27,12 @@ class AppChipButton extends StatelessWidget {
     final surfaces = AppSurfaces.of(context);
     return GestureDetector(
       onTap: onTap,
-      child: Container(
+      // vertical: 7 加上 ~17 的内容高只有 31-32dp，够不到手指。
+      // 用 minHeight 补差值而不是加大 padding：视觉密度完全不变，只是命中区变高。
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: AppTapTarget.min),
+        child: Container(
+        alignment: Alignment.center,
         padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.md,
           vertical: 7,
@@ -55,6 +60,7 @@ class AppChipButton extends StatelessWidget {
               ),
             ),
           ],
+        ),
         ),
       ),
     );
@@ -101,7 +107,11 @@ class AppTintedActionButton extends StatelessWidget {
 
     return GestureDetector(
       onTap: enabled ? onTap : null,
-      child: Container(
+      // vertical: 10 加 16 的图标只有 36dp。同 AppChipButton，用约束补差值不改 padding。
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: AppTapTarget.min),
+        child: Container(
+        alignment: Alignment.center,
         padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.md,
           vertical: 10,
@@ -128,6 +138,7 @@ class AppTintedActionButton extends StatelessWidget {
               ),
             ),
           ],
+        ),
         ),
       ),
     );

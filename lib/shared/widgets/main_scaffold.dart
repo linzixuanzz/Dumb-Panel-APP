@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/theme/design_tokens.dart';
 import 'app_snack.dart';
 
 class MainScaffold extends StatefulWidget {
@@ -162,8 +163,14 @@ class _NavItem extends StatelessWidget {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onTap,
-        child: Column(
+        // 内容高只有 22 + 2 + 12 = 36dp。外层那 6dp 的竖向 padding 在 GestureDetector
+        // 之外，不计入命中区，所以底部导航实际是 36dp —— 全 App 点得最频繁的地方反而不达标。
+        // 用 minHeight 抬到 44：导航栏总高只涨 8dp，图标与标签的排布不变。
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: AppTapTarget.min),
+          child: Column(
           mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(isActive ? activeIcon : icon, size: 22, color: color),
             const SizedBox(height: 2),
@@ -183,6 +190,7 @@ class _NavItem extends StatelessWidget {
               ),
             ),
           ],
+        ),
         ),
       ),
     );

@@ -10,6 +10,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_section_title.dart';
+import '../../../shared/widgets/app_snack.dart';
 
 class MorePage extends ConsumerStatefulWidget {
   const MorePage({super.key});
@@ -55,18 +56,17 @@ class _MorePageState extends ConsumerState<MorePage> {
         if (info != null && info.hasUpdate && !silent) {
           AppUpdateService.showUpdateDialog(context, info);
         } else if (!silent) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('当前已是最新版本')));
+          AppSnack.show(context, '当前已是最新版本');
         }
       }
     } catch (_) {
       if (mounted) {
         setState(() => _checking = false);
         if (!silent) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('检查更新失败，请稍后重试')));
+          // 文案不走 extractErrorMessage：AppUpdateService.checkUpdate() 内部
+          // 已经 `catch (_) { return null; }`，网络/接口异常根本传不到这里；
+          // 这里能接住的只有本地异常，其 message 是英文，报给用户反而更差。
+          AppSnack.error(context, '检查更新失败，请稍后重试');
         }
       }
     }

@@ -4,7 +4,6 @@ import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
@@ -13,6 +12,7 @@ import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_notice.dart';
+import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_snack.dart';
 
 class BackupPage extends ConsumerStatefulWidget {
@@ -421,7 +421,6 @@ class _BackupPageState extends ConsumerState<BackupPage> {
   }
 
   Future<_CreateBackupRequest?> _showCreateBackupDialog() async {
-    final messenger = ScaffoldMessenger.of(context);
     final passwordController = TextEditingController();
     var selection = const _BackupSelection.defaults();
 
@@ -478,9 +477,9 @@ class _BackupPageState extends ConsumerState<BackupPage> {
             FilledButton(
               onPressed: () {
                 if (!selection.any) {
-                  messenger.showSnackBar(
-                    const SnackBar(content: Text('请至少选择一个备份项')),
-                  );
+                  // 校验没过而不是操作失败，用警告色；走页面自己的 _showWarning，
+                  // 与 _createBackup 里同文案的那条提示保持同一副长相。
+                  _showWarning('请至少选择一个备份项');
                   return;
                 }
                 Navigator.pop(
@@ -643,7 +642,6 @@ class _BackupPageState extends ConsumerState<BackupPage> {
   }
 
   Future<String?> _showRestoreDialog(String filename) async {
-    final messenger = ScaffoldMessenger.of(context);
     final passwordController = TextEditingController();
     final needsPassword = filename.toLowerCase().endsWith('.enc');
 
@@ -699,9 +697,8 @@ class _BackupPageState extends ConsumerState<BackupPage> {
           FilledButton(
             onPressed: () {
               if (needsPassword && passwordController.text.trim().isEmpty) {
-                messenger.showSnackBar(
-                  const SnackBar(content: Text('请输入备份密码')),
-                );
+                // 密码没填属于校验没过，恢复请求根本没发出去，不该报红。
+                _showWarning('请输入备份密码');
                 return;
               }
               Navigator.pop(dialogContext, passwordController.text.trim());
@@ -1309,10 +1306,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  GestureDetector(
-                    onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
-                  ),
+                  const AppBackButton(),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(

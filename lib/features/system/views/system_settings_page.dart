@@ -10,6 +10,7 @@ import '../../../shared/utils/api_utils.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_notice.dart';
 import '../../../shared/widgets/app_section_title.dart';
+import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../utils/system_config_schema.dart';
 
@@ -789,7 +790,10 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
             ? IconButton(
                 iconSize: 18,
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                constraints: const BoxConstraints(
+                  minWidth: AppTapTarget.min,
+                  minHeight: AppTapTarget.min,
+                ),
                 tooltip: revealed ? '隐藏' : '显示',
                 icon: Icon(
                   revealed
@@ -1045,10 +1049,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
               ),
               child: Row(
                 children: [
-                  GestureDetector(
-                    onTap: () => context.pop(),
-                    child: const Icon(Icons.arrow_back_ios, size: 20),
-                  ),
+                  const AppBackButton(),
                   const SizedBox(width: AppSpacing.sm),
                   const Expanded(
                     child: Text(

@@ -117,6 +117,21 @@ class AppSpacing {
   static const double listBottom = 100;
 }
 
+/// 可点区域的最小尺寸。
+///
+/// 取 44 而不是 Material 规范的 48：全库多数图标按钮原本在 30-36dp 档，
+/// 一律抬到 48 会把列表行、导航栏、批量操作条整体撑高，密度损失明显；
+/// 44 已经越过 iOS HIG 的 44×44 与 WCAG 2.2 AA 的 24×24 两条线，
+/// 而视觉上还能维持现有排版。
+///
+/// 用法上优先 **加约束而不是加 padding**（`ConstrainedBox` / `SizedBox` 包一层，
+/// 内容居中），这样命中区变大但视觉尺寸不变。
+class AppTapTarget {
+  const AppTapTarget._();
+
+  static const double min = 44;
+}
+
 /// 描边宽度令牌。
 class AppBorderWidth {
   const AppBorderWidth._();

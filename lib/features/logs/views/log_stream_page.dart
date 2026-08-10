@@ -333,8 +333,16 @@ class _LogStreamPageState extends State<LogStreamPage> {
               tooltip: '复制全部',
               onPressed: () {
                 Clipboard.setData(ClipboardData(text: _lines.join('\n')));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('日志已复制到剪贴板'), duration: Duration(seconds: 2)),
+                // 这里保留原有的 2 秒，不用默认的 4 秒：复制是瞬时完成的动作，
+                // 用户下一步多半立刻切到别的 App 去粘贴，提示条浮在日志正文上
+                // 压满 4 秒只会挡住他刚复制的那几行。
+                // 快捷方法 success() 故意不转发 duration，按 app_snack.dart 的
+                // 说明，需要改停留时长时走 show(..., tone: ...)。
+                AppSnack.show(
+                  context,
+                  '日志已复制到剪贴板',
+                  tone: AppSnackTone.success,
+                  duration: const Duration(seconds: 2),
                 );
               },
             ),

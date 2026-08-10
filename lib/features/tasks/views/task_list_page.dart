@@ -19,6 +19,7 @@ import '../../../shared/utils/panel_enums.dart';
 import '../../../shared/utils/sse_replay_buffer.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/utils/log_background.dart';
+import '../../../shared/widgets/app_circle_add_button.dart';
 import '../../../shared/widgets/app_buttons.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_notice.dart';
@@ -104,8 +105,9 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
 
   void _showWarning(String message) => AppSnack.warn(context, message);
 
-  /// 全部任务操作失败的漏斗：批量操作 / 排序保存 / 停止 / 启停 / 复制 / 置顶 / 删除
-  /// 七条路径都从这里出提示，所以着色只需要改这一处。
+  /// 全部任务操作失败的漏斗：批量操作 / 排序保存 / 停止 / 启停 / 复制 / 置顶 / 删除，
+  /// 外加分组的重命名 / 删除 / 添加任务 / 新建，都从这里出提示，
+  /// 所以着色和错误文案提取只需要改这一处。
   Future<void> _showActionError(dynamic error, String fallback) async {
     _showError(_extractTaskError(error, fallback));
   }
@@ -609,22 +611,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       ],
                       if (!_selectionMode && !_taskSortMode) ...[
                         const SizedBox(width: 8),
-                        GestureDetector(
-                          onTap: () => context.push('/tasks/new'),
-                          child: Container(
-                            width: 32,
-                            height: 32,
-                            decoration: const BoxDecoration(
-                              color: AppColors.primary,
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.add,
-                              size: 20,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
+                        AppCircleAddButton(onTap: () => context.push('/tasks/new')),
                       ],
                     ],
                   ),
@@ -954,15 +941,11 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
             newGroupName: newName,
           );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已将分组 "$oldName" 重命名为 "$newName"')),
-        );
+        _showSuccess('已将分组 "$oldName" 重命名为 "$newName"');
       }
-    } catch (e) {
+    } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('重命名分组失败')));
+        await _showActionError(error, '重命名分组失败');
       }
     }
   }
@@ -995,15 +978,11 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
             newGroupName: null,
           );
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('已删除分组 "$groupName"')));
+        _showSuccess('已删除分组 "$groupName"');
       }
-    } catch (e) {
+    } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('删除分组失败')));
+        await _showActionError(error, '删除分组失败');
       }
     }
   }
@@ -1013,9 +992,8 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     List<Task> ungroupedTasks,
   ) async {
     if (ungroupedTasks.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('没有未分组的任务可添加')));
+      // 「没有可添加的」既不是成功也不是失败，只是没什么可干，保持中性。
+      _showMessage('没有未分组的任务可添加');
       return;
     }
     final selected = <int>{};
@@ -1069,19 +1047,13 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                         newGroupName: targetGroup,
                       );
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          '已将 ${tasksToMove.length} 个任务添加到 "$targetGroup"',
-                        ),
-                      ),
+                    _showSuccess(
+                      '已将 ${tasksToMove.length} 个任务添加到 "$targetGroup"',
                     );
                   }
-                } catch (e) {
+                } catch (error) {
                   if (mounted) {
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(const SnackBar(content: Text('添加任务到分组失败')));
+                    await _showActionError(error, '添加任务到分组失败');
                   }
                 }
               },
@@ -1171,19 +1143,13 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                         newGroupName: groupName,
                       );
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          '已创建分组 "$groupName" 并添加 ${tasksToMove.length} 个任务',
-                        ),
-                      ),
+                    _showSuccess(
+                      '已创建分组 "$groupName" 并添加 ${tasksToMove.length} 个任务',
                     );
                   }
-                } catch (e) {
+                } catch (error) {
                   if (mounted) {
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(const SnackBar(content: Text('创建分组失败')));
+                    await _showActionError(error, '创建分组失败');
                   }
                 }
               },
@@ -2972,11 +2938,14 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
               tooltip: '复制全部',
               onPressed: () {
                 Clipboard.setData(ClipboardData(text: _lines.join('\n')));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('日志已复制到剪贴板'),
-                    duration: Duration(seconds: 2),
-                  ),
+                // 特意保留 2s（默认 4s）：这里是日志页，提示条浮在正文上方，
+                // 而复制成功是即时可感知的，没必要占着屏幕挡住刚复制的那几行。
+                // success 快捷方法不转发 duration，所以走 show(tone:)。
+                AppSnack.show(
+                  context,
+                  '日志已复制到剪贴板',
+                  tone: AppSnackTone.success,
+                  duration: const Duration(seconds: 2),
                 );
               },
             ),
@@ -3064,7 +3033,13 @@ class _GroupPopupMenu extends StatelessWidget {
     return PopupMenuButton<String>(
       icon: Icon(Icons.more_vert, size: 18, color: AppColors.slate400),
       padding: EdgeInsets.zero,
-      constraints: const BoxConstraints(),
+      // 这里原本是 `const BoxConstraints()` —— 空约束会把 IconButton 默认的
+      // 48×48 直接取消掉，实际命中区退化成那个 18dp 图标，是全库最小的几处之一。
+      // 不能简单删掉这行：删了会回到 48 并把分组头撑高。
+      constraints: const BoxConstraints(
+        minWidth: AppTapTarget.min,
+        minHeight: AppTapTarget.min,
+      ),
       itemBuilder: (ctx) => [
         if (!isUngrouped && onRename != null)
           const PopupMenuItem(value: 'rename', child: Text('重命名分组')),
