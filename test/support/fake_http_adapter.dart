@@ -29,11 +29,21 @@ class FakeHttpAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    // 必须在这里就把请求体抽干：它是 single-subscription 流，
+    // 事后再读只会拿到「Stream has already been listened to」。
+    // multipart 重发的回归用例靠这个字节数判断「第二次发出去的body是不是空的」。
+    var bodyByteCount = 0;
+    if (requestStream != null) {
+      await for (final chunk in requestStream) {
+        bodyByteCount += chunk.length;
+      }
+    }
     requests.add(
       RecordedRequest(
         method: options.method,
         path: options.path,
         authorization: options.headers['Authorization']?.toString(),
+        bodyByteCount: bodyByteCount,
       ),
     );
     return responder(options);
@@ -49,11 +59,16 @@ class RecordedRequest {
     required this.method,
     required this.path,
     required this.authorization,
+    this.bodyByteCount = 0,
   });
 
   final String method;
   final String path;
   final String? authorization;
+
+  /// 这次请求实际发出去的请求体字节数。
+  /// multipart 重发一旦复用了已 finalize 的 FormData，这里会是 0。
+  final int bodyByteCount;
 }
 
 /// 构造 JSON 响应体。

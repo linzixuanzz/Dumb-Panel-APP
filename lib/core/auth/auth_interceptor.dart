@@ -11,6 +11,16 @@ import 'token_refresher.dart';
 /// 并且永远等不到 resolve —— 这条 await 自己等自己，直接死锁。
 const String _kRetriedAfterRefresh = '__daidai_retried_after_refresh__';
 
+/// 打在 `RequestOptions.extra` 上的 `FormData` 副本，供 401 续期后重发时替换请求体。
+///
+/// 为什么需要它：`_retry` 复用的是同一个 `RequestOptions`，也就是**同一个已经被
+/// finalize 过的 `FormData` 实例**。dio 的 `FormData.finalize()` 二次调用直接抛
+/// `StateError`，所以脚本上传、备份上传这类 multipart 请求一旦撞上 401，
+/// 续期是成功的、重发却必然失败，而用户只看到一句「上传失败」。
+///
+/// 快照必须在 `onRequest` 里拿：那时 `FormData` 还没 finalize，`clone()` 才合法。
+const String _kFormDataSnapshot = '__daidai_formdata_snapshot__';
+
 class AuthInterceptor extends Interceptor {
   /// 这些接口的 401 表示「凭据不对」，不是「access token 过期」，不能触发续期：
   /// - login / init / check-init / captcha-config：用户还没有有效会话
@@ -60,6 +70,15 @@ class AuthInterceptor extends Interceptor {
     final token = await SecureStorage.getAccessToken();
     if (token != null && token.isNotEmpty) {
       options.headers['Authorization'] = 'Bearer $token';
+    }
+    // 趁 FormData 还没被 finalize，留一份可重发的副本。见 _kFormDataSnapshot 的说明。
+    // try 是防御性的：clone 失败（例如将来有拦截器排在本拦截器之前并提前 finalize）
+    // 只应该退化成「重发仍然失败」这个旧行为，绝不能把正常请求打挂。
+    final body = options.data;
+    if (body is FormData) {
+      try {
+        options.extra[_kFormDataSnapshot] = body.clone();
+      } catch (_) {}
     }
     handler.next(options);
   }
@@ -135,6 +154,15 @@ class AuthInterceptor extends Interceptor {
   ) {
     options.headers['Authorization'] = 'Bearer $accessToken';
     options.extra[_kRetriedAfterRefresh] = true;
+    // multipart 请求必须换上 onRequest 留的那份未使用副本，
+    // 否则这里发出去的是已经 finalize 过的旧实例，重发必然抛 StateError。
+    // 取完就清掉：重发只会发生一次（_kRetriedAfterRefresh 保证第二次 401 直接失败退出），
+    // 留着只是白白多持有一份文件字节。
+    final snapshot = options.extra[_kFormDataSnapshot];
+    if (snapshot is FormData) {
+      options.data = snapshot;
+      options.extra.remove(_kFormDataSnapshot);
+    }
     return _dio.fetch(options);
   }
 
