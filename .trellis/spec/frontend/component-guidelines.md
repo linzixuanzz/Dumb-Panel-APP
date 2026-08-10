@@ -256,13 +256,33 @@ AppSnack.error(context, message, replaceCurrent: true);
 > 还是通栏方块的提示条 —— 而它恰恰是出现频率最高的之一。
 > **一般规则：本提交造成的不一致，在本提交里修掉，不推给 backlog。**
 >
-> 全库仍有 **111 处**裸 `showSnackBar(`（**14 个文件**，不含 `app_snack.dart` 自己那 2 处：
-> 一处在文档注释里、一处是 `AppSnack` 的实现本体）没有迁移，单列 backlog。
-> 其中 **8 个文件一次都没用过 `AppSnack`**：`security_page`(15) / `subscription_list_page`(14) /
-> `open_api_page`(12) / `user_list_page`(10) / `notification_list_page`(9) / `more_page`(2) /
-> `task_form_page`(2) / `panel_log_page`(1)。
-> `env_list_page` 裸调用最多（18）但已经用了 11 次 `AppSnack` —— 它是**迁了一半**，不是零使用，
-> 别照着旧记录去「从零接线」。新代码一律走 `AppSnack`。
+> **v1.3.1 起全库零裸调用。** 曾经的 111 处（14 个文件）已全部迁完，
+> 现在 `showSnackBar(` 只剩 `app_snack.dart` 自己那 2 处：一处在文档注释里、
+> 一处是 `AppSnack` 的实现本体。**新代码一律走 `AppSnack`，不要开新的裸调用。**
+
+### 迁移时最容易踩的一个坑
+
+不少调用点原本会提前把 messenger 存下来规避 async gap：
+
+```dart
+final rootMessenger = ScaffoldMessenger.of(context);   // 弹窗 builder 里
+...
+rootMessenger.showSnackBar(...);
+```
+
+`AppSnack` 收的是 `BuildContext` 不是 messenger，所以这个变量迁完会变成未使用。
+**删掉它，改传页面自身的 `context`**（不是弹窗的 `ctx`）——`ScaffoldMessenger.maybeOf`
+解析到的是同一个根 messenger，弹窗 pop 之后照样能弹。前提是每个 `await` 之后
+有 `if (!mounted) return;` 兜住。
+
+两处特别容易多出 `use_build_context_synchronously` 告警：
+
+- **`StatefulBuilder(builder: (context, setState))` 的 `context` 参数会遮蔽 `State.context`**，
+  在那个闭包里直接用 `context`，分析器会认为外层的 `mounted` 检查「与它无关」。
+- **`build(BuildContext context)` 的形参同理**，不被视为 `State.context`。
+
+两种情况的解法都是：把提示调用挪进一个 State 方法（或走文件已有的
+`_showSuccess` / `_showError` 私有转发器），让 `context` 解析到 `State.context`。
 
 错误文案统一经 `extractErrorMessage(error, fallback)`（`shared/utils/api_utils.dart:44`）提取后端 `error`/`message` 字段：
 
@@ -277,31 +297,76 @@ String _extractTaskError(dynamic error, String fallback) => extractErrorMessage(
 
 ---
 
-## 空状态 vs 错误态：三个主列表已区分，其余 6 个仍未
+## 空状态 vs 错误态：全部列表已区分（v1.3.1 补齐）
 
-第 0 期 R3 给 `TaskListState` / `LogListState` / `EnvListState` 加了 `error` 字段，
-这三个列表现在在「有错误且列表为空」时显示原因 + 重试按钮（`AppErrorView`），
-不再一律显示「暂无数据」。全库 `AppErrorView` / `AppEmptyView` 的调用点也就只有这三个文件。
+所有列表在「有错误且列表为空」时显示原因 + 重试按钮（`AppErrorView`），
+不再一律显示「暂无数据」。
 
-其余 6 个分两种情况，**症状一样但工作量不一样**：
-
-| 情况 | State | 现状 |
-|---|---|---|
-| 连字段都没有 | `NotificationListState` / `UserListState` / `DepListState` / `ScriptState` | 断网时症状与改造前一样 |
-| **字段有、也 set 了，但 UI 不读** | `SubscriptionListState`、`DashboardData` | 更危险，见下 |
-
-`SubscriptionListState` 的 `error` 字段在 `subscription_list_page.dart:35`，`load()` 的 catch 在
-`:82` 确实写了 `error: '加载订阅失败'`，但**整个 build 里没有任何一处读它**，`:375` 仍然是写死的
-`Text('暂无订阅')`。`DashboardData` 同理（`dashboard_provider.dart:29` 声明、`:139` 赋值，
-`dashboard_page.dart` 一次没读）。
-
-> ⚠️ **别用 `grep 'final String? error'` 判断某个列表修好了没有**——这两个会给出假阳性。
-> 判据是 build 里有没有把它接到 `AppErrorView`。
+> ⚠️ **别用 `grep 'final String? error'` 判断某个列表修好了没有**——会有假阳性。
+> `SubscriptionListState` 与 `DashboardData` 曾长期处于「字段在、`catch` 里也 set 了、
+> 但整个 build 一次都没读过」的状态：症状和完全没做一样，却更容易被误判为已修。
+> **判据是 build 里有没有把它接到 `AppErrorView`。**
 
 > 新增列表 provider **必须**带 `error` 字段，并把「真的没有数据」与「拿不到数据」区分开。
 > 错误文案走 `extractListErrorMessage`（不是 `extractErrorMessage`）——后者在后端没返回
 > `error`/`message` 时会退回 `DioException.message`，那是英文
 > （"The connection errored: Failed host lookup..."），而错误态是摊在屏幕中央给用户看的。
+
+---
+
+## 可点区域：最小 44dp，用约束补而不是加 padding
+
+令牌是 `AppTapTarget.min = 44`（`core/theme/design_tokens.dart`）。
+
+取 44 而不是 Material 规范的 48：全库多数图标按钮原本在 30–36dp 档，一律抬到 48 会把
+列表行、导航栏、批量操作条整体撑高，密度损失明显；44 已经越过 iOS HIG 的 44×44 与
+WCAG 2.2 AA 的 24×24 两条线。**不要再引入第二个尺寸档。**
+
+**做法：加约束，不加 padding。** 这样命中区变大而视觉尺寸不变：
+
+```dart
+// ✅ IconButton / PopupMenuButton：改 constraints
+constraints: const BoxConstraints(
+  minWidth: AppTapTarget.min,
+  minHeight: AppTapTarget.min,
+),
+
+// ✅ 自定义按钮：SizedBox 撑开 + Center 居中
+GestureDetector(
+  behavior: HitTestBehavior.opaque,   // 少了它，图标笔画之间的透明像素不响应点击
+  onTap: onTap,
+  child: SizedBox(
+    width: AppTapTarget.min,
+    height: AppTapTarget.min,
+    child: Center(child: Icon(icon, size: 18)),
+  ),
+)
+
+// ✅ 有背景/边框的胶囊按钮：ConstrainedBox 包住，Container 加 alignment
+ConstrainedBox(
+  constraints: const BoxConstraints(minHeight: AppTapTarget.min),
+  child: Container(alignment: Alignment.center, padding: ..., child: ...),
+)
+```
+
+**已有的共享组件，不要再手写一遍**：
+
+| 组件 | 用途 | 替代的写法 |
+|---|---|---|
+| `AppBackButton` | 页面头部返回 | `GestureDetector(onTap: context.pop, child: Icon(arrow_back_ios, size: 20))` |
+| `AppCircleAddButton` | 头部右上角圆形「新建」 | 32dp 的 `Container` + `BoxDecoration(circle)` + `Icon(add)` |
+
+### 几个具体的坑
+
+- **`constraints: const BoxConstraints()` 不是「用默认值」，是「取消默认值」。**
+  `IconButton` 默认有 48×48，传空约束等于把它清零，命中区退化成图标本身
+  （`task_list_page` 的分组菜单曾因此只有 18dp）。要改小就写明具体数值，别传空的。
+- **`VisualDensity.compact` 是 −2 档（48→40）**，仍然不达标。改用
+  `VisualDensity(horizontal: -1, vertical: -1)` 拿到 44——直接删掉 `compact` 会让每行长高 8dp。
+- **卡片已经贴着高度下限时，别撑大里面的勾选框**，改成整卡 `onTap`
+  （任务页、环境变量页本来就是这样）。依赖列表的 24dp 勾选框就是这么处理的。
+- **`materialTapTargetSize: shrinkWrap` + `SizedBox` 紧约束会叠加**，
+  36×36 会被压到 24dp，比看上去更糟。
 
 ---
 

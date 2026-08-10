@@ -99,9 +99,36 @@ error: error,                    // 不是 error ?? this.error
 都会把 error 清空**。这是刻意的（每次新请求自动清掉上次的错误），但很容易被误改成 `error ?? this.error`。
 `AuthState`（`auth_provider.dart:34`）则相反，用哨兵保留。**两种语义在仓库里并存。**
 
-> 这条语义已经被 `test/features/list_error_state_test.dart` 锁住：
-> 改成 `error ?? this.error` 会让 `TaskListState` / `LogListState` 两组用例直接变红。
-> 想改语义就得同时改用例，不能「顺手修正」。
+> 这条语义已经被 `test/features/list_error_state_test.dart` 与
+> `test/features/list_error_state_more_test.dart` 锁住：改成 `error ?? this.error`
+> 会让 7 个 State 的 copyWith 用例直接变红。想改语义就得同时改用例，不能「顺手修正」。
+
+#### 这条语义的代价：与列表无关的更新会顺手抹掉错误提示
+
+「不传即清空」的好处是 `load()` 开头一句 `copyWith(loading: true)` 就自动清掉上次的错误。
+代价是**任何**不传 `error` 的 `copyWith` 都会把它抹掉——包括那些跟列表毫无关系的状态更新。
+
+已经踩到过两次，都是「用户看到的错误提示莫名其妙变成空态」：
+
+```dart
+// ❌ 树加载失败后，用户一敲搜索框，错误提示就没了，页面退回「暂无脚本」
+void setKeyword(String keyword) => state = state.copyWith(keyword: keyword);
+
+// ✅ 与列表无关的更新必须显式把 error 带回去
+void setKeyword(String keyword) =>
+    state = state.copyWith(keyword: keyword, error: state.error);
+```
+
+`DepListNotifier.loadPythonRuntimes()` 是同一个坑（它拉的是 Python 运行时，
+却会清掉依赖列表的错误），已修。
+
+**改任何 Notifier 时，先问一句：这次更新跟 `error` 描述的那个请求是同一件事吗？**
+不是的话就要显式回传。`ScriptNotifier` 里还有约 10 处同形状调用没改
+（`loadContent` / `saveContent` / 重命名移动后的 `selectedPath` 更新），
+它们都发生在「树已加载成功」之后所以暂时看不出问题——但那是运气，不是设计。
+
+> 想彻底消除这个陷阱，就得把 `copyWith` 改成哨兵语义、让每个 `load()` 显式写
+> `error: null`。那要同时改 6 个 State、11 个 Notifier 和 25 条测试，至今没做。
 
 ---
 
@@ -117,39 +144,30 @@ try {
 }
 ```
 
-### ⚠️ 现状：错误态几乎不存在
+### 现状：全部列表 State 都有 `error`，且 UI 都消费了（v1.3.1 补齐）
 
-**11 个 State 类里只有 4 个有 `error` 字段**：
+全部 9 个列表 / 数据 State 都带 `error` 字段，**并且 build 里都真的读了它**
+（`state.error != null && items.isEmpty` → `AppErrorView`，带重试按钮）：
 
-| 有 `error` | 位置 |
-|---|---|
-| `AuthState` | `core/auth/auth_provider.dart:15` |
-| `TaskListState` | `features/tasks/providers/task_provider.dart:15` |
-| `DashboardData` | `features/dashboard/providers/dashboard_provider.dart:29` |
-| `SubscriptionListState` | `features/subscriptions/views/subscription_list_page.dart:29` |
+`AuthState` / `TaskListState` / `LogListState` / `EnvListState` / `DashboardData` /
+`SubscriptionListState` / `NotificationListState` / `UserListState` / `DepListState` / `ScriptState`
 
-| **没有** `error` 字段 | 位置 |
-|---|---|
-| `EnvListState` | `env_list_page.dart:22-58`，`catch` 只写 `copyWith(loading: false)`（`:118-120`） |
-| `LogListState` | `log_list_page.dart:19-55`，同上（`:93-95`） |
-| `NotificationListState` | `notification_list_page.dart:59-81` |
-| `UserListState` | `user_list_page.dart:67` |
-| `DepListState` | `dep_list_page.dart:23-62` |
-| `ScriptState` | `script_list_page.dart` |
+> **判断一条链路做没做，必须跟到 `build` 里确认 `error` 被消费。**
+> 只 grep `final String? error` 会得出相反结论——`SubscriptionListState` 与 `DashboardData`
+> 曾经长期处于「字段在、`catch` 里也 set 了、但整个 build 一次都没读过」的状态，
+> 表现和完全没做一模一样，却更容易被误判为已修。
 
-**而且即使有 `error`，UI 也基本不读它**。全库唯一消费 provider error 的地方是登录页：
+新增列表 provider 时：
 
-```dart
-// lib/features/login/views/login_page.dart:198
-: ref.read(authProvider).error ?? '登录失败';
-```
+1. State 必须带 `error` 字段，`copyWith` 里写裸 `error: error`；
+2. `load()` 开头清空、`catch` 里用 `extractListErrorMessage(e, '加载 xx 失败')` 赋值；
+3. UI 必须区分「空列表」与「请求失败」，失败时显示原因 + 重试；
+4. 构造函数必须带 `{Dio? dio}`，否则第 5 条的测试写不了；
+5. 按 `quality-guidelines.md` 的硬性要求补测试，证明 `error` 被设置**且能被 UI 消费**。
 
-`TaskListState.error`、`DashboardData.error`、`SubscriptionListState.error` 被赋值但**从未被渲染**。
-断网时用户看到的是「暂无任务 / 暂无日志 / 暂无环境变量」，不是错误提示，也没有重试按钮。
-
-> **第 0 期 R3 要修这个。** 新增列表 provider 时：
-> 1. State 必须带 `error` 字段；
-> 2. UI 必须区分「空列表」与「请求失败」，失败时显示原因 + 重试。
+第 4 条不是可选的：`Dep` / `Script` / `Notification` / `User` / `Subscription` 五个
+曾经因为注入不了假 dio，导致「想补 error 却写不了测试」，只能先回头改构造函数。
+**顺序反了会返工。**
 
 ### 例外：`_RestoreProgressState` 的 error 是非空 String
 
