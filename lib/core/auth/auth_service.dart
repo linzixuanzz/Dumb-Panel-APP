@@ -65,11 +65,47 @@ class AuthService {
       data['captcha'] = captcha;
     }
 
-    // 登录接口的 4xx 现在由 DioClient 的全局 validateStatus(< 400) 直接抛成
-    // DioException（带 response），语义与这里原先手工重建 DioException 完全一致，
-    // 所以那段绕行代码已删除。AuthInterceptor 把 /auth/login 放进了 _noRefreshPaths，
-    // 密码错误返回的 401 不会被误当成「token 过期」去续期。
-    final response = await _dio.post(ApiEndpoints.login, data: data);
+    // 登录接口的 401 有两种**完全不同**的含义，必须在这里分开处理：
+    //
+    // 1. 「还差一步」：账号开了两步验证（server/handler/auth.go 返回
+    //    401 + two_factor_required），或者验证码要求/失效（401 + captcha_required）。
+    //    这属于正常登录流程，login_page 拿到这个 map 后才会把 TOTP 输入框渲染出来、
+    //    或者重新拉起滑块。
+    // 2. 「真失败」：用户名或密码错误，页面要显示错误文案。
+    //
+    // DioClient 的全局 validateStatus 收紧到 < 400（为的是让 401 进 AuthInterceptor
+    // 做 token 续期，那行**不能动**），所有 401 都会就地抛 DioException，
+    // 于是第 1 种情况的响应体压根走不到下面的解析代码 —— 用户看到红字
+    // 「请输入两步验证码」，页面上却根本没有能输验证码的地方，等于永久登不进去。
+    //
+    // 所以这里跟下面的 captchaConfig() 一样做**请求级**放宽，再自己区分这两类 4xx。
+    final response = await _dio.post(
+      ApiEndpoints.login,
+      data: data,
+      options: Options(
+        // 只放宽到 < 500：5xx（含验证码服务不可用的 503）仍旧抛异常，语义不变。
+        validateStatus: (status) => status != null && status < 500,
+      ),
+    );
+
+    final statusCode = response.statusCode ?? 0;
+    final raw = response.data;
+    // 只有带「还差一步」标记的 4xx 才按正常返回值往下走，交给 login_page 的既有分支。
+    // 注意密码错误时服务端也会带 captcha_required，但值取的是「验证码功能是否开启」：
+    // 没开就是 false，走下面的抛异常分支；开了则由 login_page 显示后端给的 error 文案。
+    final needsExtraStep =
+        raw is Map &&
+        (raw['two_factor_required'] == true || raw['captcha_required'] == true);
+    if (statusCode >= 400 && !needsExtraStep) {
+      // 其余 4xx 保持收紧后的语义：抛带 response 的 DioException，
+      // auth_provider._extractErrorMessage 会从 body 的 error 里取出
+      // 「用户名或密码错误」这类后端文案，403 的反代提示也依赖它。
+      throw DioException.badResponse(
+        statusCode: statusCode,
+        requestOptions: response.requestOptions,
+        response: response,
+      );
+    }
 
     final result = _extractData(response.data);
     final Map<String, dynamic> map = result is Map<String, dynamic>
