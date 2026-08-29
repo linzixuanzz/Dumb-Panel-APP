@@ -1,6 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+// ScrollDirection 只在 rendering 里导出，material/widgets 都没有转出来。
+// 用它来区分「用户自己拖的」和「恢复流程 jumpTo 出来的」滚动。
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -27,6 +30,7 @@ import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
 import '../../../shared/widgets/task_cron_list.dart';
 import '../providers/task_provider.dart';
+import '../utils/task_list_rows.dart';
 
 class TaskListPage extends ConsumerStatefulWidget {
   const TaskListPage({super.key});
@@ -68,7 +72,23 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   bool _taskSortMode = false;
   bool _taskOrderDirty = false;
   Timer? _debounce;
+  bool _scrollRestoreStarted = false;
   bool _restoredScrollOffset = false;
+  // 已经排了一次「下一帧再试恢复」，避免 build 和重试链重复排帧。
+  bool _scrollRestoreScheduled = false;
+  // 等 ScrollController attach 的帧数。列表还停在加载/错误/空态时它没有 clients，
+  // 只能一帧一帧地等；这个计数是防止一直等不到时无限排帧下去的兜底。
+  int _scrollRestoreWaitFrames = 0;
+  // 用户是不是已经自己滚过了。一旦为真，恢复流程必须立刻收手（见 _stepRestoreScrollOffset）。
+  bool _userScrolled = false;
+  // 滚动位置写盘的防抖定时器与「还没落地的最新值」。
+  Timer? _scrollSaveDebounce;
+  String? _pendingScrollOffset;
+
+  // 等待 ScrollController attach 的帧数上限。
+  // 正常情况下列表挂载当帧就能拿到 clients，这个上限只在「一直卡在加载态 / 错误态」
+  // 时才会用到（加载动画会持续产帧），约合 10 秒后放弃恢复、但仍然放开保存闸。
+  static const int _maxScrollRestoreWaitFrames = 600;
 
   @override
   void initState() {
@@ -81,20 +101,61 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       await ref.read(taskProvider.notifier).load(refresh: true);
     });
     _scrollController.addListener(_onScroll);
+    // 恢复滚动位置只能从「首帧之后」起跑：ScrollController 是在 build() 返回、
+    // Scrollable 挂载时才 attach 的，在 build 体内同步调用永远是 hasClients == false。
+    // 这里补一个首帧回调兜底，否则常见路径（provider 无轮询 / 无 SSE、_onScroll 不 setState）
+    // 下压根不会有第二次 rebuild，_restoredScrollOffset 会永远是 false，
+    // 把下面 _onScroll 里的保存闸永久锁死 —— 滚动位置一个字节都写不进去。
+    _scheduleScrollRestore();
   }
 
   void _onScroll() {
-    if (_scrollController.position.pixels >=
-        _scrollController.position.maxScrollExtent - 200) {
-      ref.read(taskProvider.notifier).loadMore();
+    // 任务是 `all=1` 一次性全量拉回来的，列表卡顿靠 ListView.builder 虚拟化解决，
+    // 不需要「滚到底再加载下一页」，所以这里只剩记录滚动位置这一件事。
+    if (!_scrollController.hasClients) {
+      return;
     }
+    // 区分「用户自己拖的」和「恢复流程 jumpTo 出来的」：
+    // jumpTo 走的是 goIdle -> IdleScrollActivity，userScrollDirection 始终是 idle；
+    // 只有 applyUserOffset（真的有手指在拖）才会把它改成 forward/reverse。
+    if (_scrollController.position.userScrollDirection !=
+        ScrollDirection.idle) {
+      _userScrolled = true;
+    }
+    // 恢复上次位置的过程中会连跳好几帧（见 _restoreScrollOffsetIfNeeded），
+    // 那些中间位置不能写回存储，否则会把用户真正停留的深位置覆盖成一个很浅的值。
+    // 但用户一旦自己接管，恢复流程会立刻放弃、后面不会再有程序化 jumpTo，
+    // 这时即使 _restoredScrollOffset 还没置位也可以放心记。
+    if (!_restoredScrollOffset && !_userScrolled) {
+      return;
+    }
+    _scheduleScrollOffsetSave(_scrollController.offset);
+  }
 
-    if (_scrollController.hasClients) {
-      SecureStorage.saveUiState(
-        _scrollOffsetStorageKey,
-        _scrollController.offset.toStringAsFixed(2),
-      );
+  /// 滚动位置写盘的防抖。
+  ///
+  /// `SecureStorage.saveUiState` 每次都是一趟 SharedPreferences 平台通道往返，
+  /// 而一次 fling 会打出几百条滚动通知 —— 原来是一条一写，几百次往返，
+  /// 正好把虚拟化省下来的开销又还回去了。这里只攒住最新值，停下来 250ms 才落盘。
+  void _scheduleScrollOffsetSave(double offset) {
+    _pendingScrollOffset = offset.toStringAsFixed(2);
+    _scrollSaveDebounce?.cancel();
+    _scrollSaveDebounce = Timer(
+      const Duration(milliseconds: 250),
+      _flushScrollOffset,
+    );
+  }
+
+  /// 把攒住的滚动位置真正写进存储。dispose 里也会调一次，
+  /// 否则「滚到底 -> 立刻切走」这条路径上最后一段位置会随防抖定时器一起被丢掉。
+  void _flushScrollOffset() {
+    final pending = _pendingScrollOffset;
+    if (pending == null) {
+      return;
     }
+    _pendingScrollOffset = null;
+    // 不 await：dispose 里也会走到这儿，State 已经在销毁路径上，写失败也没有可补救的动作。
+    SecureStorage.saveUiState(_scrollOffsetStorageKey, pending);
   }
 
   void _showMessage(String message) => AppSnack.show(context, message);
@@ -373,6 +434,10 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   @override
   void dispose() {
     _debounce?.cancel();
+    // 滚动位置是防抖写盘的，退出页面时很可能还有一次没落地的最新值。
+    // 先 cancel 掉定时器（State 都要没了，回调再跑没有意义），再手动补写一次。
+    _scrollSaveDebounce?.cancel();
+    _flushScrollOffset();
     _searchController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -432,42 +497,96 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     );
   }
 
-  List<_TaskGroup> _sortGroupsByOrder(List<_TaskGroup> groups) {
-    if (_groupOrder.isEmpty) return groups;
-    final orderMap = <String, int>{};
-    for (var i = 0; i < _groupOrder.length; i++) {
-      orderMap[_groupOrder[i]] = i;
+  /// 把「尝试恢复滚动位置」排到下一帧结束之后。
+  ///
+  /// 不能在 build 体内直接调 [_restoreScrollOffsetIfNeeded]：
+  /// Flutter 里 `ScrollController` 是在父 widget 的 build() **返回之后**、
+  /// Scrollable 挂载时才 attach 上来的，所以列表首次出现的那一帧 `hasClients` 恒为 false。
+  void _scheduleScrollRestore() {
+    if (_scrollRestoreStarted || _scrollRestoreScheduled) {
+      return;
     }
-    groups.sort((a, b) {
-      final ai = orderMap[a.key] ?? 9999;
-      final bi = orderMap[b.key] ?? 9999;
-      if (ai != bi) return ai.compareTo(bi);
-      return 0;
+    _scrollRestoreScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollRestoreScheduled = false;
+      _restoreScrollOffsetIfNeeded();
     });
-    return groups;
   }
 
   Future<void> _restoreScrollOffsetIfNeeded() async {
-    if (_restoredScrollOffset || !_scrollController.hasClients) {
+    // 用 _scrollRestoreStarted 保证只真正跑一次
+    //（_restoredScrollOffset 要等跳完才置位，挡不住重入）。
+    if (_scrollRestoreStarted || !mounted) {
       return;
     }
-    final raw = await SecureStorage.getUiState(_scrollOffsetStorageKey);
-    if (raw == null || raw.trim().isEmpty) {
-      _restoredScrollOffset = true;
-      return;
-    }
-    final offset = double.tryParse(raw);
-    if (offset == null) {
-      _restoredScrollOffset = true;
-      return;
-    }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scrollController.hasClients) {
+    if (!_scrollController.hasClients) {
+      // 列表还停在加载态 / 错误态 / 空态（那三条分支的 ListView 根本没挂 _scrollController），
+      // 或者 Scrollable 还没 attach 完。这里必须安排下一帧继续等，**不能静默返回** ——
+      // 一返回就再没有别的触发点，_restoredScrollOffset 会永远是 false，
+      // _onScroll 里的保存闸被永久锁死，滚动位置一个字节都写不进去。
+      _scrollRestoreWaitFrames++;
+      if (_scrollRestoreWaitFrames > _maxScrollRestoreWaitFrames) {
+        // 等太久（一直没拿到数据）就放弃恢复，但保存闸必须打开，
+        // 否则这一次进入页面之后再也记不住位置。
+        _scrollRestoreStarted = true;
+        _restoredScrollOffset = true;
         return;
       }
-      final maxOffset = _scrollController.position.maxScrollExtent;
-      _scrollController.jumpTo(offset.clamp(0, maxOffset));
+      _scheduleScrollRestore();
+      return;
+    }
+    _scrollRestoreStarted = true;
+    final raw = await SecureStorage.getUiState(_scrollOffsetStorageKey);
+    final offset = double.tryParse(raw?.trim() ?? '');
+    // 读存储是异步的，这中间用户完全可能已经自己滚起来了 —— 那就别再把他拽走。
+    if (!mounted || _userScrolled || offset == null || offset <= 0) {
       _restoredScrollOffset = true;
+      return;
+    }
+    _stepRestoreScrollOffset(offset, -1.0, 0);
+  }
+
+  /// 惰性列表的滚动位置恢复。
+  ///
+  /// `ListView.builder` 只布局可见区域，首帧的 `maxScrollExtent` 只是
+  /// 「已经布局出来的那一段 + 剩余项的粗略估算」，比真实值小得多。
+  /// 改造前直接 `offset.clamp(0, maxScrollExtent)`，深位置会被夹到很靠前的地方，
+  /// 表现为「退出任务页再进来，回不到原来的位置」。
+  ///
+  /// 所以这里逐帧往下跳：每跳一次就会带出下一屏内容、`maxScrollExtent` 随之变大，
+  /// 直到够到目标位置，或者列表确实到底了（这一帧没再变长）为止。
+  void _stepRestoreScrollOffset(
+    double target,
+    double lastMaxExtent,
+    int attempt,
+  ) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) {
+        // 列表中途换成了空态 / 错误态（controller 脱离），恢复就此作罢，
+        // 但要放开 _onScroll 的记录，否则这一次进入页面之后再也不记位置了。
+        _restoredScrollOffset = true;
+        return;
+      }
+      // 用户已经自己滚过了：再继续逐帧 jumpTo 就是把列表从他正在看的位置
+      // 一路拽到上一次会话残留的旧位置，视觉上就是「列表自己乱跳」。
+      // 这里立刻收手，同时放开保存闸，让他当前的位置能被正常记下来。
+      if (_userScrolled) {
+        _restoredScrollOffset = true;
+        return;
+      }
+      final position = _scrollController.position;
+      final maxExtent = position.maxScrollExtent;
+      final next = target > maxExtent ? maxExtent : target;
+      if ((position.pixels - next).abs() > 0.5) {
+        _scrollController.jumpTo(next);
+      }
+      // 收工条件：够到目标 / 内容不再变长（任务被删了、换了筛选）/ 兜底次数用完。
+      // 正常情况几帧就到位，60 次上限只是防死循环，不是期望值。
+      if (next >= target - 0.5 || maxExtent <= lastMaxExtent || attempt >= 60) {
+        _restoredScrollOffset = true;
+        return;
+      }
+      _stepRestoreScrollOffset(target, maxExtent, attempt + 1);
     });
   }
 
@@ -559,15 +678,27 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     final theme = Theme.of(context);
     final isLight = theme.brightness == Brightness.light;
     _collectKnownGroups(state.tasks);
-    final groupedTasks = _sortGroupsByOrder(_groupTasks(state.tasks));
+    final groupedTasks = sortTaskGroupsByOrder(
+      groupTasksByGroupName(state.tasks),
+      _groupOrder,
+    );
     // 一个分组都没建过（或筛选后只剩「未分组」）时，那条分组头没有任何信息量：
     // 标题恒为「未分组」、条数与头部的「共 N 个任务」重复、折叠它等于清空整页。
     // 这种情况直接不渲染，省下 60.9dp——这是任务列表最大的一笔密度收益。
     final onlyUngrouped =
         groupedTasks.length == 1 && groupedTasks.first.key.isEmpty;
+    // 分组头 + 任务卡摊平成一维行列表，交给下面的 ListView.builder 惰性构建。
+    // 全量任务仍然留在 state.tasks 里，所以全选 / 分组下拉 / 拖拽排序语义不变。
+    final taskRows = buildTaskListRows(
+      groups: groupedTasks,
+      collapsedGroups: _collapsedGroups,
+      showGroupHeader: !onlyUngrouped,
+    );
     final selectedCount = _selectedTaskIds.length;
     final allSelected = _isAllTasksSelected(state.tasks);
-    _restoreScrollOffsetIfNeeded();
+    // 排到帧末再试，不能在 build 体内直接调（那时 ScrollController 还没 attach）。
+    // initState 里已经排过一次，这里是「列表分支从加载态换成真正的 ListView」之后的补触发。
+    _scheduleScrollRestore();
 
     return Scaffold(
       body: Padding(
@@ -863,19 +994,29 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                     ? _buildTaskReorderView(state.tasks)
                     : _groupReorderMode
                     ? _buildGroupReorderView(groupedTasks)
-                    : ListView(
+                    // 改造前这里是 `ListView(children: 每组一个 Column)`：
+                    // Column 没有惰性布局，N 条任务就是 N 张重卡一次性建完，
+                    // 「未分组」用户更是只有 1 个孩子，sliver 惰性完全失效。
+                    // 换成按摊平后的行 index 构建，只有可见区域会被真正建出来。
+                    : ListView.builder(
                         controller: _scrollController,
                         physics: const AlwaysScrollableScrollPhysics(),
                         padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
-                        children: groupedTasks
-                            .map(
-                              (group) => _buildTaskGroup(
-                                group,
-                                isLight,
-                                showHeader: !onlyUngrouped,
-                              ),
-                            )
-                            .toList(),
+                        itemCount: taskRows.length,
+                        itemBuilder: (context, index) {
+                          final row = taskRows[index];
+                          if (row.isGroupHeader) {
+                            return _buildGroupHeader(
+                              row.group,
+                              key: ValueKey(row.rowKey),
+                            );
+                          }
+                          return _buildTaskCard(
+                            row.task!,
+                            isLight,
+                            key: ValueKey(row.rowKey),
+                          );
+                        },
                       ),
               ),
             ),
@@ -883,25 +1024,6 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
         ),
       ),
     );
-  }
-
-  List<_TaskGroup> _groupTasks(List<Task> tasks) {
-    final groups = <_TaskGroup>[];
-    final map = <String, _TaskGroup>{};
-
-    for (final task in tasks) {
-      final groupName = task.groupName?.trim();
-      final key = (groupName == null || groupName.isEmpty) ? '' : groupName;
-      final title = key.isEmpty ? '未分组' : key;
-      final entry = map.putIfAbsent(key, () {
-        final created = _TaskGroup(key: key, title: title);
-        groups.add(created);
-        return created;
-      });
-      entry.tasks.add(task);
-    }
-
-    return groups;
   }
 
   Future<void> _renameGroup(String oldName, List<Task> tasks) async {
@@ -1162,7 +1284,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     nameController.dispose();
   }
 
-  Widget _buildGroupReorderView(List<_TaskGroup> groups) {
+  Widget _buildGroupReorderView(List<TaskGroup> groups) {
     return Column(
       children: [
         Padding(
@@ -1309,131 +1431,117 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     );
   }
 
-  /// [showHeader] 为 false 时不渲染可折叠分组头。
+  /// 可折叠的分组头。
   ///
-  /// `_groupTasks` 永远至少产出一个桶（没设分组的任务全部落进 key 为空的
+  /// 只有 `buildTaskListRows` 产出分组头行时才会被调用：
+  /// `groupTasksByGroupName` 永远至少产出一个桶（没设分组的任务全部落进 key 为空的
   /// 「未分组」桶），所以分组头以前是**无条件**渲染的：一个从来没用过分组功能的
   /// 用户，屏幕顶部固定被一条 60.9dp 的「未分组 · N 条」占掉，而这条信息与头部
   /// 已有的「共 N 个任务」完全重复，且折叠它等于把整页任务藏起来，毫无用处。
   /// 这是任务列表每屏只能完整显示 1 张卡的首要原因，比卡片内边距重要得多。
-  Widget _buildTaskGroup(
-    _TaskGroup group,
-    bool isLight, {
-    bool showHeader = true,
-  }) {
-    // 分组头被隐藏时必须忽略折叠状态：此时没有任何入口可以再展开，
-    // 上一次会话遗留在 _collapsedGroups 里的空 key 会让整页任务凭空消失。
-    final collapsed = showHeader && _collapsedGroups.contains(group.key);
+  Widget _buildGroupHeader(TaskGroup group, {Key? key}) {
+    final collapsed = _collapsedGroups.contains(group.key);
     final enabledCount = group.tasks.where((task) => task.isEnabled).length;
     final runningCount = group.tasks.where((task) => task.isRunning).length;
     final isUngrouped = group.key.isEmpty;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (showHeader)
-          AppCard(
-            margin: const EdgeInsets.only(bottom: 6),
-            // 纵向内边距只降到 10：整条分组头就是它自己的点击区，
-            // 再往下压（12→8）会让这个点击目标掉到 44.9dp，低于 48dp 下限。
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            onTap: () {
-              setState(() {
-                if (collapsed) {
-                  _collapsedGroups.remove(group.key);
-                } else {
-                  _collapsedGroups.add(group.key);
-                }
-              });
-              _persistCollapsedGroups();
-            },
-            onLongPress: () {
-              HapticFeedback.mediumImpact();
-              setState(() => _groupReorderMode = true);
-            },
-            child: Row(
-              children: [
-                Icon(
-                  collapsed ? Icons.chevron_right : Icons.expand_more,
-                  size: 20,
-                  color: AppColors.slate400,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    group.title,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                Text(
-                  '${group.tasks.length} 条',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                if (runningCount > 0)
-                  _MetaChip(label: '$runningCount 运行中', active: true)
-                else
-                  _MetaChip(
-                    label: '$enabledCount 已启用',
-                    active: enabledCount > 0,
-                  ),
-                const SizedBox(width: 4),
-                _GroupPopupMenu(
-                  isUngrouped: isUngrouped,
-                  onRename: isUngrouped
-                      ? null
-                      : () => _renameGroup(group.key, group.tasks),
-                  onDelete: isUngrouped
-                      ? null
-                      : () => _deleteGroup(group.key, group.tasks),
-                  onAddTasks: () {
-                    final allTasks = ref.read(taskProvider).tasks;
-                    final ungrouped = allTasks
-                        .where((t) => (t.groupName ?? '').isEmpty)
-                        .toList();
-                    final targetGroup = isUngrouped ? null : group.key;
-                    if (targetGroup == null) {
-                      _showCreateGroupFromUngrouped(ungrouped);
-                    } else {
-                      _addTasksToGroup(targetGroup, ungrouped);
-                    }
-                  },
-                ),
-              ],
+    return AppCard(
+      key: key,
+      margin: const EdgeInsets.only(bottom: 6),
+      // 纵向内边距只降到 10：整条分组头就是它自己的点击区，
+      // 再往下压（12→8）会让这个点击目标掉到 44.9dp，低于 48dp 下限。
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      onTap: () {
+        setState(() {
+          if (collapsed) {
+            _collapsedGroups.remove(group.key);
+          } else {
+            _collapsedGroups.add(group.key);
+          }
+        });
+        _persistCollapsedGroups();
+      },
+      onLongPress: () {
+        HapticFeedback.mediumImpact();
+        setState(() => _groupReorderMode = true);
+      },
+      child: Row(
+        children: [
+          Icon(
+            collapsed ? Icons.chevron_right : Icons.expand_more,
+            size: 20,
+            color: AppColors.slate400,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              group.title,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
             ),
           ),
-        if (!collapsed)
-          ...group.tasks.map(
-            (task) => _TaskCard(
-              key: ValueKey('task-card-${task.id}'),
-              task: task,
-              isLight: isLight,
-              selectionMode: _selectionMode,
-              selected: _selectedTaskIds.contains(task.id),
-              onTap: () => _selectionMode
-                  ? _toggleTaskSelection(task.id)
-                  : _openLatestLog(task),
-              onLongPress: () {
-                HapticFeedback.mediumImpact();
-                _toggleTaskSelection(task.id);
-              },
-              onSelectedChanged: () => _toggleTaskSelection(task.id),
-              onRun: () => _runTask(task),
-              onStop: () => _stopTask(task),
-              onToggleEnabled: () => _toggleTaskEnabled(task),
-              onCopy: () => _copyTask(task),
-              onTogglePinned: () => _togglePinned(task),
-              onEdit: () => context.push('/tasks/edit', extra: task),
-              onDelete: () => _confirmDelete(task),
+          Text(
+            '${group.tasks.length} 条',
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
           ),
-      ],
+          const SizedBox(width: 10),
+          if (runningCount > 0)
+            _MetaChip(label: '$runningCount 运行中', active: true)
+          else
+            _MetaChip(label: '$enabledCount 已启用', active: enabledCount > 0),
+          const SizedBox(width: 4),
+          _GroupPopupMenu(
+            isUngrouped: isUngrouped,
+            onRename: isUngrouped
+                ? null
+                : () => _renameGroup(group.key, group.tasks),
+            onDelete: isUngrouped
+                ? null
+                : () => _deleteGroup(group.key, group.tasks),
+            onAddTasks: () {
+              final allTasks = ref.read(taskProvider).tasks;
+              final ungrouped = allTasks
+                  .where((t) => (t.groupName ?? '').isEmpty)
+                  .toList();
+              final targetGroup = isUngrouped ? null : group.key;
+              if (targetGroup == null) {
+                _showCreateGroupFromUngrouped(ungrouped);
+              } else {
+                _addTasksToGroup(targetGroup, ungrouped);
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 单张任务卡。[key] 由摊平行的 `rowKey` 提供（`task-card-<id>`），
+  /// 虚拟化后 Element 会被回收复用，没有这个 key 侧滑展开状态会串到别的任务上。
+  Widget _buildTaskCard(Task task, bool isLight, {Key? key}) {
+    return _TaskCard(
+      key: key,
+      task: task,
+      isLight: isLight,
+      selectionMode: _selectionMode,
+      selected: _selectedTaskIds.contains(task.id),
+      onTap: () => _selectionMode
+          ? _toggleTaskSelection(task.id)
+          : _openLatestLog(task),
+      onLongPress: () {
+        HapticFeedback.mediumImpact();
+        _toggleTaskSelection(task.id);
+      },
+      onSelectedChanged: () => _toggleTaskSelection(task.id),
+      onRun: () => _runTask(task),
+      onStop: () => _stopTask(task),
+      onToggleEnabled: () => _toggleTaskEnabled(task),
+      onCopy: () => _copyTask(task),
+      onTogglePinned: () => _togglePinned(task),
+      onEdit: () => context.push('/tasks/edit', extra: task),
+      onDelete: () => _confirmDelete(task),
     );
   }
 
@@ -2280,14 +2388,6 @@ class _TaskMiniCountChip extends StatelessWidget {
       ),
     );
   }
-}
-
-class _TaskGroup {
-  final String key;
-  final String title;
-  final List<Task> tasks = <Task>[];
-
-  _TaskGroup({required this.key, required this.title});
 }
 
 String? _extractScriptPathFromCommand(String command) {

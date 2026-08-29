@@ -61,6 +61,12 @@ class TaskNotifier extends StateNotifier<TaskListState> {
 
   Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 
+  /// 任务列表**一次性全量拉取**（`all=1`），刻意没有 `loadMore`。
+  ///
+  /// 分组下拉项、全选、拖拽排序都建立在「全部任务都在内存里」这个前提上：
+  /// 改成增量分页会让分组项残缺、全选变成「只全选已加载的」，
+  /// 排序保存更会按当前列表顺序把未加载任务的 sort_order 写坏 —— 属于数据损坏。
+  /// 列表卡顿由页面侧的 `ListView.builder` 虚拟化解决，不靠减少取回来的数据量。
   Future<void> load({bool refresh = false}) async {
     state = state.copyWith(loading: true, error: null);
     try {
@@ -91,10 +97,6 @@ class TaskNotifier extends StateNotifier<TaskListState> {
         error: extractListErrorMessage(e, '加载任务失败'),
       );
     }
-  }
-
-  Future<void> loadMore() async {
-    return;
   }
 
   void setKeyword(String keyword) {

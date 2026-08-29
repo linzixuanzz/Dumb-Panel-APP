@@ -231,12 +231,20 @@ final msg = extractErrorMessage(error, '加载失败');   // api_utils.dart:44
 
 | 做法 | 例 |
 |---|---|
-| 一次性 `all=1` 全量拉 | `task_provider.dart:62`（`loadMore()` 是空实现，`:87-89`） |
+| 一次性 `all=1` 全量拉 | `task_provider.dart:74`（**刻意没有 `loadMore`**，见下） |
 | 循环翻页拉完（后端 `page_size` 上限 100） | `env_list_page.dart:69-99`、`log_list_page.dart:135-158` |
 | 真·滚动加载更多 | `log_list_page.dart:98-102` `loadMore()` |
 
 > 注释里记录了踩坑原因：「后端 `page_size` 上限 100，请求更大值会静默退回 20，
 > 导致列表只显示 40 行」（`env_list_page.dart:67-69`）。改分页逻辑前先读这条。
+
+> **任务列表不要改成增量分页**（issue #107 已裁决）。分组下拉项、全选、拖拽排序
+> 都建立在「全部任务都在内存里」这个前提上：分页会让分组项残缺、全选退化成
+> 「只全选已加载的」，排序保存更会按当前列表顺序把未加载任务的 `sort_order` 写坏，
+> 属于数据损坏而不是显示问题。列表卡顿由渲染侧解决 ——
+> `task_list_page.dart` 把分组摊平成一维行列表（`utils/task_list_rows.dart`）
+> 后交给 `ListView.builder`，只有可见区域的卡片会被建出来。
+> 服务端 `all=1` 分支同理是**永久兼容红线**：线上 v1.1.1~v1.3.2 老客户端全都硬编码传它。
 
 ### SSE：独立客户端，不经 dio，但**与 dio 共用同一个续期入口**
 
