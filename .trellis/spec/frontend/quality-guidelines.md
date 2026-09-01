@@ -62,25 +62,26 @@ Navigator.of(ctx).pop();       // 用的是 builder 的 ctx → 仍然告警
 
 | 位置 | 那个「别人的 context」 |
 |---|---|
-| `notification_list_page.dart:674` | `showModalBottomSheet` 的 `ctx` |
-| `open_api_page.dart:832` | `showDialog` 的 `dialogCtx` |
-| `security_page.dart:890` | `showDialog` 的 `dialogCtx` |
-| `user_list_page.dart:485` | `showDialog` 的 `dialogCtx` |
+| `notification_list_page.dart:692` | `showModalBottomSheet` 的 `ctx` |
+| `open_api_page.dart:809` | `showDialog` 的 `dialogCtx` |
+| `security_page.dart:872` | `showDialog` 的 `dialogCtx` |
+| `user_list_page.dart:498` | `showDialog` 的 `dialogCtx` |
+
+> 行号会随任何改动漂移（2026-09-02 核过一次）。**逐条比对时以「文件 + 规则名」为准，
+> 行号只当线索**；直接跑 `flutter analyze` 拿当前清单最可靠。
 
 修法：把 `if (!mounted)` 换成 `if (!ctx.mounted)`，或者照下面的样子在 `await`
 之前先把 `Navigator` / `ScaffoldMessenger` 取出来。
 
 #### 乙类（1 处）：判对了，但分析器证明不了
 
-`script_list_page.dart:2759`，在 `_ScriptDebugRunSheetState`（类定义 `:2564`）的
-`build(BuildContext context)`（`:2699`）里：
+`script_list_page.dart:2973`，在 `_ScriptDebugRunSheetState`（类定义 `:2793`）的
+`build(BuildContext context)`（`:2926`）里：
 
 ```dart
 await Clipboard.setData(ClipboardData(text: _logs.join('\n')));
-if (!mounted) return;                        // State.mounted
-ScaffoldMessenger.of(context).showSnackBar(  // :2759 — build 的 context 参数
-  const SnackBar(content: Text('已复制调试日志')),
-);
+if (!mounted) return;                     // State.mounted
+AppSnack.success(context, '已复制调试日志'); // :2973 — build 的 context 参数
 ```
 
 这里的 `context` **实际上就是** `State.context`，运行期没有问题。但 lint 无法证明
@@ -313,5 +314,5 @@ buildTypes {
 
 `.github/workflows/` 下 grep `dart format` / `analyze` / `flutter test` 均无命中。
 也就是说**这三项全靠本地自觉**，CI 不会拦住你。改动后请自己跑。
-- `pubspec.yaml` 的 `version:` 同时是 APP 版本号与 build number（当前 `1.3.0+20`），
+- `pubspec.yaml` 的 `version:` 同时是 APP 版本号与 build number（当前 `1.3.3+23`），
   发版时 `docs/release-notes/` 下要有对应文件。

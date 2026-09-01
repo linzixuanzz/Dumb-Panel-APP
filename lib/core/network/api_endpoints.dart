@@ -60,6 +60,19 @@ class ApiEndpoints {
   static const String tasksImport = '$baseApi/tasks/import';
   static const String cronParse = '$baseApi/tasks/cron/parse';
   static const String cronTemplates = '$baseApi/tasks/cron/templates';
+
+  // Task Views（任务视图）——面板任务页顶部那排规则页签。
+  // 路由见面板 server/handler/task_routes.go:56-60，全部挂在 APP 现有的
+  // JWTAuth + OpenAPIAccess("tasks") 链下，读要 viewer、增删改要 operator。
+  // 规则本身不在这几条上生效：选中视图后把它的 filters / sort_rules 作为
+  // query 参数塞进 ApiEndpoints.tasks，由服务端筛选与排序。
+  static const String taskViews = '$baseApi/tasks/views';
+
+  /// ⚠️ `reorder` 是**静态段**，面板路由里排在 `:viewId` 之前。
+  /// 客户端拼串时别把它当成某个 id，也别改成 `taskViewById` 的形式。
+  static const String taskViewsReorder = '$baseApi/tasks/views/reorder';
+  static String taskViewById(int id) => '$baseApi/tasks/views/$id';
+
   static const String notificationChannels =
       '$baseApi/tasks/notification-channels';
 

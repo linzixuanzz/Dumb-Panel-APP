@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/auth/auth_provider.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/storage/secure_storage.dart';
@@ -15,11 +16,13 @@ import '../../../core/network/sse_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/task.dart';
+import '../../../shared/models/task_view.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/duration_utils.dart';
 import '../../../shared/utils/panel_enums.dart';
 import '../../../shared/utils/sse_replay_buffer.dart';
+import '../../../shared/utils/task_command.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/widgets/app_circle_add_button.dart';
@@ -30,7 +33,9 @@ import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
 import '../../../shared/widgets/task_cron_list.dart';
 import '../providers/task_provider.dart';
+import '../providers/task_view_provider.dart';
 import '../utils/task_list_rows.dart';
+import '../widgets/task_view_sheets.dart';
 
 class TaskListPage extends ConsumerStatefulWidget {
   const TaskListPage({super.key});
@@ -61,6 +66,10 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   static const _scrollOffsetStorageKey = 'tasks.scroll_offset';
   static const _selectedGroupStorageKey = 'tasks.selected_group';
   static const _groupOrderStorageKey = 'tasks.group_order';
+
+  /// 选中的任务视图 id。存空串表示「全部任务」。
+  /// 视图是全局共享的，别人随时可能删掉它，所以恢复时必须能回落。
+  static const _selectedViewStorageKey = 'tasks.selected_view';
   final _searchController = TextEditingController();
   final _scrollController = ScrollController();
   final Set<String> _collapsedGroups = <String>{};
@@ -93,13 +102,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(() async {
-      await _restoreTaskUiState();
-      if (!mounted) {
-        return;
-      }
-      await ref.read(taskProvider.notifier).load(refresh: true);
-    });
+    Future.microtask(_bootstrapTaskPage);
     _scrollController.addListener(_onScroll);
     // 恢复滚动位置只能从「首帧之后」起跑：ScrollController 是在 build() 返回、
     // Scrollable 挂载时才 attach 的，在 build 体内同步调用永远是 hasClients == false。
@@ -107,6 +110,81 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     // 下压根不会有第二次 rebuild，_restoredScrollOffset 会永远是 false，
     // 把下面 _onScroll 里的保存闸永久锁死 —— 滚动位置一个字节都写不进去。
     _scheduleScrollRestore();
+  }
+
+  /// 进入任务页时的初始化。
+  ///
+  /// 顺序是刻意排的：**任务列表那次请求不能被可选能力挡住**。
+  /// 视图列表（`/api/tasks/views`）在老面板上 404、viewer 角色 403，而 dio 的
+  /// connectTimeout 是 15s、receiveTimeout 30s —— 面板慢或正在重启时，先 await
+  /// 它等于任务列表 15~30s 一个请求都不发，而每次切回本页都会重来一遍。
+  /// 只有「本地存了视图 id、provider 里却还没有选中视图」这一种真·冷启动恢复，
+  /// 才必须先等视图列表（否则没法把 id 还原成规则）；其余情况让它在后台跑，
+  /// 视图按钮靠 `ref.watch` 在它回来之后自然刷新。
+  ///
+  /// 另一条硬约束：整个流程**只发一次任务列表请求**。恢复分组、恢复视图都用
+  /// 不发请求的 setXxxSelection 写进 provider，最后统一 load() 一次 ——
+  /// 否则先发出去的那次不带规则、后发的带规则，两次都会写 `state.tasks`，
+  /// 谁后到谁赢，用户会看到「按钮写着视图名、列表却是没筛过的全量」。
+  Future<void> _bootstrapTaskPage() async {
+    await _restoreTaskUiState();
+    if (!mounted) {
+      return;
+    }
+    final savedViewId = await _readSavedViewId();
+    if (!mounted) {
+      return;
+    }
+    // 任务视图是**可选能力**：老面板没有这条路由、viewer 角色也拿不到，
+    // 那两种情况 load() 内部会静默降级成「没有视图」，不会抛也不会红。
+    final loadingViews = ref.read(taskViewProvider.notifier).load();
+    // 「恢复上次的视图」是个迟到的动作：等视图列表回来可能要好几秒（最坏是 dio 的
+    // 15~30s 超时）。这期间筛选按钮是可点的，用户完全可能自己切了视图。
+    // 记下起点，回来时发现已经不是它了就整个让位 —— 否则会把用户刚选的那条弹回去，
+    // 而且只改 provider 不改存储，留下「界面 = 旧视图、存储 = 新视图」的分叉。
+    final selectionAtStart = ref.read(taskProvider).selectedViewId;
+    bool userTookOver() =>
+        ref.read(taskProvider).selectedViewId != selectionAtStart;
+    final coldRestore = savedViewId != null && selectionAtStart == null;
+    if (coldRestore) {
+      await loadingViews;
+      if (!mounted || userTookOver()) {
+        return;
+      }
+      await _applySavedView(savedViewId);
+      if (!mounted) {
+        return;
+      }
+      await ref.read(taskProvider.notifier).load(refresh: true);
+      return;
+    }
+    if (savedViewId == null) {
+      // 上次就是「全部任务」。taskProvider 是全局、非 autoDispose 的，切走切回
+      // 不会重建状态，可能还带着上一轮的规则回来 —— 先清掉，下面那次 load()
+      // 才是对的参数。这一步不需要视图列表。
+      await _applySavedView(null);
+      if (!mounted) {
+        return;
+      }
+    }
+    await ref.read(taskProvider.notifier).load(refresh: true);
+    if (savedViewId == null) {
+      // 上面已经清成「全部任务」了，视图列表回来也改不了这次请求的参数。
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    // 视图列表晚一点回来没关系，但回来之后必须再校一次：这条视图可能已经被
+    // 别人删了 / 隐藏了 / 改过规则（表是全站共享的），那样上面那次请求带的参数
+    // 就是错的。真变了才补一次请求，没变就一次都不多发。
+    await loadingViews;
+    if (!mounted || userTookOver()) {
+      return;
+    }
+    if (await _applySavedView(savedViewId) && mounted) {
+      await ref.read(taskProvider.notifier).load(refresh: true);
+    }
   }
 
   void _onScroll() {
@@ -477,10 +555,76 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       _groupOrder = savedGroupOrder;
     });
     if (selectedGroup != null) {
+      // ⚠️ 兼容归一：这个 key 的**存量是裸分组名**（旧版本写进去的），
+      // 而现在发给服务端的必须是带 `分组:` 前缀的完整标签。
+      // 不归一的话，老用户升级后冷启动会拿裸名去做 LIKE，把只挂了同名普通标签
+      // 的任务一起捞回来 —— 表现为「筛了分组却混进别的任务」。
+      final normalized = Task.normalizeGroupLabel(selectedGroup);
+      // 刻意用**不发请求**的版本：setLabelFilter 会当场打出一次不带 filters /
+      // sort_rules 的请求，和 _bootstrapTaskPage 末尾那次带规则的请求撞车，
+      // 两次都写 state.tasks，谁后到谁赢。唯一一次请求留给统一的 load()。
       ref
           .read(taskProvider.notifier)
-          .setLabelFilter(selectedGroup.trim().isEmpty ? null : selectedGroup);
+          .setLabelSelection(normalized.isEmpty ? null : normalized);
     }
+  }
+
+  /// 上次选中的视图 id。没存过 / 存的是空串 / 存了个非数字，都当成「全部任务」。
+  Future<int?> _readSavedViewId() async {
+    final raw = await SecureStorage.getUiState(_selectedViewStorageKey);
+    return int.tryParse(raw?.trim() ?? '');
+  }
+
+  /// 把「上次选中的视图」落到 taskProvider 上，**不发请求**。
+  /// 返回 true 表示生效的规则真的变了，调用方需要重新拉一次任务列表。
+  ///
+  /// 视图是**全局共享**的（表里没有 user_id），别人随时可能把它删掉或隐藏，
+  /// 所以找不到时要静静地回落到「全部任务」，并把过期的记录清掉。
+  ///
+  /// ⚠️ 回落时必须连 taskProvider 里的规则一起清：它是全局、非 autoDispose 的，
+  /// 页面切走切回只重跑 initState、不重建状态。只清本地存储的话，列表会继续被
+  /// 一条已经不存在的视图筛着，按钮却显示「全部任务」——
+  /// 用户看到的就是「明明写着全部任务，任务却少了一半」。
+  Future<bool> _applySavedView(int? savedViewId) async {
+    final before = ref.read(taskProvider);
+    TaskView? view;
+    if (savedViewId != null) {
+      final viewState = ref.read(taskViewProvider);
+      if (viewState.error != null) {
+        // 这一次没拉到视图列表（断网 / 面板 500）。这不等于「视图被删了」——
+        // 按删了处理，会在一次网络抖动之后把用户存了很久的选择连本地记录一起
+        // 清掉。保持现状，等下次进页面再校。
+        // （404 / 403 走的是 supported=false + views 清空，那是能力真的没了，
+        //   下面会正常回落到「全部任务」。）
+        return false;
+      }
+      view = viewState.viewById(savedViewId);
+      if (view != null && view.hidden) {
+        view = null;
+      }
+      if (view == null) {
+        await SecureStorage.saveUiState(_selectedViewStorageKey, '');
+        if (!mounted) {
+          return false;
+        }
+      }
+    }
+    ref.read(taskProvider.notifier).setViewSelection(view);
+    final after = ref.read(taskProvider);
+    // 只比 id 不够：视图还在、但规则被别人在网页上改过时 id 是一样的，
+    // 而已经发出去的那次请求带的仍然是旧规则，同样得重来一次。
+    return before.selectedViewId != after.selectedViewId ||
+        encodeTaskViewFilters(before.filters) !=
+            encodeTaskViewFilters(after.filters) ||
+        encodeTaskViewSortRules(before.sortRules) !=
+            encodeTaskViewSortRules(after.sortRules);
+  }
+
+  Future<void> _persistSelectedView(int? id) {
+    return SecureStorage.saveUiState(
+      _selectedViewStorageKey,
+      id?.toString() ?? '',
+    );
   }
 
   Future<void> _persistCollapsedGroups() {
@@ -628,7 +772,9 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
               (group) => ListTile(
                 leading: const Icon(Icons.label_outline),
                 title: Text(group),
-                trailing: ref.watch(taskProvider).labelFilter == group
+                trailing:
+                    ref.watch(taskProvider).labelFilter ==
+                        Task.toGroupLabel(group)
                     ? const Icon(Icons.check, color: AppColors.primary)
                     : null,
                 onTap: () => Navigator.pop(sheetContext, group),
@@ -666,15 +812,114 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     if (_scrollController.hasClients && _scrollController.offset > 0) {
       _scrollController.jumpTo(0);
     }
+    // ⚠️ 发出去的必须是 `分组:生产` 而不是显示名 `生产`：
+    // 服务端做的是 `labels LIKE '%<值>%'`，传显示名会把只挂了普通标签「生产」、
+    // 根本没分组的任务也捞回来，然后在客户端落进「未分组」桶 ——
+    // 表现就是「筛了生产分组，列表里却冒出一个未分组的分组头」。
+    // 存储里仍然存裸分组名（历史格式不动），恢复时由 normalizeGroupLabel 归一。
     ref
         .read(taskProvider.notifier)
-        .setLabelFilter(selected.isEmpty ? null : selected);
+        .setLabelFilter(
+          selected.isEmpty ? null : Task.toGroupLabel(selected),
+        );
     await SecureStorage.saveUiState(_selectedGroupStorageKey, selected);
+  }
+
+  Future<void> _showViewPicker() async {
+    final result = await showTaskViewPicker(
+      context,
+      selectedViewId: ref.read(taskProvider).selectedViewId,
+    );
+    if (!mounted || result == null) {
+      return;
+    }
+    if (result.action == TaskViewPickerAction.selectAll) {
+      await _applyTaskView(null);
+      return;
+    }
+    if (result.action == TaskViewPickerAction.select) {
+      await _applyTaskView(result.view);
+      return;
+    }
+    await _openTaskViewEditor(view: result.view);
+  }
+
+  Future<void> _applyTaskView(TaskView? view) async {
+    if (_scrollController.hasClients && _scrollController.offset > 0) {
+      _scrollController.jumpTo(0);
+    }
+    ref.read(taskProvider.notifier).applyView(view);
+    await _persistSelectedView(view?.id);
+  }
+
+  Future<void> _openTaskViewEditor({TaskView? view}) async {
+    final result = await showTaskViewEditor(context, view: view);
+    if (!mounted || result == null || !result.changed) {
+      return;
+    }
+    if (view == null) {
+      // 刚建完就切过去：用户建规则本来就是为了立刻看到筛出来的结果。
+      await _applyTaskView(result.view);
+      return;
+    }
+    // 编辑 / 删除的若正好是当前选中的那条，必须按最新规则重跑一次，
+    // 否则列表会继续拿着一份过期规则（甚至一条已经不存在的视图）在筛。
+    final selectedId = ref.read(taskProvider).selectedViewId;
+    if (selectedId != view.id) {
+      return;
+    }
+    final latest = ref.read(taskViewProvider).viewById(selectedId);
+    await _applyTaskView(latest != null && !latest.hidden ? latest : null);
+  }
+
+  /// 视图入口要不要出现。
+  ///
+  /// 面板不支持（老面板 404 / viewer 403）时整个入口藏起来 —— 摆一个点了
+  /// 只会报错的按钮，比没有这个功能更糟。面板支持但一条视图都没有时也不摆，
+  /// 除非当前账号能建（否则用户只能看到一个恒为「全部任务」的死按钮）。
+  bool _showViewFilterEntry(TaskViewListState viewState, bool canManageViews) {
+    if (!viewState.supported) {
+      return false;
+    }
+    if (viewState.visibleViews.isNotEmpty) {
+      return true;
+    }
+    return canManageViews;
+  }
+
+  String? _selectedViewName(TaskListState state, TaskViewListState viewState) {
+    final view = viewState.viewById(state.selectedViewId);
+    if (view == null || view.name.trim().isEmpty) {
+      return null;
+    }
+    return view.name;
+  }
+
+  /// 筛选按钮的文字。视图名和分组名都是用户输入的自由文本，可以很长，
+  /// 不封顶会把整行挤爆。
+  Widget _buildFilterButtonLabel(String text) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 110),
+      child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis),
+    );
+  }
+
+  void _clearTaskFilters() {
+    if (_scrollController.hasClients && _scrollController.offset > 0) {
+      _scrollController.jumpTo(0);
+    }
+    // 视图也是一种筛选，「清除筛选」不把它一起清掉的话，用户会以为按钮坏了。
+    ref.read(taskProvider.notifier).clearFilters();
+    SecureStorage.saveUiState(_selectedGroupStorageKey, '');
+    _persistSelectedView(null);
   }
 
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(taskProvider);
+    final viewState = ref.watch(taskViewProvider);
+    // 任务视图的增删改要 operator，viewer 只能看。
+    final canManageViews = ref.watch(authProvider).user?.isOperator ?? false;
     final theme = Theme.of(context);
     final isLight = theme.brightness == Brightness.light;
     _collectKnownGroups(state.tasks);
@@ -859,29 +1104,47 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  const Spacer(),
-                  TextButton.icon(
-                    onPressed: _showGroupPicker,
-                    icon: const Icon(Icons.label_outline, size: 16),
-                    label: Text(
-                      state.labelFilter?.isNotEmpty == true
-                          ? state.labelFilter!
-                          : '全部分组',
+                  // 这一行现在最多要摆三个按钮，360dp 的窄屏放不下 ——
+                  // 用横向滚动兜住，而不是让 Row 溢出。reverse 保证内容不足一屏时
+                  // 仍然靠右，和改造前的 Spacer 观感一致。
+                  Expanded(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      reverse: true,
+                      child: Row(
+                        children: [
+                          if (_showViewFilterEntry(viewState, canManageViews))
+                            TextButton.icon(
+                              onPressed: _showViewPicker,
+                              icon: const Icon(
+                                Icons.filter_alt_outlined,
+                                size: 16,
+                              ),
+                              label: _buildFilterButtonLabel(
+                                _selectedViewName(state, viewState) ?? '全部任务',
+                              ),
+                            ),
+                          TextButton.icon(
+                            onPressed: _showGroupPicker,
+                            icon: const Icon(Icons.label_outline, size: 16),
+                            label: _buildFilterButtonLabel(
+                              state.labelFilter?.isNotEmpty == true
+                                  // 存的是完整标签 `分组:生产`，显示要去掉前缀。
+                                  ? Task.groupNameFromLabel(state.labelFilter!)
+                                  : '全部分组',
+                            ),
+                          ),
+                          if (state.statusFilter != null ||
+                              state.labelFilter != null ||
+                              state.selectedViewId != null)
+                            TextButton(
+                              onPressed: _clearTaskFilters,
+                              child: const Text('清除筛选'),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
-                  if (state.statusFilter != null || state.labelFilter != null)
-                    TextButton(
-                      onPressed: () {
-                        if (_scrollController.hasClients &&
-                            _scrollController.offset > 0) {
-                          _scrollController.jumpTo(0);
-                        }
-                        ref.read(taskProvider.notifier).setStatusFilter(null);
-                        ref.read(taskProvider.notifier).setLabelFilter(null);
-                        SecureStorage.saveUiState(_selectedGroupStorageKey, '');
-                      },
-                      child: const Text('清除筛选'),
-                    ),
                 ],
               ),
             ),
@@ -1546,7 +1809,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   }
 
   Future<void> _confirmDelete(Task task) async {
-    final scriptPath = _extractScriptPathFromCommand(task.command);
+    final scriptPath = extractScriptPathFromCommand(task.command);
     var deleteScript = false;
     final confirm = await showDialog<bool>(
       context: context,
@@ -2390,107 +2653,6 @@ class _TaskMiniCountChip extends StatelessWidget {
   }
 }
 
-String? _extractScriptPathFromCommand(String command) {
-  final trimmed = command.trim();
-  if (trimmed.isEmpty) {
-    return null;
-  }
-
-  final tokens = _splitCommandTokens(trimmed);
-  if (tokens.isEmpty) {
-    return null;
-  }
-
-  bool hasSupportedExtension(String value) {
-    final lower = value.toLowerCase();
-    return lower.endsWith('.py') ||
-        lower.endsWith('.js') ||
-        lower.endsWith('.ts') ||
-        lower.endsWith('.sh') ||
-        lower.endsWith('.go');
-  }
-
-  String? joinCandidate(List<String> items) {
-    for (var count = items.length; count >= 1; count--) {
-      final candidate = items.take(count).join(' ').trim();
-      if (hasSupportedExtension(candidate)) {
-        return candidate;
-      }
-    }
-    return null;
-  }
-
-  switch (tokens.first) {
-    case 'task':
-    case 'desi':
-      final rest = tokens.sublist(1);
-      var idx = 0;
-      while (idx < rest.length) {
-        if (rest[idx] == '-m' && idx + 1 < rest.length) {
-          idx += 2;
-          continue;
-        }
-        if (rest[idx] == '-l') {
-          idx += 1;
-          continue;
-        }
-        break;
-      }
-      return joinCandidate(rest.sublist(idx));
-    case 'python':
-    case 'python3':
-    case 'node':
-    case 'ts-node':
-    case 'bash':
-    case 'go':
-      if (tokens.length <= 1) {
-        return null;
-      }
-      return joinCandidate(tokens.sublist(1));
-    default:
-      return null;
-  }
-}
-
-List<String> _splitCommandTokens(String command) {
-  final tokens = <String>[];
-  final buffer = StringBuffer();
-  String? quote;
-
-  for (final rune in command.runes) {
-    final char = String.fromCharCode(rune);
-    if (quote != null) {
-      if (char == quote) {
-        quote = null;
-      } else {
-        buffer.write(char);
-      }
-      continue;
-    }
-
-    if (char == '"' || char == "'") {
-      quote = char;
-      continue;
-    }
-
-    if (char.trim().isEmpty) {
-      if (buffer.isNotEmpty) {
-        tokens.add(buffer.toString());
-        buffer.clear();
-      }
-      continue;
-    }
-
-    buffer.write(char);
-  }
-
-  if (buffer.isNotEmpty) {
-    tokens.add(buffer.toString());
-  }
-
-  return tokens;
-}
-
 class _MetaChip extends StatelessWidget {
   final String label;
   final bool active;
@@ -2999,7 +3161,10 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
     final title = (widget.taskName?.trim().isNotEmpty ?? false)
         ? '${widget.taskName} 运行日志'
         : '运行日志';
-    final logTheme = resolveLogSurfaceTheme(_logBackgroundColor);
+    final logTheme = resolveLogSurfaceTheme(
+      _logBackgroundColor,
+      themeBrightness: Theme.of(context).brightness,
+    );
     final chipBackground = logTheme.brightness == Brightness.dark
         ? AppColors.slate800
         : AppColors.slate100;

@@ -1637,7 +1637,10 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
 
   @override
   Widget build(BuildContext context) {
-    final logTheme = resolveLogSurfaceTheme(_logBackgroundColor);
+    final logTheme = resolveLogSurfaceTheme(
+      _logBackgroundColor,
+      themeBrightness: Theme.of(context).brightness,
+    );
     final doneBannerBackground = logTheme.brightness == Brightness.dark
         ? AppColors.slate800
         : AppColors.slate100;

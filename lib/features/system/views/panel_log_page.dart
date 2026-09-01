@@ -94,7 +94,10 @@ class _PanelLogPageState extends State<PanelLogPage> {
 
   @override
   Widget build(BuildContext context) {
-    final logTheme = resolveLogSurfaceTheme(_logBackgroundColor);
+    final logTheme = resolveLogSurfaceTheme(
+      _logBackgroundColor,
+      themeBrightness: Theme.of(context).brightness,
+    );
     final borderColor = logTheme.brightness == Brightness.dark
         ? AppColors.slate700
         : AppColors.slate200;

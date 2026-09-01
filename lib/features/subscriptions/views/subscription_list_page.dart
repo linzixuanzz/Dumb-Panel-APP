@@ -1639,7 +1639,10 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
   }
 
   void _showLogDetail(Map<String, dynamic> log) {
-    final logTheme = resolveLogSurfaceTheme(_logBackgroundColor);
+    final logTheme = resolveLogSurfaceTheme(
+      _logBackgroundColor,
+      themeBrightness: Theme.of(context).brightness,
+    );
     final borderColor = logTheme.brightness == Brightness.dark
         ? AppColors.slate700
         : AppColors.slate200;
@@ -1982,7 +1985,10 @@ class _SubscriptionPullStreamPageState
 
   @override
   Widget build(BuildContext context) {
-    final logTheme = resolveLogSurfaceTheme(_logBackgroundColor);
+    final logTheme = resolveLogSurfaceTheme(
+      _logBackgroundColor,
+      themeBrightness: Theme.of(context).brightness,
+    );
     final doneBannerBackground = logTheme.brightness == Brightness.dark
         ? AppColors.slate800
         : AppColors.slate100;

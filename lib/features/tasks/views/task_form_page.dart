@@ -102,6 +102,17 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
   int? _notificationChannelId;
   _RandomDelayMode _randomDelayMode = _RandomDelayMode.inherit;
   final List<String> _labels = [];
+
+  /// 服务端内部标签（目前只有 `subscription:<id>`）。**不渲染、不可编辑，
+  /// 保存时原样拼回去**。
+  ///
+  /// 少了这一步就是真的丢数据：面板的任务更新是整体覆写 labels，
+  /// 而这个页面原来用 `userLabelsForDisplay` 播种编辑框 —— 那里的
+  /// `subscription:3` 已经被服务端换成了订阅显示名「华星电信」，
+  /// 保存一次任务就会脱离订阅托管：订阅锁失效、「恢复为订阅默认」入口消失、
+  /// 下次订阅拉取还会重建一条同名重复任务。面板 Web 端用 mergeTaskLabels
+  /// 显式保留内部标签，这里是把同一件事补上。
+  final List<String> _internalLabels = [];
   List<_TaskNotificationChannel> _notificationChannels = const [];
   List<PythonRuntimeInfo> _pythonRuntimes = const [];
   bool _showHooks = false;
@@ -157,9 +168,16 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
     _notifyOnSuccess = task?.notifyOnSuccess ?? false;
     _allowMultipleInstances = task?.allowMultipleInstances ?? false;
     _notificationChannelId = task?.notificationChannelId;
+    // ⚠️ 必须用**原始** labelList 播种，不能用 userLabelsForDisplay：
+    // 后者基于服务端的 display_labels，`subscription:3` 在那里已经变成了
+    // 订阅显示名，拿它播种再整体覆写就把内部标签删掉了。
+    final rawLabels = task?.labelList ?? const <String>[];
     _labels
       ..clear()
-      ..addAll(task?.userLabelsForDisplay ?? const []);
+      ..addAll(Task.splitUserLabels(rawLabels));
+    _internalLabels
+      ..clear()
+      ..addAll(Task.splitInternalLabels(rawLabels));
     _randomDelayMode = _resolveRandomDelayMode(task?.randomDelaySeconds);
     _showHooks = _taskBeforeC.text.isNotEmpty || _taskAfterC.text.isNotEmpty;
 
@@ -514,13 +532,11 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
       return;
     }
 
-    final normalizedLabels = <String>[
-      ..._labels.where((label) => !Task.isGroupLabel(label)),
-    ];
-    final groupName = _groupC.text.trim();
-    if (groupName.isNotEmpty) {
-      normalizedLabels.add(Task.toGroupLabel(groupName));
-    }
+    final normalizedLabels = Task.mergeTaskLabels(
+      userLabels: _labels,
+      internalLabels: _internalLabels,
+      groupName: _groupC.text.trim(),
+    );
 
     final data = <String, dynamic>{
       'name': _nameC.text.trim(),

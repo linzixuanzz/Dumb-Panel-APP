@@ -296,6 +296,32 @@ void main() {
       expect(notifier.state.error, isNull);
       expect(notifier.state.tree, hasLength(1));
     });
+
+    test('loadContent 失败：contentError 被赋值，content 被清空', () async {
+      // 这条锁的是一次**静默数据破坏**：改造前 loadContent 的 catch 把失败写成
+      // `content: '加载失败'` 且不留任何标志位，编辑器照样是可编辑缓冲区 ——
+      // 用户一按保存就把这四个字 PUT 成真文件的全部内容。
+      // 从脚本树点进来时路径必然存在所以从没踩到，但日志详情页新增「跳到对应脚本」
+      // 之后，脚本被删、被改名、无权限都会走到这里。
+      // 纯函数测试覆盖不到这条，只能在 Notifier 这一层钉死。
+      final adapter = FakeHttpAdapter(
+        (_) => jsonResponse({'error': '脚本不存在'}, status: 404),
+      );
+      final notifier = ScriptNotifier(dio: dioWithAdapter(adapter));
+
+      await notifier.loadContent('missing/jd_sign.js');
+
+      expect(notifier.state.loadingContent, isFalse);
+      expect(notifier.state.contentError, '脚本不存在');
+      expect(
+        notifier.state.content,
+        isEmpty,
+        reason: '失败原因绝不能当成文件内容塞进可编辑缓冲区',
+      );
+      expect(notifier.state.isBinary, isFalse);
+      // 页面要靠 selectedPath 判断「这份 state 讲的是不是当前文件」，失败时也得留下。
+      expect(notifier.state.selectedPath, 'missing/jd_sign.js');
+    });
   });
 
   group('SubscriptionListNotifier', () {

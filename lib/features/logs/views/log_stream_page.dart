@@ -1,28 +1,38 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import '../../../core/auth/auth_provider.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/sse_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../shared/models/task.dart';
 import '../../../shared/models/task_log.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/sse_replay_buffer.dart';
+import '../../../shared/utils/task_command.dart';
 import '../../../shared/widgets/app_snack.dart';
+import '../../tasks/providers/task_provider.dart';
 import '../utils/raw_log_download.dart';
+import '../utils/task_command_lookup.dart';
 
-class LogStreamPage extends StatefulWidget {
+/// AppBar 溢出菜单里的动作。
+enum _LogStreamAction { copyAll, downloadRaw, openScript }
+
+class LogStreamPage extends ConsumerStatefulWidget {
   final int logId;
 
   const LogStreamPage({super.key, required this.logId});
 
   @override
-  State<LogStreamPage> createState() => _LogStreamPageState();
+  ConsumerState<LogStreamPage> createState() => _LogStreamPageState();
 }
 
-class _LogStreamPageState extends State<LogStreamPage> {
+class _LogStreamPageState extends ConsumerState<LogStreamPage> {
   final _sseClient = SseClient();
   final _scrollController = ScrollController();
   final _lines = <String>[];
@@ -44,6 +54,15 @@ class _LogStreamPageState extends State<LogStreamPage> {
   /// 那种状态下既不知道文件存不存在，也说不出为什么不能下。
   bool? _hasRawFile;
   bool _downloadingRaw = false;
+
+  /// 这条日志对应任务的名字与命令，只服务「编辑对应脚本」。
+  ///
+  /// [_command] 允许一直是 null —— 老面板的日志详情不返回它，那时靠
+  /// [_resolveCommand] 在**点击那一刻**去任务列表兜底，拿到后回填这里，
+  /// 免得同一个页面点两次就请求两次。
+  String? _taskName;
+  String? _command;
+  bool _resolvingScript = false;
 
   @override
   void initState() {
@@ -89,6 +108,12 @@ class _LogStreamPageState extends State<LogStreamPage> {
 
       setState(() {
         _taskId = log.taskId;
+        _taskName = log.taskName;
+        // 面板 v3.2.0 起才在日志详情里带 command；拿不到就保持 null，
+        // 由「编辑对应脚本」点击时的兜底查询补。这里**不预取任务列表**：
+        // 日志详情是高频入口，为一个可能没人点的菜单项多打一发全量请求
+        // 会直接拖慢首屏。
+        _command = log.command;
         _lines
           ..clear()
           ..addAll(historyLines);
@@ -259,6 +284,113 @@ class _LogStreamPageState extends State<LogStreamPage> {
     }
   }
 
+  void _copyAll() {
+    Clipboard.setData(ClipboardData(text: _lines.join('\n')));
+    // 这里保留原有的 2 秒，不用默认的 4 秒：复制是瞬时完成的动作，
+    // 用户下一步多半立刻切到别的 App 去粘贴，提示条浮在日志正文上
+    // 压满 4 秒只会挡住他刚复制的那几行。
+    // 快捷方法 success() 故意不转发 duration，按 app_snack.dart 的
+    // 说明，需要改停留时长时走 show(..., tone: ...)。
+    AppSnack.show(
+      context,
+      '日志已复制到剪贴板',
+      tone: AppSnackTone.success,
+      duration: const Duration(seconds: 2),
+    );
+  }
+
+  /// 跳到这条日志对应任务所执行的脚本编辑页。
+  ///
+  /// 复用现成的 `/scripts/view` 深链（`state.extra` 就是脚本路径，ScriptViewPage
+  /// 自己会 loadContent），不新增路由。
+  ///
+  /// 降级是逐级的，每一级都要说清楚原因 —— 本页 `_downloadRawLog` 已经确立了
+  /// 「点了就直接告诉他为什么」的基调，不静默失败。
+  Future<void> _openScriptEditor() async {
+    if (_resolvingScript) {
+      return;
+    }
+    final taskId = _taskId;
+    if (taskId == null) {
+      return;
+    }
+
+    final command = await _resolveCommand(taskId);
+    if (!mounted) {
+      return;
+    }
+    if (command == null) {
+      AppSnack.warn(context, '未能获取任务命令，无法定位脚本');
+      return;
+    }
+
+    final scriptPath = extractScriptPathFromCommand(command);
+    if (scriptPath == null) {
+      // curl / 内联 shell / 不认识的入口命令都会走到这里。解析器故意判得窄
+      // （它同时是「删除任务时顺带删脚本」的依据），宁可让用户自己去脚本页找。
+      AppSnack.warn(context, '该任务不是脚本任务，命令里没有可打开的脚本文件');
+      return;
+    }
+
+    context.push('/scripts/view', extra: scriptPath);
+  }
+
+  /// 拿到任务命令：日志详情自带 > 任务列表内存缓存 > 现查任务列表。
+  ///
+  /// 三级都拿不到时返回 null。中间那级是白捡的：taskProvider 不是
+  /// autoDispose，用户只要进过任务页，全量列表就还在内存里。
+  Future<String?> _resolveCommand(int taskId) async {
+    final cached = _command;
+    if (cached != null) {
+      return cached;
+    }
+
+    final fromMemory = pickCommandFromTasks(
+      ref.read(taskProvider).tasks,
+      taskId,
+    );
+    if (fromMemory != null) {
+      _command = fromMemory;
+      return fromMemory;
+    }
+
+    setState(() => _resolvingScript = true);
+    try {
+      final fetched = await _fetchCommandFromTaskList(taskId);
+      _command = fetched;
+      return fetched;
+    } catch (_) {
+      // 兜底查询本身失败（断网 / 面板 5xx）与「面板里查不到这条任务」
+      // 对用户是同一件事：定位不了脚本。文案由调用方统一给。
+      return null;
+    } finally {
+      if (mounted) {
+        setState(() => _resolvingScript = false);
+      }
+    }
+  }
+
+  /// 老面板兜底：日志详情不给 command 时，去任务列表把它捞回来。
+  ///
+  /// `all=1` 是一次性全量（面板侧上限 5000 条），所以必须带 `keyword` 收窄；
+  /// 任务名为空时才退回真正的全量。角色门槛与日志详情同为 viewer，
+  /// 不会因为这一发请求多出权限问题。
+  Future<String?> _fetchCommandFromTaskList(int taskId) async {
+    final query = <String, dynamic>{'all': 1};
+    final keyword = (_taskName ?? '').trim();
+    if (keyword.isNotEmpty) {
+      query['keyword'] = keyword;
+    }
+
+    final response = await DioClient.instance.dio.get(
+      ApiEndpoints.tasks,
+      queryParameters: query,
+    );
+    final paginated = extractPaginated(response.data);
+    final tasks = paginated.items.map(Task.fromJson).toList();
+    return pickCommandFromTasks(tasks, taskId);
+  }
+
   List<String> _splitLines(String content) {
     final normalized = content.replaceAll('\r\n', '\n');
     final lines = normalized.split('\n');
@@ -289,16 +421,32 @@ class _LogStreamPageState extends State<LogStreamPage> {
 
   @override
   Widget build(BuildContext context) {
-    final logTheme = resolveLogSurfaceTheme(_logBackgroundColor);
+    final logTheme = resolveLogSurfaceTheme(
+      _logBackgroundColor,
+      themeBrightness: Theme.of(context).brightness,
+    );
     final chipBackground = logTheme.brightness == Brightness.dark
         ? AppColors.slate800
         : AppColors.slate100;
 
+    // 「编辑对应脚本」的两道门禁：
+    // 1. `_taskId == null` 说明日志详情还没到手，这时连要跳哪个任务都不知道
+    //    （与下面 `_hasRawFile != null` 同一个思路）；
+    // 2. `/api/scripts/*` 在面板侧要 operator，而日志只要 viewer。viewer 点进去
+    //    只会在编辑器里吃一个 403，不如直接不给这个入口。
+    final user = ref.watch(authProvider).user;
+    final canOpenScript = _taskId != null && (user?.isOperator ?? false);
+    final hasMenuActions =
+        _lines.isNotEmpty || _hasRawFile != null || canOpenScript;
+    final menuBusy = _downloadingRaw || _resolvingScript;
+
     return Scaffold(
       backgroundColor: logTheme.background,
       appBar: AppBar(
-        // actions 现在有 4 项（状态 chip + 复制 + 下载 + 自动滚动），窄屏上
-        // 留给标题的宽度会被压得很少。加 ellipsis 让它老老实实截断。
+        // actions 现在是 3 项（状态 chip + 自动滚动 + 溢出菜单）。复制 / 下载 /
+        // 编辑脚本全折进溢出菜单，就是为了不让它继续往上涨：曾经的 4 个图标在
+        // 窄屏上已经把标题压到要截断，再直接加第 5 个就会撑溢出。
+        // ellipsis 保留 —— 状态 chip 的文案本身也会变长。
         title: Text(
           '日志 #${widget.logId}',
           overflow: TextOverflow.ellipsis,
@@ -327,42 +475,6 @@ class _LogStreamPageState extends State<LogStreamPage> {
               visualDensity: VisualDensity.compact,
             ),
           ),
-          if (_lines.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.copy),
-              tooltip: '复制全部',
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: _lines.join('\n')));
-                // 这里保留原有的 2 秒，不用默认的 4 秒：复制是瞬时完成的动作，
-                // 用户下一步多半立刻切到别的 App 去粘贴，提示条浮在日志正文上
-                // 压满 4 秒只会挡住他刚复制的那几行。
-                // 快捷方法 success() 故意不转发 duration，按 app_snack.dart 的
-                // 说明，需要改停留时长时走 show(..., tone: ...)。
-                AppSnack.show(
-                  context,
-                  '日志已复制到剪贴板',
-                  tone: AppSnackTone.success,
-                  duration: const Duration(seconds: 2),
-                );
-              },
-            ),
-          // 只在拿到日志详情之后才出现：在那之前既不知道有没有原始文件，
-          // 也说不清楚点了会发生什么。
-          if (_hasRawFile != null)
-            IconButton(
-              icon: _downloadingRaw
-                  ? SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: logTheme.foreground,
-                      ),
-                    )
-                  : const Icon(Icons.download_outlined),
-              tooltip: '下载原始日志',
-              onPressed: _downloadingRaw ? null : _downloadRawLog,
-            ),
           IconButton(
             icon: Icon(_autoScroll ? Icons.vertical_align_bottom : Icons.pause),
             tooltip: _autoScroll ? '自动滚动: 开' : '自动滚动: 关',
@@ -373,6 +485,81 @@ class _LogStreamPageState extends State<LogStreamPage> {
               }
             },
           ),
+          // 三项全被门禁挡掉时（日志详情没加载出来、又不是 operator）整个按钮
+          // 都不出现 —— 留一个点开是空的菜单比没有按钮更让人困惑。
+          if (hasMenuActions)
+            PopupMenuButton<_LogStreamAction>(
+              // 有请求在飞时原地转圈：下载 / 兜底查询都可能要几秒，折进菜单之后
+              // 没了那个 IconButton 的位置，进度反馈只能挂在这里。
+              //
+              // ⚠️ 这个 spinner **只是反馈，不兼任锁**。菜单整体绝不能 disable：
+              // 原始日志有几十 MB 时，下载要先把字节整个拉完才弹保存框（见
+              // _downloadRawLog 的注释），这期间用户多半正想复制屏幕上的报错行
+              // 去搜索。把整个菜单锁死会让「复制全部」跟着一起点不开，
+              // 而它在折进菜单之前是个从不受 busy 影响的独立按钮。
+              // 门禁按项挂在下面各自的 enabled 上。
+              icon: menuBusy
+                  ? SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: logTheme.foreground,
+                      ),
+                    )
+                  : const Icon(Icons.more_vert),
+              tooltip: '更多操作',
+              itemBuilder: (_) => [
+                // 复制是纯本地、瞬时完成的，不受任何在飞的请求影响，
+                // 所以这一项**永远可点**（下载几十 MB 原始日志时尤其需要它）。
+                if (_lines.isNotEmpty)
+                  const PopupMenuItem(
+                    value: _LogStreamAction.copyAll,
+                    child: ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.copy, size: 20),
+                      title: Text('复制全部'),
+                    ),
+                  ),
+                // 只在拿到日志详情之后才出现：在那之前既不知道有没有原始文件，
+                // 也说不清楚点了会发生什么。
+                if (_hasRawFile != null)
+                  PopupMenuItem(
+                    value: _LogStreamAction.downloadRaw,
+                    // 只锁自己：重复点会重复发票据请求。
+                    enabled: !_downloadingRaw,
+                    child: const ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.download_outlined, size: 20),
+                      title: Text('下载原始日志'),
+                    ),
+                  ),
+                if (canOpenScript)
+                  PopupMenuItem(
+                    value: _LogStreamAction.openScript,
+                    // 同上，只锁自己：兜底查任务列表期间别再打一发。
+                    enabled: !_resolvingScript,
+                    child: const ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.code, size: 20),
+                      title: Text('编辑对应脚本'),
+                    ),
+                  ),
+              ],
+              onSelected: (action) async {
+                switch (action) {
+                  case _LogStreamAction.copyAll:
+                    _copyAll();
+                    break;
+                  case _LogStreamAction.downloadRaw:
+                    await _downloadRawLog();
+                    break;
+                  case _LogStreamAction.openScript:
+                    await _openScriptEditor();
+                    break;
+                }
+              },
+            ),
         ],
       ),
       body: Container(

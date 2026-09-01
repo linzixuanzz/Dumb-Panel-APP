@@ -4,6 +4,7 @@ import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../shared/models/task.dart';
 import '../../../shared/models/task_log.dart';
+import '../../../shared/models/task_view.dart';
 import '../../../shared/utils/api_utils.dart';
 
 const _unset = Object();
@@ -17,6 +18,16 @@ class TaskListState {
   final String? statusFilter;
   final String? labelFilter;
 
+  /// 当前生效的任务视图规则。空列表 = 没选视图。
+  ///
+  /// 这两组规则**不在客户端求值**：它们被序列化成 JSON 字符串塞进
+  /// `GET /api/tasks` 的 query，由服务端筛选与排序。
+  final List<TaskViewFilter> filters;
+  final List<TaskViewSortRule> sortRules;
+
+  /// 当前选中的视图 id，只用于 UI 高亮与本地持久化。
+  final int? selectedViewId;
+
   const TaskListState({
     this.tasks = const [],
     this.total = 0,
@@ -25,6 +36,9 @@ class TaskListState {
     this.keyword = '',
     this.statusFilter,
     this.labelFilter,
+    this.filters = const [],
+    this.sortRules = const [],
+    this.selectedViewId,
   });
 
   TaskListState copyWith({
@@ -35,6 +49,9 @@ class TaskListState {
     String? keyword,
     Object? statusFilter = _unset,
     Object? labelFilter = _unset,
+    List<TaskViewFilter>? filters,
+    List<TaskViewSortRule>? sortRules,
+    Object? selectedViewId = _unset,
   }) {
     return TaskListState(
       tasks: tasks ?? this.tasks,
@@ -48,6 +65,11 @@ class TaskListState {
       labelFilter: identical(labelFilter, _unset)
           ? this.labelFilter
           : labelFilter as String?,
+      filters: filters ?? this.filters,
+      sortRules: sortRules ?? this.sortRules,
+      selectedViewId: identical(selectedViewId, _unset)
+          ? this.selectedViewId
+          : selectedViewId as int?,
     );
   }
 }
@@ -81,6 +103,15 @@ class TaskNotifier extends StateNotifier<TaskListState> {
       if (state.labelFilter != null) {
         queryParams['label'] = state.labelFilter;
       }
+      // 视图规则原样交给服务端（`server/handler/task_query.go:42-43`）。
+      // 只在非空时才带上：面板对空 filters 走的是 SQL 分页快路径，
+      // 带一个 `[]` 会把它推进「全表进内存再过滤」的慢路径。
+      if (state.filters.isNotEmpty) {
+        queryParams['filters'] = encodeTaskViewFilters(state.filters);
+      }
+      if (state.sortRules.isNotEmpty) {
+        queryParams['sort_rules'] = encodeTaskViewSortRules(state.sortRules);
+      }
 
       final response = await dio.get(
         ApiEndpoints.tasks,
@@ -111,6 +142,47 @@ class TaskNotifier extends StateNotifier<TaskListState> {
 
   void setLabelFilter(String? label) {
     state = state.copyWith(labelFilter: label);
+    load(refresh: true);
+  }
+
+  /// 只写分组筛选，**不发请求**。冷启动恢复时用，理由同 [setViewSelection]。
+  ///
+  /// 刻意与 [setLabelFilter] 分成两个方法：用户点选分组时仍然要立刻刷新，
+  /// 那个行为不能动。
+  void setLabelSelection(String? label) {
+    // error 是「不传即清空」，这里只动分组，与列表本身无关，必须原样回传。
+    state = state.copyWith(labelFilter: label, error: state.error);
+  }
+
+  /// 只写视图选择，**不发请求**。冷启动恢复时用：紧接着还有一次统一的
+  /// `load()`，这里再各自拉一遍就是白跑一次全量取数。
+  void setViewSelection(TaskView? view) {
+    state = state.copyWith(
+      filters: view?.filters ?? const [],
+      sortRules: view?.sortRules ?? const [],
+      selectedViewId: view?.id,
+      // 同上：只动视图选择时不能顺手把列表的错误信息抹掉 ——
+      // 视图列表回来得比任务列表晚，那时抹掉就成了「空列表 + 没有任何提示」。
+      error: state.error,
+    );
+  }
+
+  /// 切换任务视图。传 null 表示回到「全部任务」（清空规则）。
+  void applyView(TaskView? view) {
+    setViewSelection(view);
+    load(refresh: true);
+  }
+
+  /// 一次性清掉全部筛选维度（状态 / 分组 / 视图），**只发一次请求**。
+  /// 逐个调 setStatusFilter / setLabelFilter / applyView 会连打三次全量取数。
+  void clearFilters() {
+    state = state.copyWith(
+      statusFilter: null,
+      labelFilter: null,
+      filters: const [],
+      sortRules: const [],
+      selectedViewId: null,
+    );
     load(refresh: true);
   }
 

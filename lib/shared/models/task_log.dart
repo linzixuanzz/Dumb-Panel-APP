@@ -22,6 +22,17 @@ class TaskLog {
   final DateTime createdAt;
   final String? taskName;
 
+  /// 这条日志对应任务的执行命令，用来反推它跑的是哪个脚本。
+  ///
+  /// ⚠️ **必须按可空用**。面板 `server/model/task_log.go` 的 `ToDict()` 是在
+  /// Preload 到 Task 之后才补这个键的，而且是 v3.2.0 之后才加的 —— 用户连的是
+  /// 老面板时它压根不存在。日志详情页因此还留了一条「点击时才去查任务列表」的
+  /// 兜底路径，不能假定这里一定有值。
+  ///
+  /// 空串归一成 null：面板对「没有命令」和「命令是空字符串」不做区分，
+  /// 调用方只要判一次 null 就够了。
+  final String? command;
+
   const TaskLog({
     required this.id,
     required this.taskId,
@@ -33,6 +44,7 @@ class TaskLog {
     this.endedAt,
     required this.createdAt,
     this.taskName,
+    this.command,
   });
 
   bool get isSuccess => status == kLogStatusSuccess;
@@ -64,12 +76,18 @@ class TaskLog {
       endedAt: _date(json['ended_at']),
       createdAt: _date(json['created_at']) ?? DateTime.now(),
       taskName: json['task_name']?.toString(),
+      command: _nonEmpty(json['command']),
     );
   }
 }
 
 int _int(dynamic v) => (v is num) ? v.toInt() : 0;
 int? _intOrNull(dynamic v) => (v is num) ? v.toInt() : null;
+String? _nonEmpty(dynamic v) {
+  final text = v?.toString().trim() ?? '';
+  return text.isEmpty ? null : text;
+}
+
 DateTime? _date(dynamic v) {
   if (v is String && v.isNotEmpty) return DateTime.tryParse(v);
   return null;

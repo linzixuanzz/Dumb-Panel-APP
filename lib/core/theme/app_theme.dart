@@ -70,9 +70,40 @@ class AppColors {
   /// 已禁用 / 已取消等中性态前景。
   static const neutral = slate500;
 
+  // ── 代码编辑器 ────────────────────────────────────────
+  //
+  // 取值全部对齐面板 Web 的 CodeMirror 主题（web/src/utils/codeEditor.ts），
+  // 两端观感才是同一个产品。
+  //
+  // ⚠️ 这里的黄是 `#EAB308`（Tailwind yellow-500），**不是** [amber500] 的
+  // `#F59E0B`（Tailwind amber-500）。它们不是同一个黄，别顺手复用 amber500。
+
+  /// 搜索命中：全部命中的弱高亮底色（= `rgba(234,179,8,0.35)`）。
+  static const searchMatch = Color(0x59EAB308);
+
+  /// 搜索命中：当前那一个的强高亮底色（= `rgba(234,179,8,0.6)`）。
+  static const searchMatchCurrent = Color(0x99EAB308);
+
+  /// 行号栏文字，**深底**时用（面板 Web gutter 深色 `#6b7280`）。
+  ///
+  /// 选深色还是浅色看的是**编辑器底色**而不是 App 主题：editor_background_color
+  /// 是用户在面板里自定义的，深色模式配浅底、浅色模式配深底都合法。
+  static const editorGutterOnDark = Color(0xFF6B7280);
+
+  /// 行号栏文字，**浅底**时用。取值与面板 Web gutter 浅色 `#94a3b8` 完全一致。
+  static const editorGutterOnLight = slate400;
+
   // 日志终端
-  static const termBg = Colors.white;
-  static const termBgDark = Color(0xFF000000);
+  //
+  // 面板的 log_background_color 出厂默认是空串，注册说明写的是「留空跟随当前主题」
+  // （server/model/system_config_registry.go）。所以这两个值是「面板没配色时」的兜底，
+  // 取值直接对齐面板 Web 的 DEFAULT_LOG_BACKGROUND_COLOR_LIGHT/DARK
+  // （web/src/utils/panelAppearance.ts），两端观感才是同一个产品。
+  //
+  // 别再写回 Colors.white / 纯黑：旧版只有一个恒定白底的 termBg，深色模式下日志就是刺眼的白，
+  // 这正是 issue #2 的根因。
+  static const termBgLight = Color(0xFFF8FAFC); // = slate50
+  static const termBgDark = Color(0xFF0F172A); // = slate900
   static const termText = Color(0xFF0F172A); // slate-900
   static const termBlue = Color(0xFF60A5FA); // blue-400
   static const termGreen = Color(0xFF34D399); // emerald-400

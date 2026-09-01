@@ -22,6 +22,10 @@ import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
 import '../../tasks/views/task_form_page.dart';
+import '../utils/script_search.dart';
+import '../widgets/script_find_bar.dart';
+import '../widgets/script_highlight_controller.dart';
+import '../widgets/script_line_number_gutter.dart';
 
 final scriptProvider = StateNotifierProvider<ScriptNotifier, ScriptState>((
   ref,
@@ -131,6 +135,20 @@ class ScriptState {
   final bool loadingContent;
   final bool saving;
 
+  /// 脚本**内容**加载失败的原因。与 [error]（脚本树）是两件事。
+  ///
+  /// 为什么必须有它：改造前 `loadContent` 的 catch 分支把失败写成
+  /// `content: '加载失败'` 且不留任何标志位。从脚本树点进来时路径必然存在，
+  /// 所以从没踩到；但日志详情页新增「跳到对应脚本」的入口之后，脚本被删、被改名、
+  /// 无权限都会走到这里 —— 用户看到的是一个内容为「加载失败」四个字的**可编辑**
+  /// 缓冲区，一按保存就把这四个字写成真文件，属于静默数据破坏。
+  ///
+  /// ⚠️ 它走 [_stateUnset] 哨兵（「不传即保持」），**刻意不跟 [error] 一样裸赋值**：
+  /// 内容加载失败之后用户随便点点（改搜索词、重命名别的文件）都会走 copyWith，
+  /// 裸赋值会把标志位悄悄抹掉、编辑器又变回可编辑的脏缓冲区 —— 那正是这个字段
+  /// 要防的事。要清空就显式写 `contentError: null`。
+  final String? contentError;
+
   const ScriptState({
     this.tree = const [],
     this.loading = false,
@@ -141,6 +159,7 @@ class ScriptState {
     this.isBinary = false,
     this.loadingContent = false,
     this.saving = false,
+    this.contentError,
   });
 
   ScriptState copyWith({
@@ -153,6 +172,7 @@ class ScriptState {
     bool? isBinary,
     bool? loadingContent,
     bool? saving,
+    Object? contentError = _stateUnset,
   }) {
     return ScriptState(
       tree: tree ?? this.tree,
@@ -169,6 +189,9 @@ class ScriptState {
       isBinary: isBinary ?? this.isBinary,
       loadingContent: loadingContent ?? this.loadingContent,
       saving: saving ?? this.saving,
+      contentError: identical(contentError, _stateUnset)
+          ? this.contentError
+          : contentError as String?,
     );
   }
 }
@@ -213,7 +236,14 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
   }
 
   Future<void> loadContent(String path) async {
-    state = state.copyWith(selectedPath: path, loadingContent: true);
+    // 这几处 copyWith 都显式回传 error：脚本树的错误提示与「打开某个文件」无关，
+    // 不带上就会被「不传即清空」的语义顺手抹掉（见 ScriptState.copyWith 的注释）。
+    state = state.copyWith(
+      selectedPath: path,
+      loadingContent: true,
+      contentError: null,
+      error: state.error,
+    );
     try {
       final resp = await _dio.get(
         ApiEndpoints.scriptsContent,
@@ -227,6 +257,7 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
           content: isBinary ? '' : (data['content']?.toString() ?? ''),
           isBinary: isBinary,
           loadingContent: false,
+          error: state.error,
         );
         return;
       }
@@ -235,13 +266,19 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
         content: data?.toString() ?? '',
         isBinary: false,
         loadingContent: false,
+        error: state.error,
       );
-    } catch (_) {
+    } catch (e) {
+      // ⚠️ 绝不能再把「加载失败」四个字当成文件内容塞进编辑器：那个缓冲区是可编辑的，
+      // 用户一按保存就把这四个字写成真文件。这里清空内容并立起 contentError，
+      // 由页面渲染错误态 + 禁用保存。
       state = state.copyWith(
         selectedPath: path,
-        content: '加载失败',
+        content: '',
         isBinary: false,
         loadingContent: false,
+        contentError: extractListErrorMessage(e, '脚本内容加载失败'),
+        error: state.error,
       );
     }
   }
@@ -1319,7 +1356,9 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
     if (!mounted) {
       return;
     }
-    await showModalBottomSheet<void>(
+    // 面板返回 true 表示真的回滚了。列表页这边没有编辑器缓冲区要同步，
+    // 用不上这个结果，但类型要跟 pop 出来的值对齐。
+    await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -1756,41 +1795,87 @@ class ScriptViewPage extends ConsumerStatefulWidget {
 }
 
 class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
-  late final TextEditingController _contentController;
+  /// 编辑器内边距。行号栏要拿它当滚动视口的起点，所以必须是常量而不是字面量 ——
+  /// 两边一旦写岔，行号会整体错位。
+  static const _editorContentPadding = EdgeInsets.all(14);
+
+  /// TextField 在排版**之前**额外扣掉的光标余量。
+  ///
+  /// = `RenderEditable._kCaretGap`(1.0) + `TextField.cursorWidth` 默认值 2.0，
+  /// 即 SDK `rendering/editable.dart` 里的 `RenderEditable._caretMargin`；
+  /// 多行输入框走 `_adjustConstraints`，实际断行宽度是 `maxWidth - _caretMargin`。
+  ///
+  /// ⚠️ 别把这一项「简化」掉：行号栏那份 TextPainter 拿不到这层扣减，某一行的宽度
+  /// 恰好落在这 3px 带里时，TextField 把它折成 2 条视觉行、行号栏却认为只占 1 条，
+  /// 从那一行往下所有行号整体错开一个行高；同一份几何还喂给 `_scrollToMatch`，
+  /// 「下一个」也会跟着跳偏一整行。
+  static const double _editorCaretMargin = 3.0;
+
+  late final ScriptHighlightController _contentController;
   late final FocusNode _contentFocusNode;
   final ScrollController _contentScrollController = ScrollController();
+  final TextEditingController _findController = TextEditingController();
   bool _editing = false;
   bool _debugRunning = false;
-  String _lastSearchQuery = '';
   Color? _editorBackgroundColor;
-  bool _searchHighlightActive = false;
+
+  /// 查找条是否常驻在编辑器上方。
+  bool _findBarVisible = false;
+
+  /// 当前查询词，以及它在全文里的全部命中起点、当前停在第几个。
+  ///
+  /// ⚠️ 搜索游标是**独立状态**，绝不能再寄存到 `controller.selection` 上：
+  /// selection 会被输入法、焦点切换、内容刷新随时改写，一被改写「下一个」就退回
+  /// 从头找 —— issue #6 (c)「点下一个不跳转」就是这么来的。
+  String _matchQuery = '';
+  List<int> _matchOffsets = const [];
+  int _currentMatchIndex = -1;
+
+  /// 命中数是否被 [kScriptSearchMatchLimit] 截断过（决定计数显示成 `500` 还是 `500+`）。
+  bool _matchTruncated = false;
+
+  /// 编辑器文本几何缓存。行号栏与搜索滚动共用**同一份** TextPainter 度量。
+  ScriptEditorTextMetrics? _editorMetrics;
+
+  /// `_contentController` 上一次的文本。
+  ///
+  /// controller 是 ValueNotifier，**移动光标、改选区、输入法组合**都会通知过来，
+  /// 而这些跟命中偏移毫无关系。缓存上一次的 text 比对一下，才能只在内容真的变了时
+  /// 重扫全文。
+  String _lastContentText = '';
 
   @override
   void initState() {
     super.initState();
-    _contentController = TextEditingController();
+    _contentController = ScriptHighlightController();
+    _contentController.addListener(_handleContentChanged);
     _contentFocusNode = FocusNode();
     Future.microtask(() async {
       await ref.read(scriptProvider.notifier).loadContent(widget.path);
+      if (!mounted) {
+        return;
+      }
+      // 兜底：build 里的 ref.listen 只对「注册之后」的变化生效。万一这次加载比首帧
+      // 还早完成，就靠这一句把内容补进编辑器；内容一致时它是空操作。
+      _applyContentFromState(ref.read(scriptProvider).content);
       await _loadEditorAppearance();
     });
   }
 
   @override
   void dispose() {
+    _editorMetrics?.dispose();
     _contentScrollController.dispose();
+    _contentController.removeListener(_handleContentChanged);
     _contentController.dispose();
+    _findController.dispose();
     _contentFocusNode.dispose();
     super.dispose();
   }
 
-  void _showMessage(String message) => AppSnack.show(context, message);
-
   void _showSuccess(String message) => AppSnack.success(context, message);
 
   void _showError(String message) => AppSnack.error(context, message);
-
-  void _showWarning(String message) => AppSnack.warn(context, message);
 
   String _extractScriptError(dynamic error, String fallback) =>
       extractScriptSaveErrorMessage(error, fallback);
@@ -1801,7 +1886,24 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
     return TaskFormPrefill(name: taskName, command: 'task ${widget.path}');
   }
 
+  /// 现在能不能把编辑器缓冲区写回服务端。
+  ///
+  /// 「缓冲区里装的确实是本文件的正文」这件事只有三个条件同时成立才为真。
+  /// 单靠 UI 上的 `editable` 不够：`_debugRun` 会自作主张先存一次，将来还可能有别的入口，
+  /// 所以在写入口本身也守一道。少存一次只是麻烦，存错一次是把用户的脚本冲掉。
+  bool get _canPersist {
+    final state = ref.read(scriptProvider);
+    return !state.loadingContent &&
+        state.selectedPath == widget.path &&
+        state.contentError == null &&
+        !state.isBinary;
+  }
+
   Future<void> _save() async {
+    if (!_canPersist) {
+      _showError('脚本内容尚未加载完成，暂时不能保存');
+      return;
+    }
     try {
       await ref
           .read(scriptProvider.notifier)
@@ -1824,7 +1926,9 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
       if (!mounted) {
         return;
       }
-      _contentController.text = formatted;
+      // 编辑模式下 ref.listen 会跳过同步（不能覆盖用户正在敲的东西），
+      // 所以格式化结果必须在这里显式落回编辑器。
+      _applyContentFromState(formatted);
       if (!_editing) {
         setState(() => _editing = true);
       }
@@ -1841,12 +1945,31 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
     if (!mounted) {
       return;
     }
-    await showModalBottomSheet<void>(
+    final rolledBack = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
       builder: (context) => _ScriptVersionSheet(path: widget.path),
     );
+    if (!mounted || rolledBack != true) {
+      return;
+    }
+    // 回滚会改服务端内容，但 build 里的 ref.listen 在编辑模式下**不同步**
+    // （那是为了不覆盖用户正在敲的东西）。不在这里显式落回的话，
+    // 用户会看到「提示已回滚、编辑器里还是回滚前的正文」，再点一次保存
+    // 就把刚回滚掉的内容原样 PUT 回去 —— 回滚被静默撤销。
+    // 回滚本身就意味着「以服务端为准」，所以顺带退出编辑模式、丢弃本地未保存修改；
+    // 只翻版本没回滚时 rolledBack 不为 true，走不到这里，未保存的修改不受影响。
+    final next = ref.read(scriptProvider);
+    if (next.selectedPath != widget.path ||
+        next.contentError != null ||
+        next.isBinary) {
+      return;
+    }
+    if (_editing) {
+      setState(() => _editing = false);
+    }
+    _applyContentFromState(next.content);
   }
 
   Future<void> _debugRun() async {
@@ -1897,217 +2020,264 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
   }
 
   Future<void> _loadEditorAppearance() async {
-    try {
-      final resp = await DioClient.instance.dio.get(ApiEndpoints.panelSettings);
-      final data = extractData(resp.data);
-      if (data is! Map || !mounted) {
-        return;
-      }
-      final payload = Map<String, dynamic>.from(data);
-      setState(() {
-        _editorBackgroundColor = _parseColorSetting(
-          payload['editor_background_color']?.toString(),
-        );
-      });
-    } catch (_) {
-      // 背景色配置加载失败时回退到页面默认配色
+    // 编辑器底色与日志底色是两个不同的面板配置项，但取数与解析完全同一套，
+    // 统一走 shared/utils/log_background.dart，别再在页面里复制一份解析器。
+    final color = await loadPanelColorSetting('editor_background_color');
+    if (!mounted) {
+      return;
     }
-  }
-
-  Color? _parseColorSetting(String? raw) {
-    final text = raw?.trim() ?? '';
-    if (text.isEmpty) {
-      return null;
-    }
-
-    if (text.startsWith('#')) {
-      final hex = text.substring(1);
-      if (hex.length == 6) {
-        final value = int.tryParse(hex, radix: 16);
-        if (value != null) {
-          return Color(0xFF000000 | value);
-        }
-      }
-      if (hex.length == 8) {
-        final value = int.tryParse(hex, radix: 16);
-        if (value != null) {
-          return Color(value);
-        }
-      }
-    }
-
-    final rgb = RegExp(
-      r'^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*([0-9]*\.?[0-9]+))?\s*\)$',
-      caseSensitive: false,
-    ).firstMatch(text);
-    if (rgb != null) {
-      final r = int.tryParse(rgb.group(1) ?? '');
-      final g = int.tryParse(rgb.group(2) ?? '');
-      final b = int.tryParse(rgb.group(3) ?? '');
-      final alphaText = rgb.group(4);
-      if (r != null && g != null && b != null) {
-        final opacity = alphaText == null
-            ? 1.0
-            : (double.tryParse(alphaText) ?? 1.0).clamp(0.0, 1.0);
-        return Color.fromRGBO(
-          r.clamp(0, 255),
-          g.clamp(0, 255),
-          b.clamp(0, 255),
-          opacity,
-        );
-      }
-    }
-
-    return null;
+    setState(() => _editorBackgroundColor = color);
   }
 
   bool _useLightForeground(Color background) =>
       background.computeLuminance() < 0.45;
 
-  void _scrollToMatch(int index) {
-    void scroll() {
-      if (!_contentScrollController.hasClients) {
+  /// 编辑器正文样式。
+  ///
+  /// 那些「看起来多余」的字段是**必须**写死的：TextField 会把 style 合并到主题的
+  /// `bodyLarge` 上（M3 的 bodyLarge 自带 `letterSpacing: 0.5`），而行号栏另建的
+  /// TextPainter 拿不到这层合并。字宽一旦对不上，软换行的断点就会分叉，
+  /// 行号会越往下偏得越多。把影响度量的字段全部钉死，两边算的才是同一件事。
+  ///
+  /// ⚠️ 需要 context 是因为**系统「无障碍 → 粗体文字」**这一层：SDK 的
+  /// `EditableText.didChangeDependencies` 里会做
+  /// `_style = MediaQuery.boldTextOf(context) ? widget.style.merge(bold) : widget.style`，
+  /// 行号栏那份 TextPainter 同样拿不到它。开着粗体文字时 TextField 按 bold 排版
+  /// （字宽变大、断行提前）、行号栏还按 w400 算，长行脚本从第一处软换行起就整体错位，
+  /// 越往下差得越多。这里提前把同一层 merge 做掉，strut 也由它派生，两边才对得齐。
+  static TextStyle _editorTextStyle(BuildContext context, Color color) {
+    const base = TextStyle(
+      fontSize: 13,
+      fontFamily: 'monospace',
+      height: 1.5,
+      fontWeight: FontWeight.w400,
+      fontStyle: FontStyle.normal,
+      letterSpacing: 0,
+      wordSpacing: 0,
+      textBaseline: TextBaseline.alphabetic,
+      leadingDistribution: TextLeadingDistribution.even,
+    );
+    final style = base.copyWith(color: color);
+    return MediaQuery.boldTextOf(context)
+        ? style.merge(const TextStyle(fontWeight: FontWeight.bold))
+        : style;
+  }
+
+  /// `forceStrutHeight` 让每条视觉行的高度只由 strut 决定，与这一行里有没有中文、
+  /// emoji 无关 —— 否则一行中文注释就会把它后面所有行号整体推下去。
+  static StrutStyle _editorStrutStyle(TextStyle style) =>
+      StrutStyle.fromTextStyle(style, forceStrutHeight: true);
+
+  /// 取（必要时重建）编辑器文本几何。
+  ///
+  /// 只在 (文本, 样式, strut, 字体缩放, 可用宽度) 之一变化时重排，别每帧 layout。
+  ScriptEditorTextMetrics _ensureEditorMetrics({
+    required String text,
+    required TextStyle style,
+    required StrutStyle strutStyle,
+    required TextScaler textScaler,
+    required double maxWidth,
+  }) {
+    final cached = _editorMetrics;
+    if (cached != null &&
+        cached.matchesInput(
+          text: text,
+          style: style,
+          strutStyle: strutStyle,
+          textScaler: textScaler,
+          maxWidth: maxWidth,
+        )) {
+      return cached;
+    }
+    cached?.dispose();
+    final created = ScriptEditorTextMetrics.compute(
+      text: text,
+      style: style,
+      strutStyle: strutStyle,
+      textScaler: textScaler,
+      maxWidth: maxWidth,
+    );
+    _editorMetrics = created;
+    return created;
+  }
+
+  /// 把命中滚进视口。
+  ///
+  /// 行高不再硬编码：改造前写死 `13 * 1.5` 又只数 `\n`，软换行、contentPadding、
+  /// 系统字体缩放一个都没算，长行脚本上系统性跳偏。现在直接问行号栏那份**实测**
+  /// 几何要真实 y —— 同一份 TextPainter 同时供行号和滚动定位使用。
+  void _scrollToMatch(int offset) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_contentScrollController.hasClients) {
         return;
       }
-      final prefix = _contentController.text.substring(0, index);
-      final lineCount = '\n'.allMatches(prefix).length;
-      const lineHeight = 13 * 1.5;
-      final rawOffset = (lineCount * lineHeight) - (lineHeight * 2);
-      final target = rawOffset.clamp(
+      // 在回调里现取：这一帧重建可能已经换过一份几何，拿旧的会滚错位置。
+      final top = _editorMetrics?.topForOffset(offset);
+      if (top == null) {
+        return;
+      }
+      final position = _contentScrollController.position;
+      // 让命中落在视口上三分之一处，命中的前后都还留得下上下文。
+      final target = (top - position.viewportDimension / 3).clamp(
         0.0,
-        _contentScrollController.position.maxScrollExtent,
+        position.maxScrollExtent,
       );
       _contentScrollController.animateTo(
         target,
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOut,
       );
-    }
-
-    WidgetsBinding.instance.addPostFrameCallback((_) => scroll());
-  }
-
-  bool _findInContent(String rawQuery, {required bool forward}) {
-    final query = rawQuery.trim();
-    if (query.isEmpty) {
-      _showWarning('请输入要查找的内容');
-      return false;
-    }
-
-    final content = _contentController.text;
-    if (content.isEmpty) {
-      _showWarning('当前脚本暂无可搜索内容');
-      return false;
-    }
-
-    final normalizedContent = content.toLowerCase();
-    final normalizedQuery = query.toLowerCase();
-    final selection = _contentController.selection;
-    final sameQuery = _lastSearchQuery == query;
-    int index = -1;
-
-    if (forward) {
-      final start = sameQuery && selection.isValid ? selection.end : 0;
-      index = normalizedContent.indexOf(normalizedQuery, start);
-      if (index == -1 && start > 0) {
-        index = normalizedContent.indexOf(normalizedQuery);
-      }
-    } else {
-      final fallbackStart = normalizedContent.length - 1;
-      final start = sameQuery && selection.isValid
-          ? (selection.start - 1).clamp(0, fallbackStart)
-          : fallbackStart;
-      index = normalizedContent.lastIndexOf(normalizedQuery, start);
-      if (index == -1 && start < fallbackStart) {
-        index = normalizedContent.lastIndexOf(normalizedQuery);
-      }
-    }
-
-    if (index == -1) {
-      _showWarning('未找到“$query”');
-      return false;
-    }
-
-    _lastSearchQuery = query;
-    _contentController.selection = TextSelection(
-      baseOffset: index,
-      extentOffset: index + query.length,
-    );
-    _contentFocusNode.requestFocus();
-    _scrollToMatch(index);
-    setState(() => _searchHighlightActive = true);
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) {
-        setState(() => _searchHighlightActive = false);
-      }
     });
-    final prefix = _contentController.text.substring(0, index);
-    final lineNumber = '\n'.allMatches(prefix).length + 1;
-    _showMessage('已定位到第 $lineNumber 行');
-    return true;
   }
 
-  Future<void> _showFindSheet() async {
-    if (ref.read(scriptProvider).isBinary) {
-      _showWarning('当前文件暂不支持查找');
+  /// 把 provider 里的内容同步进编辑器。
+  ///
+  /// ⚠️ 绝不能写成 `_contentController.text = content`：Flutter 的 `set text`
+  /// 会把 selection 强制打回 `TextSelection.collapsed(offset: -1)`，而这一句改造前
+  /// 是放在 **build() 里每帧执行**的（SDK 文档明写「不应在 build / layout / paint
+  /// 阶段设置」）。于是搜索刚设好的选区同帧就被抹掉，下次点「下一个」时
+  /// `selection.isValid` 为 false、查找起点回落成 0 —— 这就是 issue #6 (c) 的根因，
+  /// 同时也让 (b) 那个琥珀色高亮一帧都留不住。
+  ///
+  /// 现在只在内容**真的变了**时同步一次；命中偏移的重算交给
+  /// [_handleContentChanged] —— 这一句赋值会同步触发它。
+  void _applyContentFromState(String content) {
+    if (_contentController.text == content) {
       return;
     }
-
-    final controller = TextEditingController(text: _lastSearchQuery);
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (sheetContext) {
-        final bottomInset = MediaQuery.of(sheetContext).viewInsets.bottom;
-        return Padding(
-          padding: EdgeInsets.fromLTRB(20, 0, 20, bottomInset + 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Text(
-                '查找代码',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                autofocus: true,
-                textInputAction: TextInputAction.search,
-                decoration: const InputDecoration(
-                  hintText: '输入关键字，例如 send / token / class',
-                  prefixIcon: Icon(Icons.search),
-                ),
-                onSubmitted: (value) => _findInContent(value, forward: true),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () =>
-                          _findInContent(controller.text, forward: false),
-                      icon: const Icon(Icons.keyboard_arrow_up, size: 18),
-                      label: const Text('上一个'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: () =>
-                          _findInContent(controller.text, forward: true),
-                      icon: const Icon(Icons.keyboard_arrow_down, size: 18),
-                      label: const Text('下一个'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
+    _contentController.value = TextEditingValue(
+      text: content,
+      selection: const TextSelection.collapsed(offset: -1),
+      composing: TextRange.empty,
     );
+  }
+
+  /// 编辑器内容变了就重算命中偏移。
+  ///
+  /// 为什么必须挂这个 listener：命中偏移原本只在查找条的 `onChanged` 和
+  /// [_applyContentFromState] 两处重算，**打字不算**。于是「搜 token 得到 3 处高亮 →
+  /// 进编辑模式 → 在文件开头插入 5 个字符」之后，三处高亮整体左移 5 个字符染在毫不
+  /// 相干的文本上，「下一个」按旧偏移滚到错误位置，计数还显示 3。
+  ///
+  /// 取舍：大文件下每敲一个字符都要全文重扫一遍。`indexOf` 扫几 MB 也就几毫秒，
+  /// 而真正贵的高亮切片已经被 `kScriptSearchMatchLimit` 封顶了 ——
+  /// 相比「高亮染错地方」这个正确性问题，这点开销必须付。
+  void _handleContentChanged() {
+    final text = _contentController.text;
+    if (text == _lastContentText) {
+      return;
+    }
+    _lastContentText = text;
+    // 查找条关掉之后 _matchQuery 会被清空（输入框里的词还留着，方便重开），
+    // 那时不该再把高亮算回来。
+    if (_matchQuery.isEmpty) {
+      return;
+    }
+    // 用户可能正在打字，别把视口拽走；也别把「第几个命中」打回第 1 个，
+    // 否则连续编辑时计数会一直从 7/20 跳回 1/20。
+    _runSearch(_matchQuery, scrollToMatch: false, keepPosition: true);
+  }
+
+  /// 重算命中列表并把高亮推给 controller。
+  ///
+  /// [scrollToMatch] 为 false 时只更新高亮，不动滚动位置。
+  /// [keepPosition] 为 true 时尽量停在离原来那个命中最近的位置（用于编辑期间的重扫）。
+  void _runSearch(
+    String query, {
+    bool scrollToMatch = true,
+    bool keepPosition = false,
+  }) {
+    final previousOffset =
+        keepPosition &&
+            _currentMatchIndex >= 0 &&
+            _currentMatchIndex < _matchOffsets.length
+        ? _matchOffsets[_currentMatchIndex]
+        : null;
+    // 多要一个：拿到 limit+1 个才说明真的被截断了。只按 `== limit` 判断的话，
+    // 恰好 500 个命中的文件会被误标成「500+」。
+    final probed = query.isEmpty
+        ? const <int>[]
+        : findMatchOffsets(
+            _contentController.text,
+            query,
+            limit: kScriptSearchMatchLimit + 1,
+          );
+    final truncated = probed.length > kScriptSearchMatchLimit;
+    final offsets = truncated
+        ? probed.sublist(0, kScriptSearchMatchLimit)
+        : probed;
+    final current = offsets.isEmpty
+        ? -1
+        : (previousOffset == null
+              ? 0
+              : nearestMatchIndex(offsets, previousOffset));
+    setState(() {
+      _matchQuery = query;
+      _matchOffsets = offsets;
+      _matchTruncated = truncated;
+      _currentMatchIndex = current;
+      _contentController.updateMatches(
+        offsets: offsets,
+        current: current,
+        length: query.length,
+      );
+    });
+    if (scrollToMatch && current >= 0) {
+      _scrollToMatch(offsets[current]);
+    }
+  }
+
+  /// 「上一个 / 下一个」：在命中列表里前后移动并回绕。
+  ///
+  /// 这里**只动序号**，不碰 selection —— 所以即便 selection 被输入法或内容刷新
+  /// 改写，下一次点击照样往下走。
+  void _stepMatch({required bool forward}) {
+    final total = _matchOffsets.length;
+    if (total == 0) {
+      return;
+    }
+    final next = nextMatchIndex(_currentMatchIndex, total, forward: forward);
+    setState(() {
+      _currentMatchIndex = next;
+      _contentController.updateMatches(
+        offsets: _matchOffsets,
+        current: next,
+        length: _matchQuery.length,
+      );
+    });
+    _scrollToMatch(_matchOffsets[next]);
+  }
+
+  void _toggleFindBar() {
+    final visible = !_findBarVisible;
+    setState(() => _findBarVisible = visible);
+    if (visible) {
+      // 关掉又打开时保留上次的查询词，省得用户重敲。
+      if (_findController.text.isNotEmpty) {
+        _runSearch(_findController.text);
+      }
+      return;
+    }
+    // ⚠️ 这里刻意**不** `_findController.clear()`：清掉之后上面那个 isNotEmpty 分支
+    // 就永远不成立，注释里承诺的「保留查询词」是句空话 —— 用户要的正是「像编辑器那样」
+    // 关了再开查询词还在。只把高亮状态撤干净：查找条都收起来了，正文里不该还留着一片
+    // 琥珀色；[_handleContentChanged] 也靠 `_matchQuery` 为空来判断「现在没在搜」。
+    setState(() {
+      _matchQuery = '';
+      _matchOffsets = const [];
+      _matchTruncated = false;
+      _currentMatchIndex = -1;
+      _contentController.updateMatches(
+        offsets: const [],
+        current: -1,
+        length: 0,
+      );
+    });
+  }
+
+  Future<void> _reloadContent() async {
+    setState(() => _editing = false);
+    await ref.read(scriptProvider.notifier).loadContent(widget.path);
   }
 
   Future<void> _handleAction(_ScriptViewerAction action) async {
@@ -2133,14 +2303,40 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(scriptProvider);
-    if (!_editing && !state.isBinary) {
-      _contentController.text = state.content;
-    }
+    // 内容同步从 build 主体里搬到这里：只在 provider 真的换了内容时走一次，
+    // 不再每帧重置 selection（原因见 _applyContentFromState 的注释）。
+    // 编辑模式下刻意不同步 —— 那会覆盖用户正在敲的东西；格式化结果由 _format 自己落回。
+    ref.listen<ScriptState>(scriptProvider, (previous, next) {
+      if (_editing || next.isBinary) {
+        return;
+      }
+      _applyContentFromState(next.content);
+    });
+
+    // ⚠️ scriptProvider 是全局非 autoDispose 的，`contentError` 又走「不传即保持」
+    // 哨兵，而 `loadContent` 只在 initState 的 microtask 里调 —— 微任务排在本帧 build
+    // **之后**。于是「脚本 A 加载失败 → 返回列表 → 点开脚本 B」时，B 的第一帧读到的是
+    // A 遗留的 contentError 且 loadingContent 还是 false，整页先闪一下红色错误页、
+    // AppBar 上的编辑/保存/查找/调试全被藏起来，下一帧才切回 loading。
+    // 所以：只要 state 讲的还是别的文件，就一律按 loading 处理。
+    final stateMatchesPath = state.selectedPath == widget.path;
+    final loadingContent = state.loadingContent || !stateMatchesPath;
+    final contentError = stateMatchesPath ? state.contentError : null;
+    // isBinary 同样要跟着 stateMatchesPath 走，否则「看完二进制文件再开文本文件」
+    // 会在整个请求时长里把 AppBar 上的按钮全藏掉，回来时又凭空出现。
+    final isBinary = stateMatchesPath && state.isBinary;
+    // ⚠️ `loadingContent` 必须算进来。内容还在路上时，编辑器缓冲区里装的要么是空串、
+    // 要么是**上一个脚本**的正文（loadContent 第一句 copyWith 就会触发上面的 ref.listen
+    // 把旧内容灌进来）。此时若还给出「编辑 / 保存 / 调试运行」入口，用户在转圈期间
+    // 点两下就能把目标脚本整个覆盖成另一个脚本的内容——从日志详情跳过来时尤其容易踩，
+    // 因为那条路径不预加载，窗口就是一次 GET 的时长。
+    final editable = !loadingContent && !isBinary && contentError == null;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final editorBackground =
         _editorBackgroundColor ??
         (isDark ? const Color(0xFF1E1E1E) : Colors.white);
-    final editorForeground = _useLightForeground(editorBackground)
+    final onDarkEditor = _useLightForeground(editorBackground);
+    final editorForeground = onDarkEditor
         ? const Color(0xFFD4D4D4)
         : AppColors.slate900;
 
@@ -2148,13 +2344,13 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
       appBar: AppBar(
         title: Text(widget.path.split('/').last),
         actions: [
-          if (!state.isBinary)
+          if (editable)
             IconButton(
-              onPressed: _showFindSheet,
-              icon: const Icon(Icons.search),
-              tooltip: '查找代码',
+              onPressed: _toggleFindBar,
+              icon: Icon(_findBarVisible ? Icons.search_off : Icons.search),
+              tooltip: _findBarVisible ? '关闭查找' : '查找代码',
             ),
-          if (!state.isBinary)
+          if (editable)
             PopupMenuButton<_ScriptViewerAction>(
               onSelected: _handleAction,
               itemBuilder: (context) => const [
@@ -2192,7 +2388,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                 ),
               ],
             ),
-          if (!state.isBinary)
+          if (editable)
             IconButton(
               onPressed: _debugRunning ? null : _debugRun,
               icon: _debugRunning
@@ -2204,14 +2400,22 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                   : const Icon(Icons.play_arrow_rounded),
               tooltip: '调试运行',
             ),
-          if (!state.isBinary)
+          if (editable)
             IconButton(
-              onPressed: () => setState(() => _editing = !_editing),
+              onPressed: () {
+                final next = !_editing;
+                setState(() => _editing = next);
+                if (!next) {
+                  // 退回查看模式：与改造前一致，未保存的修改丢弃、回到服务端内容。
+                  // 改造前这件事是靠 build 里那句每帧赋值顺带完成的，现在得显式做。
+                  _applyContentFromState(ref.read(scriptProvider).content);
+                }
+              },
               icon: Icon(
                 _editing ? Icons.visibility_outlined : Icons.edit_outlined,
               ),
             ),
-          if (_editing && !state.isBinary)
+          if (_editing && editable)
             IconButton(
               onPressed: state.saving ? null : _save,
               icon: state.saving
@@ -2224,11 +2428,19 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
             ),
         ],
       ),
-      body: state.loadingContent
+      body: loadingContent
           ? const Center(
               child: CircularProgressIndicator(color: AppColors.primary),
             )
-          : state.isBinary
+          : contentError != null
+          ? SingleChildScrollView(
+              child: AppErrorView(
+                title: '脚本内容加载失败',
+                message: contentError,
+                onRetry: _reloadContent,
+              ),
+            )
+          : isBinary
           ? const Center(
               child: Padding(
                 padding: EdgeInsets.symmetric(horizontal: 28),
@@ -2251,6 +2463,17 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                     ),
                   ),
                 ),
+                if (_findBarVisible)
+                  ScriptFindBar(
+                    controller: _findController,
+                    matchCount: _matchOffsets.length,
+                    currentIndex: _currentMatchIndex,
+                    truncated: _matchTruncated,
+                    onChanged: _runSearch,
+                    onPrevious: () => _stepMatch(forward: false),
+                    onNext: () => _stepMatch(forward: true),
+                    onClose: _toggleFindBar,
+                  ),
                 Expanded(
                   child: AppCard(
                     margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -2260,32 +2483,108 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                     radius: AppRadius.md,
                     // 编辑器底色跟随用户设置的日志/编辑器主题，与页面明暗无关。
                     color: editorBackground,
-                    child: TextSelectionTheme(
-                      data: TextSelectionThemeData(
-                        selectionColor: _searchHighlightActive
-                            ? AppColors.amber500.withAlpha(120)
-                            : AppColors.primary.withAlpha(60),
-                      ),
-                      child: TextField(
-                        controller: _contentController,
-                        focusNode: _contentFocusNode,
-                        scrollController: _contentScrollController,
-                        readOnly: !_editing,
-                        expands: true,
-                        maxLines: null,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontFamily: 'monospace',
-                          height: 1.5,
-                          color: editorForeground,
-                        ),
-                        cursorColor: editorForeground,
-                        selectionHeightStyle: BoxHeightStyle.max,
-                        decoration: const InputDecoration(
-                          border: InputBorder.none,
-                          contentPadding: EdgeInsets.all(14),
-                        ),
-                      ),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final textScaler = MediaQuery.textScalerOf(context);
+                        final textStyle = _editorTextStyle(
+                          context,
+                          editorForeground,
+                        );
+                        final strutStyle = _editorStrutStyle(textStyle);
+                        // 监听 controller 而不是整页 setState：编辑模式下每敲一个
+                        // 字符都要重排行号，只让编辑器这一块重建，别牵动整页。
+                        return ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: _contentController,
+                          builder: (context, value, _) {
+                            final text = value.text;
+                            final gutterWidth = scriptGutterWidth(
+                              lineCount: lineNumberForOffset(text, text.length),
+                              style: textStyle,
+                              textScaler: textScaler,
+                            );
+                            // 行号栏、contentPadding、光标余量一起从卡片宽里扣掉，
+                            // 剩下的才是 TextField 真正用来断行的宽度。
+                            final available =
+                                (constraints.maxWidth -
+                                        gutterWidth -
+                                        _editorContentPadding.horizontal -
+                                        _editorCaretMargin)
+                                    .clamp(0.0, double.infinity);
+                            final metrics = _ensureEditorMetrics(
+                              text: text,
+                              style: textStyle,
+                              strutStyle: strutStyle,
+                              textScaler: textScaler,
+                              maxWidth: available,
+                            );
+                            return Row(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                ScriptLineNumberGutter(
+                                  width: gutterWidth,
+                                  metrics: metrics,
+                                  scrollController: _contentScrollController,
+                                  textStyle: textStyle,
+                                  strutStyle: strutStyle,
+                                  textScaler: textScaler,
+                                  // 跟编辑器底色的明暗走，而不是跟 App 主题走 ——
+                                  // 编辑器底色是用户在面板里自定义的。
+                                  color: onDarkEditor
+                                      ? AppColors.editorGutterOnDark
+                                      : AppColors.editorGutterOnLight,
+                                  verticalPadding: _editorContentPadding.top,
+                                ),
+                                Expanded(
+                                  child: TextSelectionTheme(
+                                    data: TextSelectionThemeData(
+                                      selectionColor: AppColors.primary
+                                          .withAlpha(60),
+                                    ),
+                                    child: TextField(
+                                      controller: _contentController,
+                                      focusNode: _contentFocusNode,
+                                      scrollController:
+                                          _contentScrollController,
+                                      readOnly: !_editing,
+                                      expands: true,
+                                      maxLines: null,
+                                      style: textStyle,
+                                      // 与行号栏同一份 strut：行高只由它决定，
+                                      // 中文注释才不会把后面的行号整体推下去。
+                                      strutStyle: strutStyle,
+                                      cursorColor: editorForeground,
+                                      selectionHeightStyle: BoxHeightStyle.max,
+                                      decoration: const InputDecoration(
+                                        // ⚠️ 只写 border 挡不住：applyDefaults 会把主题的
+                                        // enabledBorder / focusedBorder 填进来，而
+                                        // _InputDecoratorState 取的是它们**优先**，
+                                        // border 只在两者都为 null 时才回落。本仓主题恰好两个都给了
+                                        // OutlineInputBorder，所以必须三个一起关掉 —— 否则行号栏
+                                        // 拆到 TextField 外面之后，那圈描边只框住右半边代码区，
+                                        // 聚焦时还会冒出一个只圈代码区的主色圆角框。
+                                        border: InputBorder.none,
+                                        enabledBorder: InputBorder.none,
+                                        focusedBorder: InputBorder.none,
+                                        contentPadding: _editorContentPadding,
+                                        // 不写 filled 会继承主题 inputDecorationTheme
+                                        // 的 filled:true + fillColor:cardColor，而
+                                        // InputBorder.none 的 outer path 就是整个矩形，
+                                        // 这层 fill 会把 AppCard 的 editorBackground 整块盖掉。
+                                        // 改造前 TextField 铺满整张卡片所以看不出来（顺带说明：
+                                        // 面板的 editor_background_color 设置项一直是无效的）；
+                                        // 行号栏挪到 TextField 外面之后，露出来的就是
+                                        // 「左边行号条 editorBackground + 右边代码区 cardColor」
+                                        // 的一条竖直色缝。写死 false，那个设置项也第一次真正生效。
+                                        filled: false,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -2365,7 +2664,10 @@ class _ScriptVersionSheetState extends ConsumerState<_ScriptVersionSheet> {
       if (!mounted) {
         return;
       }
-      Navigator.pop(context);
+      // 回传 true 告诉打开它的页面「服务端内容真的换了」——编辑页要靠它决定
+      // 把编辑器落回服务端内容。只是翻了翻版本就关掉时不能回传，
+      // 否则会把用户未保存的修改一起丢掉。
+      Navigator.pop(context, true);
       AppSnack.success(context, '已回滚到 v${version.version}');
     } catch (error) {
       if (!mounted) {
@@ -2710,7 +3012,10 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final logTheme = resolveLogSurfaceTheme(_logBackgroundColor);
+    final logTheme = resolveLogSurfaceTheme(
+      _logBackgroundColor,
+      themeBrightness: Theme.of(context).brightness,
+    );
 
     return SafeArea(
       child: SizedBox(

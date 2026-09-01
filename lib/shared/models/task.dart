@@ -3,6 +3,15 @@ import '../utils/panel_enums.dart';
 class Task {
   static const String groupLabelPrefix = '分组:';
 
+  /// 订阅托管标记。这是**服务端内部标签**，不是用户自己打的标签：
+  /// 它把任务和订阅源绑在一起，决定订阅锁、「恢复为订阅默认」入口、
+  /// 以及下次拉取时认不认得这条任务是自己建的。
+  ///
+  /// ⚠️ 编辑任务时必须**原样透传**，不能跟着用户标签一起被覆写掉，
+  /// 否则任务会脱离订阅托管、下次拉取重建出一条同名重复任务。
+  /// 面板 Web 端的 `mergeTaskLabels` 就是专门做这件事的。
+  static const String subscriptionLabelPrefix = 'subscription:';
+
   final int id;
   final String name;
   final String command;
@@ -104,6 +113,84 @@ class Task {
 
   static String toGroupLabel(String group) =>
       '$groupLabelPrefix${group.trim()}';
+
+  /// 判前缀一律**先 trim**：历史脏数据里存在 `" subscription:1"` 这种
+  /// 带前导空格的标签（逗号拼接串被手工编辑过），面板侧同样是 trim 后判的。
+  static bool isSubscriptionLabel(String label) =>
+      label.trim().startsWith(subscriptionLabelPrefix);
+
+  /// 把「裸分组名」或「分组:名」统一归一成完整的分组标签，空值返回空串。
+  ///
+  /// 存在的理由：本地持久化里存的是裸分组名，而发给服务端做筛选的必须是
+  /// 带前缀的完整标签（服务端做的是 `labels LIKE '%<值>%'`，传裸名会把
+  /// 只挂了同名**普通标签**的任务一起捞回来）。两种形态都要能吃下。
+  static String normalizeGroupLabel(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      return '';
+    }
+    return isGroupLabel(trimmed) ? trimmed : toGroupLabel(trimmed);
+  }
+
+  /// 从「分组:名」取出分组名；传进来的若已经是裸名则原样返回。
+  static String groupNameFromLabel(String value) {
+    final trimmed = value.trim();
+    if (!isGroupLabel(trimmed)) {
+      return trimmed;
+    }
+    return trimmed.substring(groupLabelPrefix.length).trim();
+  }
+
+  /// 编辑表单里**可见可编辑**的用户标签：原始 labels 去掉分组与订阅两类。
+  ///
+  /// 注意入参必须是**原始** [labelList] 而不是 [userLabelsForDisplay]：
+  /// 后者基于服务端的 `display_labels`，里面 `subscription:3` 已经被换成了
+  /// 订阅显示名「华星电信」，拿它播种编辑框再整体覆写就等于把内部标签删了。
+  static List<String> splitUserLabels(List<String> rawLabels) {
+    return rawLabels
+        .map((label) => label.trim())
+        .where((label) => label.isNotEmpty)
+        .where((label) => !isGroupLabel(label) && !isSubscriptionLabel(label))
+        .toList();
+  }
+
+  /// 内部标签（目前只有 `subscription:<id>`）。编辑时不渲染、不可改，
+  /// 保存时原样拼回去。
+  static List<String> splitInternalLabels(List<String> rawLabels) {
+    return rawLabels
+        .map((label) => label.trim())
+        .where((label) => label.isNotEmpty)
+        .where(isSubscriptionLabel)
+        .toList();
+  }
+
+  /// 拼回提交体的 labels：用户标签 + 内部标签 + 分组标签。
+  ///
+  /// 面板的任务更新是**整体覆写** labels，所以这里漏掉任何一类都是真的丢数据。
+  static List<String> mergeTaskLabels({
+    required List<String> userLabels,
+    required List<String> internalLabels,
+    required String groupName,
+  }) {
+    final merged = <String>[
+      ...userLabels
+          .map((label) => label.trim())
+          .where(
+            (label) =>
+                label.isNotEmpty &&
+                !isGroupLabel(label) &&
+                !isSubscriptionLabel(label),
+          ),
+      ...internalLabels
+          .map((label) => label.trim())
+          .where((label) => label.isNotEmpty),
+    ];
+    final group = groupName.trim();
+    if (group.isNotEmpty) {
+      merged.add(toGroupLabel(group));
+    }
+    return merged;
+  }
 
   String? get groupName {
     for (final label in labelList) {

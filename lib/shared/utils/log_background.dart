@@ -19,16 +19,25 @@ class LogSurfaceTheme {
   });
 }
 
-Future<Color?> loadPanelLogBackgroundColor() async {
+Future<Color?> loadPanelLogBackgroundColor() =>
+    loadPanelColorSetting('log_background_color');
+
+/// 从面板公开设置里取一个颜色配置项。
+///
+/// 日志底色（log_background_color）与脚本编辑器底色（editor_background_color）
+/// 取数与解析完全同一套，只有键名不同 —— 别再各自复制一份解析器。
+///
+/// 拿不到时返回 null，由调用方按主题回落（见 [resolveLogSurfaceTheme]）。
+Future<Color?> loadPanelColorSetting(String key) async {
   try {
     final response = await DioClient.instance.dio.get(
       ApiEndpoints.panelSettings,
     );
     final data = extractData(response.data);
-    if (data is! Map<String, dynamic>) {
+    if (data is! Map) {
       return null;
     }
-    return parseColorSetting(data['log_background_color']?.toString());
+    return parseColorSetting(data[key]?.toString());
   } catch (_) {
     return null;
   }
@@ -81,8 +90,24 @@ Color? parseColorSetting(String? raw) {
   return null;
 }
 
-LogSurfaceTheme resolveLogSurfaceTheme(Color? configuredColor) {
-  final background = configuredColor ?? AppColors.termBg;
+/// 把「面板配的日志底色」解析成一整套日志表面配色。
+///
+/// [themeBrightness] 必须传当前主题亮度（`Theme.of(context).brightness`）。
+/// 之所以做成必填而不是可选带默认值：面板留空时的兜底色必须跟随明暗，
+/// 给默认值会让漏改的调用点静默退回「深色模式白底」那个 bug（issue #2）。
+LogSurfaceTheme resolveLogSurfaceTheme(
+  Color? configuredColor, {
+  required Brightness themeBrightness,
+}) {
+  // 面板契约：log_background_color 留空 = 跟随当前主题。
+  // 用户显式配了颜色就一律听用户的，哪怕它和当前主题“撞色”。
+  final background =
+      configuredColor ??
+      (themeBrightness == Brightness.dark
+          ? AppColors.termBgDark
+          : AppColors.termBgLight);
+  // 前景色一律从「最终底色」的亮度推，不要改成主题文字色 —— 面板 v3.0.10 修 issue #104
+  // 时踩过这个坑：深灰字压在深色底上，全糊。
   final brightness = ThemeData.estimateBrightnessForColor(background);
   final isDark = brightness == Brightness.dark;
 
