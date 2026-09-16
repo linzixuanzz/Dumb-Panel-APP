@@ -499,6 +499,19 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
   final _searchController = TextEditingController();
   final Set<String> _favoriteScriptPaths = <String>{};
 
+  /// 已展开的目录路径（issue #9）。
+  ///
+  /// 改造前展开状态是每个树节点自己的局部 `bool _expanded`，而新建文件 / 新建文件夹 /
+  /// 上传 / 重命名 / 移动 / 复制 / 删除这 7 处写操作之后都会 `loadTree()` 整体换掉
+  /// `state.tree` —— 整棵树的 widget 重建，所有局部状态归零，界面折叠回顶层。
+  /// 用户连传三个脚本就得重新展开三次。所以展开状态必须记在页面级，并且按**路径**认人：
+  /// 树是整棵换的，节点对象根本不是同一批。
+  ///
+  /// ⚠️ 这是 `LinkedHashSet`（Dart 的默认实现），**插入顺序有意义**：末尾那个就是
+  /// 「最近一次展开的目录」，上传弹窗的默认目录靠它（见 [latestExpandedDirectory]）。
+  /// 折叠时 `remove`、展开时 `add`，重新展开会自动排到末尾。
+  final Set<String> _expandedDirs = <String>{};
+
   @override
   void initState() {
     super.initState();
@@ -564,6 +577,64 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
     _showSuccess(
       _favoriteScriptPaths.contains(file.path) ? '已置顶脚本' : '已取消置顶脚本',
     );
+  }
+
+  /// 目录的展开 / 折叠。树节点已经改成受控组件，翻转只发生在这里。
+  void _toggleDirectory(ScriptFile dir) {
+    setState(() {
+      // remove 返回「本来在不在」，正好当成折叠成功的判据：不在就是要展开。
+      // 展开走 add，新展开的目录排到末尾，[_expandedDirs] 的插入顺序才有意义。
+      if (_expandedDirs.remove(dir.path)) {
+        // 折叠一个目录，它下面那些展开记录要一起丢掉。两个理由：
+        // 1. 改造前子节点的展开状态寄存在子 widget 的局部 State 上，父目录一折叠
+        //    子 widget 就被销毁，再展开必然是收拢的。不跟着删等于顺手改了 v1.3.4
+        //    的既有语义 —— 折叠再展开会把整棵子树炸开，而那不是本轮要改的东西。
+        // 2. 这些记录会让 [latestExpandedDirectory] 指向一个屏幕上根本看不见的目录
+        //    （父目录已经折叠了），上传弹窗的默认目录就落到用户没在看的地方去了。
+        _expandedDirs.removeWhere((path) => path.startsWith('${dir.path}/'));
+      } else {
+        _expandedDirs.add(dir.path);
+      }
+    });
+  }
+
+  /// 用最新的脚本树过滤展开记录，顺手丢掉脏记录。
+  ///
+  /// 目录被删除、改名、移走之后旧路径在新树里已经不存在，留着既画不出来，又会让
+  /// 「最近一次展开的目录」指向一个上传弹窗下拉里根本选不到的路径。
+  ///
+  /// 三个刻意的选择：
+  /// 1. **按 `state.tree` 过滤，不是按搜索过滤后的树**。搜索只是暂时不显示，
+  ///    按过滤结果清记录的话，用户敲一个关键词就会把没命中的目录全部折叠掉。
+  /// 2. **放在 build 里，不放在 `ref.listen` 里**。`renamePath` / `movePath` 内部是
+  ///    **先** `loadTree()` 再把新路径返回给调用方的：监听器会在 await 还没返回时
+  ///    就把旧路径判成脏记录删掉，等调用方拿到新路径要迁移时已经晚了。build 排在
+  ///    这些微任务之后（Dart 先排干微任务队列才画帧），顺序才是对的。
+  /// 3. **不 setState**。这里只删「本来就渲染不出来的路径」，不影响这一帧画出来的东西。
+  void _syncExpandedDirs(List<ScriptFile> tree) {
+    if (_expandedDirs.isEmpty) {
+      return;
+    }
+    // 与上传 / 移动 / 新建弹窗里那个目录下拉同一份口径：下拉的 value 必须真实存在，
+    // 否则 DropdownButtonFormField 会因为找不到匹配项直接抛断言。
+    final existing = _scriptFolders(tree).toSet();
+    _expandedDirs.retainWhere(existing.contains);
+  }
+
+  /// 重命名 / 移动之后把展开记录迁到新路径。
+  ///
+  /// 不迁的话这些记录会在下一帧被 [_syncExpandedDirs] 当成脏记录清掉，
+  /// 用户看到的就是「改个名字，整棵子树折叠了」。
+  void _applyExpandedDirsRemap(String oldPath, String newPath) {
+    if (_expandedDirs.isEmpty) {
+      return;
+    }
+    final remapped = remapExpandedDirs(_expandedDirs, oldPath, newPath);
+    setState(() {
+      _expandedDirs
+        ..clear()
+        ..addAll(remapped);
+    });
   }
 
   List<ScriptFile> _filterTree(List<ScriptFile> nodes, String keyword) {
@@ -636,6 +707,9 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
   Widget build(BuildContext context) {
     final state = ref.watch(scriptProvider);
     final isLight = Theme.of(context).brightness == Brightness.light;
+    // 先按最新的整棵树校一遍展开记录（注意传的是 state.tree 而不是下面那棵搜索过滤后的树），
+    // 再决定这一帧画什么。
+    _syncExpandedDirs(state.tree);
     final visibleTree = _sortScriptTree(_filterTree(state.tree, state.keyword));
 
     return Scaffold(
@@ -783,7 +857,9 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                                 file: file,
                                 isLight: isLight,
                                 depth: 0,
+                                expandedDirs: _expandedDirs,
                                 onTap: (path) => _openScript(path),
+                                onToggle: _toggleDirectory,
                                 onAction: (entry) =>
                                     _handleEntryAction(entry, state),
                               ),
@@ -1102,6 +1178,9 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                   if (!mounted) {
                     return;
                   }
+                  // 改名的可能是一个已展开的目录：把展开记录一并迁到新路径，
+                  // 否则这棵子树下一帧就会被当成脏记录清掉、整个折叠。
+                  _applyExpandedDirsRemap(file.path, newPath);
                   navigator.pop();
                   _showSuccess('已重命名为 ${newPath.split('/').last}');
                 } catch (error) {
@@ -1242,6 +1321,8 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                     if (!mounted) {
                       return;
                     }
+                    // 与重命名同理：移动的可能是一棵已展开的子树，展开记录跟着走。
+                    _applyExpandedDirsRemap(file.path, newPath);
                     navigator.pop();
                     _showSuccess('已移动到 ${newPath.split('/').last}');
                   } catch (error) {
@@ -1372,8 +1453,13 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
   }) async {
     final nameController = TextEditingController();
     final folders = _scriptFolders(state.tree);
+    // 与上传弹窗同一口径：显式带来的父目录最优先，否则落到用户当前正在浏览的目录
+    // （最近一次展开且仍然存在的那个），`selectedPath` 只作最后兜底 —— 它要打开过文件才有值。
+    // 三个弹窗必须一致，否则同一页上「上传」落在当前目录、「新建」却落回根目录。
     String parent =
-        initialParent ?? _defaultScriptDirectory(state.selectedPath);
+        initialParent ??
+        latestExpandedDirectory(_expandedDirs, folders.toSet()) ??
+        _defaultScriptDirectory(state.selectedPath);
 
     await showDialog<void>(
       context: context,
@@ -1459,8 +1545,13 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
   }) async {
     final nameController = TextEditingController();
     final folders = _scriptFolders(state.tree);
+    // 与上传弹窗同一口径：显式带来的父目录最优先，否则落到用户当前正在浏览的目录
+    // （最近一次展开且仍然存在的那个），`selectedPath` 只作最后兜底 —— 它要打开过文件才有值。
+    // 三个弹窗必须一致，否则同一页上「上传」落在当前目录、「新建」却落回根目录。
     String parent =
-        initialParent ?? _defaultScriptDirectory(state.selectedPath);
+        initialParent ??
+        latestExpandedDirectory(_expandedDirs, folders.toSet()) ??
+        _defaultScriptDirectory(state.selectedPath);
 
     await showDialog<void>(
       context: context,
@@ -1556,9 +1647,15 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
     String initialDir = '',
   }) async {
     final folders = _scriptFolders(state.tree);
+    // 「上传到此处」显式带来的目录最优先；否则落到用户当前正在浏览的目录，
+    // 也就是最近一次展开且仍然存在的那个（口径与理由见 latestExpandedDirectory）。
+    // `selectedPath` 排在最后：它只有在**打开过某个文件**之后才有值，
+    // 「只展开目录浏览、没点开文件」时它是空的 —— 那正是 issue #9 里
+    // 「顶部菜单上传，文件全落到根目录」的第二个成因。
     String targetDir = initialDir.isNotEmpty
         ? initialDir
-        : _defaultScriptDirectory(state.selectedPath);
+        : (latestExpandedDirectory(_expandedDirs, folders.toSet()) ??
+              _defaultScriptDirectory(state.selectedPath));
 
     await showDialog<void>(
       context: context,
@@ -1674,43 +1771,50 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
   }
 }
 
-class _FileTreeItem extends StatefulWidget {
+/// 文件树的一行。
+///
+/// **受控组件**：展开状态不在这里，而在页面级的 `_ScriptListPageState._expandedDirs`，
+/// 本组件只负责按 [expandedDirs] 画、点目录时把事件交回 [onToggle]。
+/// 改造前这里有一个局部的 `bool _expanded`，任何一次 `loadTree()` 重建整棵树都会把它
+/// 清零 —— issue #9「上传一个脚本就折叠回主目录」就是这么来的。
+class _FileTreeItem extends StatelessWidget {
   final ScriptFile file;
   final bool isLight;
   final int depth;
+
+  /// 页面级的展开记录。子节点要靠它解析自己的展开状态，所以整份传下去，
+  /// 而不是只传当前这一个节点的 bool。
+  final Set<String> expandedDirs;
   final ValueChanged<String> onTap;
   final ValueChanged<ScriptFile> onAction;
+  final ValueChanged<ScriptFile> onToggle;
 
   const _FileTreeItem({
     required this.file,
     required this.isLight,
     required this.depth,
+    required this.expandedDirs,
     required this.onTap,
     required this.onAction,
+    required this.onToggle,
   });
 
-  @override
-  State<_FileTreeItem> createState() => _FileTreeItemState();
-}
-
-class _FileTreeItemState extends State<_FileTreeItem> {
-  bool _expanded = false;
+  bool get _expanded => file.isDirectory && expandedDirs.contains(file.path);
 
   @override
   Widget build(BuildContext context) {
-    final file = widget.file;
-    final indent = widget.depth * 16.0;
+    final indent = depth * 16.0;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         AppCard(
-          onLongPress: () => widget.onAction(file),
+          onLongPress: () => onAction(file),
           onTap: () {
             if (file.isDirectory) {
-              setState(() => _expanded = !_expanded);
+              onToggle(file);
             } else {
-              widget.onTap(file.path);
+              onTap(file.path);
             }
           },
           margin: const EdgeInsets.only(bottom: 2),
@@ -1726,7 +1830,7 @@ class _FileTreeItemState extends State<_FileTreeItem> {
           radius: AppRadius.sm,
           // 文件树是嵌在卡片里的密集列表，浅色描边比常规卡片淡一档
           // （slate100 而不是 slate200），必须显式传入。
-          borderColor: widget.isLight ? AppColors.slate100 : AppColors.slate800,
+          borderColor: isLight ? AppColors.slate100 : AppColors.slate800,
           child: Row(
             children: [
               Icon(
@@ -1759,7 +1863,7 @@ class _FileTreeItemState extends State<_FileTreeItem> {
                   color: AppColors.slate400,
                 ),
               IconButton(
-                onPressed: () => widget.onAction(file),
+                onPressed: () => onAction(file),
                 icon: const Icon(Icons.more_vert, size: 18),
                 // compact 是 -2 档，把 48 压到 40。取 -1 档的 44：过线，
                 // 又不像直接删掉那样让每个文件行都长高 8dp。
@@ -1770,14 +1874,16 @@ class _FileTreeItemState extends State<_FileTreeItem> {
             ],
           ),
         ),
-        if (_expanded && file.isDirectory)
+        if (_expanded)
           ...file.children.map(
             (child) => _FileTreeItem(
               file: child,
-              isLight: widget.isLight,
-              depth: widget.depth + 1,
-              onTap: widget.onTap,
-              onAction: widget.onAction,
+              isLight: isLight,
+              depth: depth + 1,
+              expandedDirs: expandedDirs,
+              onTap: onTap,
+              onAction: onAction,
+              onToggle: onToggle,
             ),
           ),
       ],
@@ -2825,6 +2931,61 @@ List<String> _scriptFolders(List<ScriptFile> tree) {
 
   final values = folders.toList()..sort();
   return values;
+}
+
+/// 「用户当前正在浏览的目录」= **最近一次展开、且在当前树里仍然存在**的那个目录。
+///
+/// 上传弹窗需要一个默认目录。改造前用的是 `selectedPath` 的父目录，而 `selectedPath`
+/// 只有在**打开过某个文件**之后才有值 —— 只展开目录浏览的用户拿到的永远是根目录，
+/// 这是 issue #9 里「文件都跑到主目录」的第二个成因。
+///
+/// 为什么取「最近一次展开」而不是「最深的那个」：展开是用户在这个页面上唯一会留下的
+/// 浏览动作，最后一次动作最能代表他现在在哪。取最深的那个反而会被一个早就展开、
+/// 忘了折叠的深层目录劫持 —— 用户刚展开 `jd/` 准备往里传，默认目录却是十分钟前
+/// 展开的 `backup/2026/old/`。
+///
+/// [expandedDirs] 的插入顺序由调用方维护（折叠即移除、展开即追加到末尾），
+/// 所以从后往前找第一个仍然存在的就是答案。[availableDirs] 是当前树里真实存在的目录，
+/// 用来兜住「记录还在、目录已经被删或改名」的那一帧；都对不上时返回 null，
+/// 由调用方决定回落到什么。
+String? latestExpandedDirectory(
+  Iterable<String> expandedDirs,
+  Set<String> availableDirs,
+) {
+  for (final path in expandedDirs.toList().reversed) {
+    if (availableDirs.contains(path)) {
+      return path;
+    }
+  }
+  return null;
+}
+
+/// 重命名 / 移动之后，把展开记录里的旧路径前缀换成新路径。
+///
+/// 覆盖两件事：被改名（移动）的目录本身，以及它下面所有已展开的子目录。
+/// 不迁的话这些记录会在下一帧被过滤成脏记录清掉，用户看到的是「改个名字，
+/// 整棵子树折叠了」。
+///
+/// 返回的集合**保持原有顺序**，末尾那个仍然是「最近一次展开的目录」。
+Set<String> remapExpandedDirs(
+  Iterable<String> expandedDirs,
+  String oldPath,
+  String newPath,
+) {
+  if (oldPath.isEmpty || newPath.isEmpty || oldPath == newPath) {
+    return expandedDirs.toSet();
+  }
+  return expandedDirs.map((path) {
+    if (path == oldPath) {
+      return newPath;
+    }
+    if (path.startsWith('$oldPath/')) {
+      // 只换开头那一段，剩下的原样接上。不能用 replaceAll：
+      // `a/b` 改名成 `x` 时，`a/b/a/b` 这种同名子目录会被换第二次。
+      return '$newPath${path.substring(oldPath.length)}';
+    }
+    return path;
+  }).toSet();
 }
 
 String _defaultScriptDirectory(String? selectedPath) {

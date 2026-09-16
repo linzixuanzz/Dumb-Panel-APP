@@ -30,6 +30,69 @@ const _selectedGroupUnset = Object();
 
 enum _EnvBatchAction { enable, disable, delete }
 
+/// 写操作被面板拒绝了。
+///
+/// 存在的理由：面板 `POST /envs` **不是**用 4xx 表达「这条没建成」的（见
+/// [envCreateFailureMessage]），dio 只看到 200/201，写操作必须自己把这种
+/// 「HTTP 成功但业务失败」翻译成异常，UI 的 catch 才有东西可提示。
+///
+/// 字段名叫 message 不是随手起的：`extractErrorMessage`（api_utils.dart）
+/// 取不到 `response.data['error']` 时会退回读 `error.message`，
+/// 于是这条异常不用改任何调用点就能把面板原话透出去。
+class EnvWriteException implements Exception {
+  const EnvWriteException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// 从 `POST /envs` 的响应里认出「一条都没建成」，返回面板给的原因；真建成了给 null。
+///
+/// 面板 handler（server/handler/env.go 的 `Create`）对**不合规的变量名不返回 400**：
+/// 它逐条跳过、把原因写进 `errors`，`createdCount` 保持 0，最后走 `response.Success`
+/// 回一个 **HTTP 200**：
+///
+/// ```json
+/// {"message":"新增 0 条","data":[],"errors":["第 1 项: 变量名 '1abc' 格式无效"],"created":0}
+/// ```
+///
+/// 不解析这个信封，APP 就会在一条都没建成时照样弹「环境变量已创建」、列表里却什么都没多
+/// —— 那正是 issue #8「不能单独添加环境变量」的现场。面板 Web 踩不到，因为
+/// `EnvEditDialog.vue` 先做了一次客户端校验，请求根本发不出去。
+///
+/// 真正的 400（请求体过大 / 请求内容为空 / 请求参数错误）走的是 `{"error": ...}`，
+/// dio 那边直接抛 DioException，由 `extractErrorMessage` 取，不归这里管。
+///
+/// **只在能确证失败时才报错**：单条建成时面板回的是 `{"message":"创建成功","data":{...}}`，
+/// 既没有 `errors` 也没有 `created`。这种形状一律当成功，否则会凭空多出失败提示。
+String? envCreateFailureMessage(dynamic responseData) {
+  if (responseData is! Map) {
+    return null;
+  }
+
+  final errors = responseData['errors'];
+  if (errors is List) {
+    for (final item in errors) {
+      final text = item?.toString().trim() ?? '';
+      if (text.isNotEmpty) {
+        // 单条新建最多只会有一条原因，把面板的原话原样交出去，不要再包装。
+        return text;
+      }
+    }
+  }
+
+  // errors 空着但 created 明确是 0：面板没说为什么，也照样不能当成功。
+  final created = responseData['created'];
+  if (created is num && created == 0) {
+    final message = responseData['message']?.toString().trim() ?? '';
+    return message.isEmpty ? '面板没有创建任何变量' : message;
+  }
+
+  return null;
+}
+
 class EnvListState {
   final List<EnvVar> envs;
   final int total;
@@ -235,7 +298,7 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
     String remarks = '',
     List<String> groups = const [],
   }) async {
-    await _dio.post(
+    final response = await _dio.post(
       ApiEndpoints.envs,
       data: {
         'name': name,
@@ -245,6 +308,14 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
         'groups': groups,
       },
     );
+
+    // 面板用「200 + errors」表达「这条没建成」，不是 4xx —— 见 envCreateFailureMessage。
+    // 必须赶在 load() 之前判：一条都没建成时既不值得重拉列表，更不能让调用方弹「已创建」。
+    final failure = envCreateFailureMessage(response.data);
+    if (failure != null) {
+      throw EnvWriteException(failure);
+    }
+
     await load();
   }
 
@@ -1657,8 +1728,13 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     final valueC = TextEditingController();
     final remarksC = TextEditingController();
     final groupC = TextEditingController();
+    // 校验没过时要把焦点送回变量名输入框，所以这里得有个自己的 FocusNode。
+    final nameFocus = FocusNode();
     final groups = [...ref.read(envListProvider).groups];
     var valueEditorOpen = false;
+    // 变量名的就地错误提示。挂在弹窗上而不是用 SnackBar：这条提示要一直留到用户
+    // 改完为止，弹一下就消失的话，和改动前「点了没反应」的体感差别不大。
+    String? nameError;
 
     showModalBottomSheet(
       context: context,
@@ -1695,11 +1771,19 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                 const SizedBox(height: 16),
                 TextField(
                   controller: nameC,
-                  decoration: const InputDecoration(
+                  focusNode: nameFocus,
+                  decoration: InputDecoration(
                     labelText: '变量名',
                     hintText: '如 MY_TOKEN',
+                    errorText: nameError,
                   ),
                   textInputAction: TextInputAction.next,
+                  onChanged: (_) {
+                    // 用户一动手就把红字撤掉，别让它一路挂到下一次提交。
+                    if (nameError != null) {
+                      setSheetState(() => nameError = null);
+                    }
+                  },
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -1740,12 +1824,23 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                 const SizedBox(height: 20),
                 FilledButton(
                   onPressed: () async {
-                    if (nameC.text.trim().isEmpty) return;
+                    final name = nameC.text.trim();
+                    if (name.isEmpty) {
+                      // 改动前这里是一句光秃秃的 `return`：不提示、不关弹窗、也不发请求，
+                      // 用户点「创建」毫无反应，体感就是「加不进去」（issue #8）。
+                      // 文案与面板 Web 的 EnvEditDialog 逐字一致，两端对同一条规则要一个说法。
+                      setSheetState(() => nameError = '变量名不能为空');
+                      nameFocus.requestFocus();
+                      return;
+                    }
+                    if (nameError != null) {
+                      setSheetState(() => nameError = null);
+                    }
                     try {
                       await ref
                           .read(envListProvider.notifier)
                           .create(
-                            nameC.text.trim(),
+                            name,
                             valueC.text,
                             remarks: remarksC.text.trim(),
                             groups: _normalizeGroups([groupC.text]),
@@ -1757,13 +1852,29 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                       // 同上：弹层已 pop，只有页面自己的 context 还能弹提示。
                       AppSnack.success(context, '环境变量已创建');
                     } catch (error) {
+                      // 两类失败都落到这里，且都拿得到面板的原话：
+                      // 4xx 走 DioException 的 `response.data['error']`；
+                      // 「HTTP 200 但一条都没建成」走 EnvWriteException.message
+                      // （extractErrorMessage 取不到 error 字段时会退回读 .message）。
+                      final message = extractErrorMessage(error, '创建环境变量失败');
+                      // 弹窗刻意不关：原因多半是变量名不合规，关掉用户就得重填一遍。
+                      // 但**只发 SnackBar 等于白说**：它挂在页面的 Scaffold 上，而弹层是
+                      // 根 Navigator 上的一条路由，整块压在它上面 —— widget 测实测
+                      // snack 落在 (0,528)-(800,600)，完全位于 sheet (0,244)-(800,600)
+                      // 之内，一个字都露不出来。所以原因必须同时写回变量名下方。
+                      // 这里判的是 ctx（StatefulBuilder 自己的 context）而不是 State.mounted：
+                      // 请求没回来之前用户可以把弹层划走，那时弹层先被 unmount，
+                      // 再调 setSheetState 就是「对已卸载 Element 调 setState」
+                      // —— subscription_list_page.dart:541 记过同一个坑。
+                      if (ctx.mounted) {
+                        setSheetState(() => nameError = message);
+                      }
                       if (!mounted) {
                         return;
                       }
-                      AppSnack.error(
-                        context,
-                        extractErrorMessage(error, '创建环境变量失败'),
-                      );
+                      // SnackBar 仍然留着：用户把弹层关掉之后它才露出来，
+                      // 且与本页其它写操作（启用/禁用、保存、排序）的失败提示保持一致。
+                      AppSnack.error(context, message);
                     }
                   },
                   style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
@@ -1779,6 +1890,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
       valueC.dispose();
       remarksC.dispose();
       groupC.dispose();
+      nameFocus.dispose();
     });
   }
 }
