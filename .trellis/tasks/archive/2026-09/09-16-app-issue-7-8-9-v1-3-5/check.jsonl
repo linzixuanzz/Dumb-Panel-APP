@@ -1,0 +1,5 @@
+{"file": ".trellis/tasks/09-16-app-issue-7-8-9-v1-3-5/research/scout-findings.md", "reason": "复查时对照根因判断修复是否对症"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "必做项、禁忌项、analyze/test 门禁口径"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "类型写法与 any/dynamic 边界"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "状态改动是否踩到既有陷阱"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层与跨仓库脱节的检查清单"}

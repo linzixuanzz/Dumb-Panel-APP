@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/09-16-app-issue-7-8-9-v1-3-5/research/scout-findings.md", "reason": "三条 issue 的代码级根因与证据（文件:行），动手前必读"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "APP 前端整体约定与目录职责"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "页面/组件写法边界，R1 要把展开状态提到页面级"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Riverpod State/Notifier 划分与 copyWith 的「不传即清空」陷阱"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "provider/composable 的复用边界"}
+{"file": ".trellis/spec/frontend/panel-contract.md", "reason": "与面板服务端的接口契约，R2 涉及 POST /envs 的错误语义"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "APP 与面板独立发版，改动要确认两侧口径"}
