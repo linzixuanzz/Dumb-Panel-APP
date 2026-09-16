@@ -338,8 +338,42 @@ void main() {
       ]);
     });
 
-    test('可筛字段与面板 ViewManager 一致', () {
+    test('可筛字段与面板 ViewManager 一致，group 在标签与订阅之间', () {
       expect(kTaskViewFilterFields.map((item) => item.value).toList(), [
+        'command',
+        'name',
+        'cron_expression',
+        'status',
+        'labels',
+        'group',
+        'subscription',
+      ]);
+      // 契约 C3 的字段名就是 `group`，改名等于在新面板上也静默失效。
+      expect(kTaskViewGroupField, 'group');
+      expect(taskViewOptionLabel(kTaskViewFilterFields, 'group'), '分组');
+    });
+
+    test('可排序字段 = 除 group 外的可筛字段 + created_at', () {
+      // group 只进筛选（契约 C3 没给排序，网页的 sortFields 同样不含它）：
+      // 老面板排序遇到不认识的字段是静默不排，放进排序下拉就是一个选了没反应的选项。
+      final sortValues = kTaskViewSortFields.map((item) => item.value).toList();
+      expect(sortValues, contains('created_at'));
+      expect(sortValues, isNot(contains(kTaskViewGroupField)));
+      for (final field in kTaskViewFilterFields) {
+        if (field.value != kTaskViewGroupField) {
+          expect(sortValues, contains(field.value));
+        }
+      }
+    });
+
+    test('认不出来的取值原样显示，不冒充成某个已知选项', () {
+      expect(taskViewOptionLabel(kTaskViewFilterFields, 'command'), '命令');
+      expect(taskViewOptionLabel(kTaskViewFilterFields, 'brand_new'), 'brand_new');
+    });
+
+    test('没探测到面板支持 group 时不给「分组」选项，其余字段与顺序不变', () {
+      final options = taskViewFilterFieldOptions(supportsGroup: false);
+      expect(options.map((item) => item.value).toList(), [
         'command',
         'name',
         'cron_expression',
@@ -349,14 +383,41 @@ void main() {
       ]);
     });
 
-    test('可排序字段比可筛字段多一个 created_at', () {
-      expect(kTaskViewSortFields.map((item) => item.value), contains('created_at'));
-      expect(kTaskViewSortFields.length, kTaskViewFilterFields.length + 1);
+    test('面板支持 group 时给出完整字段表', () {
+      expect(
+        taskViewFilterFieldOptions(
+          supportsGroup: true,
+        ).map((item) => item.value).toList(),
+        kTaskViewFilterFields.map((item) => item.value).toList(),
+      );
     });
 
-    test('认不出来的取值原样显示，不冒充成某个已知选项', () {
-      expect(taskViewOptionLabel(kTaskViewFilterFields, 'command'), '命令');
-      expect(taskViewOptionLabel(kTaskViewFilterFields, 'brand_new'), 'brand_new');
+    test('规则本来就是 group 时即使没探测到支持也照常给出，显示成「分组」', () {
+      final options = taskViewFilterFieldOptions(
+        supportsGroup: false,
+        currentField: 'group',
+      );
+      expect(options.map((item) => item.value), contains('group'));
+      expect(taskViewOptionLabel(options, 'group'), '分组');
+    });
+
+    test('新建规则的默认字段仍是 command；group 规则播种后原样保留', () {
+      expect(kTaskViewFilterFields.first.value, 'command');
+      final draft = normalizeTaskViewFilterDraft(
+        const TaskViewFilter(field: 'group', op: 'equals', value: '京东'),
+      );
+      expect(draft.field, 'group');
+      expect(draft.value, '京东');
+      expect(draft.isUsable, isTrue);
+    });
+
+    test('分组规则的摘要显示成中文字段名，值原样显示', () {
+      expect(
+        taskViewFilterSummary(
+          const TaskViewFilter(field: 'group', op: 'equals', value: '京东'),
+        ),
+        '分组 等于 京东',
+      );
     });
   });
 

@@ -20,6 +20,14 @@ class Task {
   final String taskType;
   final String pythonVersion;
   final double status;
+
+  /// 启用开关位（契约 C1：面板 v3.2.8 起在任务列表与任务详情里下发 `enabled`）。
+  ///
+  /// `status` 一个字段同时装着「开关」和「运行态」：禁用任务被手动运行时，
+  /// 排队 / 运行期间的 status 是 0.5 / 2，与启用任务一模一样。只看 status 猜开关，
+  /// 运行中的禁用任务就会被当成开着，侧滑按钮给出「禁用」（面板 issue #133 同款）。
+  /// 老面板不下发这个键时为 null，由 [isSwitchOn] 回退。
+  final bool? enabled;
   final String labels;
   final List<String> displayLabels;
   final DateTime? lastRunAt;
@@ -53,6 +61,7 @@ class Task {
     this.taskType = 'cron',
     this.pythonVersion = '3.12',
     required this.status,
+    this.enabled,
     this.labels = '',
     this.displayLabels = const [],
     this.lastRunAt,
@@ -80,8 +89,19 @@ class Task {
 
   bool get isDisabled => status == kTaskStatusDisabled;
   bool get isQueued => status == kTaskStatusQueued;
+
+  /// ⚠️ 这是**状态值**等于「已启用」（启用且空闲），不是开关位：
+  /// 排队中 / 运行中的任务这里都是 false。要问「开关开没开」用 [isSwitchOn]。
   bool get isEnabled => status == kTaskStatusEnabled;
   bool get isRunning => status == kTaskStatusRunning;
+
+  /// 开关是否开着。面板下发了 [enabled] 就以它为准；老面板没有这个键时回退到
+  /// `status != 0`，与改动前 `!isDisabled` 的判断逐字相同 —— 老面板上行为不变
+  /// （运行中的禁用任务仍会被当成开着：面板没给这个信息，APP 猜不出来）。
+  bool get isSwitchOn => enabled ?? !isDisabled;
+
+  /// 启用 / 禁用动作的按钮文案：开着给「禁用」，关着给「启用」。
+  String get switchActionLabel => isSwitchOn ? '禁用' : '启用';
 
   /// 本版 APP 是否认得这个状态值。不认得时 UI 走中性态，
   /// 而不是沿用「已禁用」那一支的灰色 + 「启用」按钮。
@@ -231,6 +251,7 @@ class Task {
       taskType: json['task_type']?.toString() ?? 'cron',
       pythonVersion: json['python_version']?.toString() ?? '3.12',
       status: _double(json['status']),
+      enabled: _boolOrNull(json['enabled']),
       labels: json['labels'] is List
           ? (json['labels'] as List).join(',')
           : json['labels']?.toString() ?? '',
@@ -273,6 +294,10 @@ int _int(dynamic v) => (v is num) ? v.toInt() : 0;
 int? _intOrNull(dynamic v) => (v is num) ? v.toInt() : null;
 double _double(dynamic v) => (v is num) ? v.toDouble() : 0.0;
 double? _doubleOrNull(dynamic v) => (v is num) ? v.toDouble() : null;
+
+/// 可空布尔：**必须**区分「没下发」与「下发了 false」，所以不能照布尔字段的
+/// 惯例写 `== true`。非布尔值（0 / 1 / "true"）一律当没下发，不去猜。
+bool? _boolOrNull(dynamic v) => v is bool ? v : null;
 DateTime? _date(dynamic v) {
   if (v is String && v.isNotEmpty) return DateTime.tryParse(v);
   return null;

@@ -73,6 +73,12 @@ class ApiEndpoints {
   static const String taskViewsReorder = '$baseApi/tasks/views/reorder';
   static String taskViewById(int id) => '$baseApi/tasks/views/$id';
 
+  /// 任务分组清单（契约 C2，面板 v3.2.8 新增），裸数组 `[{name, count}]`。
+  /// APP 目前只拿它做**能力探测**：老面板没有这条路由（tasks 组下也没有
+  /// `GET /:id` 能误吞它），会落进 NoRoute 的 JSON 404。探测结果决定视图
+  /// 编辑器给不给「分组」字段，见 `TaskViewNotifier`。
+  static const String taskGroups = '$baseApi/tasks/groups';
+
   static const String notificationChannels =
       '$baseApi/tasks/notification-channels';
 

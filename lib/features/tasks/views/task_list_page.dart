@@ -463,7 +463,10 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
 
   Future<void> _toggleTaskEnabled(Task task) async {
     try {
-      if (task.isDisabled) {
+      // 按开关位分支，不按 status：禁用任务被手动运行时 status 是 0.5 / 2，
+      // 按 isDisabled 判会走进「禁用」分支 —— 给一条本来就禁用的任务再打一次
+      // 待禁用标记、提示「完成后禁用」，用户在它跑完之前根本启用不了它。
+      if (!task.isSwitchOn) {
         await ref.read(taskProvider.notifier).enableTask(task.id);
         _showSuccess('任务已启用');
       } else {
@@ -2082,18 +2085,21 @@ class _TaskCardState extends State<_TaskCard> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     _TaskSwipeActionButton(
-                      label: task.isDisabled ? '启用' : '禁用',
-                      icon: task.isDisabled
-                          ? Icons.play_circle_outline
-                          : Icons.pause_circle_outline,
+                      // 开关位一律看 isSwitchOn，不看 status：禁用任务被手动运行时
+                      // status 是 0.5 / 2，按 isDisabled 判会把它说成开着、按钮写
+                      // 「禁用」（面板 #133 同款）。文案 / 图标 / 颜色三处同一个判断。
+                      label: task.switchActionLabel,
+                      icon: task.isSwitchOn
+                          ? Icons.pause_circle_outline
+                          : Icons.play_circle_outline,
                       // 「启用」是把任务切到已启用态，语义是 success 绿，
                       // 和同卡状态圆点 / 徽章的「已启用」保持同色；
                       // 原先取 primary，与「运行」类动作撞成同一个蓝。
                       // 淡底与前景都由 _TaskSwipeActionButton 内部按这个 color
                       // 推导（含 tintFg），这里改一处即可。
-                      color: task.isDisabled
-                          ? AppColors.success
-                          : AppColors.slate500,
+                      color: task.isSwitchOn
+                          ? AppColors.slate500
+                          : AppColors.success,
                       onTap: () => _runSwipeAction(widget.onToggleEnabled),
                     ),
                     const SizedBox(width: _actionGap),

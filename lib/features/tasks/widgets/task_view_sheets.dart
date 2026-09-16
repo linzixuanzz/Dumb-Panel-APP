@@ -526,6 +526,11 @@ class _TaskViewEditorSheetState extends ConsumerState<_TaskViewEditorSheet> {
   Widget _buildFilterRow(_FilterDraft draft) {
     final surfaces = context.surfaces;
     final isStatus = draft.field == 'status';
+    final isGroup = draft.field == kTaskViewGroupField;
+    // 老面板不认 group，没探测到支持就不给这个选项（见 taskViewFilterFieldOptions）。
+    final supportsGroup = ref.watch(
+      taskViewProvider.select((state) => state.supportsGroupFilter),
+    );
     return AppCard(
       padding: const EdgeInsets.all(AppSpacing.md),
       radius: AppRadius.md,
@@ -539,7 +544,10 @@ class _TaskViewEditorSheetState extends ConsumerState<_TaskViewEditorSheet> {
                 child: _buildDropdown(
                   label: '字段',
                   value: draft.field,
-                  options: kTaskViewFilterFields,
+                  options: taskViewFilterFieldOptions(
+                    supportsGroup: supportsGroup,
+                    currentField: draft.field,
+                  ),
                   onChanged: (value) => setState(() {
                     draft.field = value;
                     // 换到「状态」时，之前输入的自由文本几乎肯定不是那四个数值串之一。
@@ -594,9 +602,15 @@ class _TaskViewEditorSheetState extends ConsumerState<_TaskViewEditorSheet> {
           else
             TextField(
               controller: draft.valueController,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: '值',
-                hintText: '例如 jd_bean',
+                // 面板按 trim 后第一个「分组:」标签里的名字匹配，填「分组:京东」对不上。
+                hintText: isGroup ? '分组名，例如 京东' : '例如 jd_bean',
+                // 没探测到支持时选项本身是藏起来的，走到这里只可能是已有的 group 规则。
+                helperText: isGroup && !supportsGroup
+                    ? '未确认当前面板支持按分组筛选：旧版面板上这条规则会筛不出任何任务'
+                    : null,
+                helperMaxLines: 2,
                 isDense: true,
               ),
               style: const TextStyle(fontSize: 14),

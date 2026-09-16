@@ -252,15 +252,46 @@ class TaskViewOption {
   const TaskViewOption(this.value, this.label);
 }
 
-/// 可筛字段。逐条对齐面板 `web/.../ViewManager.vue:63-70`，顺序也照抄。
+/// 按任务「分组」筛的字段名（契约 C3，面板 v3.2.8 才认）。
+///
+/// 值填**裸分组名**（「京东」，不是「分组:京东」）：面板取的是 trim 后第一个
+/// `分组:` 标签里的名字，equals 精确匹配、不区分大小写；没分组的任务取不到值。
+const String kTaskViewGroupField = 'group';
+
+/// 可筛字段。逐条对齐面板 `web/.../ViewManager.vue` 的 filterFields，顺序也照抄；
+/// `group` 是 v3.2.8 加的，网页把它放在「标签」与「订阅」之间，这里同位。
+///
+/// ⚠️ 编辑器的「字段」下拉不要直接用这张表，走 [taskViewFilterFieldOptions]：
+/// 老面板不认 `group`，要按探测结果藏起来。
 const List<TaskViewOption> kTaskViewFilterFields = [
   TaskViewOption('command', '命令'),
   TaskViewOption('name', '名称'),
   TaskViewOption('cron_expression', '定时规则'),
   TaskViewOption('status', '状态'),
   TaskViewOption('labels', '标签'),
+  TaskViewOption(kTaskViewGroupField, '分组'),
   TaskViewOption('subscription', '订阅'),
 ];
+
+/// 视图编辑器「字段」下拉实际给出的选项。
+///
+/// 老面板不认 `group`：取不到值，「分组 等于 X」匹配不到任何任务；而面板建视图时
+/// 又不校验字段，保存照样成功 —— 在老面板上给出这个选项，用户建出来的就是一条
+/// 永远为空、还会同步到网页端的视图。所以 [supportsGroup] 为 false 时不给这一项。
+///
+/// 例外：规则本来就是 `group` 时照常给出，让它显示成「分组」，
+/// 而不是被下拉当成认不出的值、原样显示成 `group`。
+List<TaskViewOption> taskViewFilterFieldOptions({
+  required bool supportsGroup,
+  String? currentField,
+}) {
+  if (supportsGroup || currentField == kTaskViewGroupField) {
+    return kTaskViewFilterFields;
+  }
+  return kTaskViewFilterFields
+      .where((option) => option.value != kTaskViewGroupField)
+      .toList();
+}
 
 /// 运算符。面板遇到不认识的运算符会**静默放行**（恒真），
 /// 所以这里绝不能自己发明第五种。
@@ -283,7 +314,10 @@ const List<TaskViewOption> kTaskViewStatusValues = [
   TaskViewOption('0.5', '排队中'),
 ];
 
-/// 可排序字段（`task_query.go:537-563`）。比可筛字段多一个 `created_at`。
+/// 可排序字段（面板 `task_query.go` 的 comparePreparedTaskByRule）。
+/// 比可筛字段多一个 `created_at`、少一个 `group`，与网页 ViewManager.vue 的
+/// sortFields 一致：契约 C3 只约定了筛选；老面板排序遇到不认识的字段是静默不排，
+/// 放进来就是一个选了没反应的选项。
 const List<TaskViewOption> kTaskViewSortFields = [
   TaskViewOption('name', '名称'),
   TaskViewOption('command', '命令'),

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -19,11 +21,20 @@ class TaskViewListState {
   /// 更不能让任务列表因为一个可选能力红掉。
   final bool supported;
 
+  /// 当前面板认不认任务筛选字段 `group`（契约 C3）。
+  ///
+  /// 老面板不认：取不到值，「分组 等于 X」匹配不到任何任务，而建视图时又不校验
+  /// 字段 —— 在老面板上给出这个选项，用户建出来的就是一条永远为空的视图。
+  /// 由 [TaskViewNotifier.load] 在视图加载成功后探测 `GET /api/tasks/groups`
+  /// （契约 C2，与 C3 同一版加的）得出。默认 false：探测之前宁可少给一个选项。
+  final bool supportsGroupFilter;
+
   const TaskViewListState({
     this.views = const [],
     this.loading = false,
     this.error,
     this.supported = true,
+    this.supportsGroupFilter = false,
   });
 
   /// 页面上真正会渲染的视图：`hidden` 的不显示。
@@ -51,12 +62,14 @@ class TaskViewListState {
     // 任何与列表无关的 copyWith 都必须显式回传 error: state.error。
     String? error,
     bool? supported,
+    bool? supportsGroupFilter,
   }) {
     return TaskViewListState(
       views: views ?? this.views,
       loading: loading ?? this.loading,
       error: error,
       supported: supported ?? this.supported,
+      supportsGroupFilter: supportsGroupFilter ?? this.supportsGroupFilter,
     );
   }
 }
@@ -70,6 +83,10 @@ class TaskViewNotifier extends StateNotifier<TaskViewListState> {
 
   final Dio? _injectedDio;
 
+  /// `group` 能力探测的序号：只认最后一次发出去的那次。切换面板时，
+  /// 上一个面板迟到的探测结果不许覆盖后来的结论。
+  int _groupProbeSeq = 0;
+
   Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 
   Future<void> load() async {
@@ -79,15 +96,21 @@ class TaskViewNotifier extends StateNotifier<TaskViewListState> {
       final paginated = extractPaginated(response.data);
       final items = paginated.items.map((e) => TaskView.fromJson(e)).toList();
       state = state.copyWith(views: items, loading: false, supported: true);
+      // 不 await：冷启动恢复视图要等 load() 回来才发任务列表请求，
+      // 为编辑器里的一个下拉选项再多等一个来回不值得。
+      unawaited(_probeGroupFilter());
     } on DioException catch (e) {
       final status = e.response?.statusCode;
       if (status == 404 || status == 403) {
         // 老面板没有这条路由（404）/ 当前角色不够（403）。
         // 这不是错误，是能力缺失：清空视图并把入口整体藏起来。
+        // 顺手作废还在路上的 group 探测：它问的可能是上一个面板。
+        _groupProbeSeq++;
         state = state.copyWith(
           views: const [],
           loading: false,
           supported: false,
+          supportsGroupFilter: false,
         );
         return;
       }
@@ -101,6 +124,32 @@ class TaskViewNotifier extends StateNotifier<TaskViewListState> {
         error: extractListErrorMessage(e, '加载任务视图失败'),
       );
     }
+  }
+
+  /// 探测面板认不认 `group` 筛选字段。**绝不抛**：这是个可选能力，
+  /// 探测出任何问题都不能反过来影响视图列表。
+  Future<void> _probeGroupFilter() async {
+    final seq = ++_groupProbeSeq;
+    bool? supported;
+    try {
+      final response = await _dio.get(ApiEndpoints.taskGroups);
+      // 只认「拿到了数组」：反代把未知路径兜成 200 + 首页 HTML 的部署并不少见，
+      // 只看状态码会把老面板误判成支持。
+      supported = extractData(response.data) is List;
+    } on DioException catch (e) {
+      final status = e.response?.statusCode;
+      if (status == 404 || status == 405) {
+        supported = false;
+      }
+      // 其余（断网 / 超时 / 5xx）说明不了面板认不认，保留上一次的结论。
+    } catch (_) {
+      // 同上：解析层的意外也只当作「这次没问出结论」。
+    }
+    if (supported == null || !mounted || seq != _groupProbeSeq) {
+      return;
+    }
+    // 与视图列表无关的更新：error 必须原样回传（copyWith 的 error 不传即清空）。
+    state = state.copyWith(supportsGroupFilter: supported, error: state.error);
   }
 
   /// 新建视图。**不 try/catch**，异常抛给 UI 去出提示 ——
