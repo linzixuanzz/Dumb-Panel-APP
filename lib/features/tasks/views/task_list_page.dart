@@ -17,7 +17,6 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/task.dart';
 import '../../../shared/models/task_view.dart';
-import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/duration_utils.dart';
 import '../../../shared/utils/panel_enums.dart';
@@ -25,12 +24,14 @@ import '../../../shared/utils/sse_replay_buffer.dart';
 import '../../../shared/utils/task_command.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/utils/log_background.dart';
+import '../../../shared/utils/log_line_buffer.dart';
 import '../../../shared/widgets/app_circle_add_button.dart';
 import '../../../shared/widgets/app_buttons.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_notice.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
+import '../../../shared/widgets/log_view.dart';
 import '../../../shared/widgets/task_cron_list.dart';
 import '../providers/task_provider.dart';
 import '../providers/task_view_provider.dart';
@@ -2913,16 +2914,16 @@ class TaskDetailSheet extends StatelessWidget {
 }
 
 class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
-  final ScrollController _scrollController = ScrollController();
   final _sseClient = SseClient();
-  final _lines = <String>[];
+
+  /// 日志正文。增量追加、超长只留最近一部分，渲染与滚动跟随都交给 LogView。
+  final _log = LogLineBuffer();
 
   /// 服务端重连一律从头重放整段历史（没有 Last-Event-ID），
   /// 靠它把重放的行抵扣掉，用户才不会看到日志翻倍。
   final _replayBuffer = SseReplayBuffer();
   bool _loading = true;
   bool _done = false;
-  bool _autoScroll = true;
   String _statusText = '连接中...';
   Timer? _pollTimer;
   int _pollAttempts = 0;
@@ -2939,7 +2940,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
   void dispose() {
     _pollTimer?.cancel();
     _sseClient.close();
-    _scrollController.dispose();
+    _log.dispose();
     super.dispose();
   }
 
@@ -2991,18 +2992,12 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
 
     setState(() {
       _loading = false;
-      _lines
-        ..clear()
-        ..addAll(logs);
+      _log.replaceAll(logs);
       _done = done && !shouldKeepPolling;
       _statusText = shouldKeepPolling
           ? '等待日志...'
           : _statusFromLiveTask(status, done: done);
     });
-
-    if (_autoScroll && logs.isNotEmpty) {
-      _scrollToBottom();
-    }
 
     if (isRunning) {
       _pollTimer?.cancel();
@@ -3044,24 +3039,30 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
         _pollTimer?.cancel();
         _pollTimer = null;
         setState(() {
-          _done = _lines.isNotEmpty;
-          _statusText = _lines.isEmpty ? '暂无日志' : '已完成';
+          _done = _log.isNotEmpty;
+          _statusText = _log.isEmpty ? '暂无日志' : '已完成';
         });
       }
     });
+  }
+
+  /// 重连前把已显示的行交给去重缓冲。日志太长时前面的行已经从内存里丢掉，
+  /// 但服务端仍从第一行开始重放，要让它先按行数跳过那一段（同 LogStreamPage）。
+  void _resetReplayBuffer() {
+    _replayBuffer.reset(_log.lines, skipLeading: _log.droppedCount);
   }
 
   void _connectSSE(int taskId) {
     _sseClient.close();
     _pollTimer?.cancel();
     _pollTimer = null;
-    _replayBuffer.reset(_lines);
+    _resetReplayBuffer();
     _sseClient.connect(
       path: ApiEndpoints.logStream(taskId),
       autoReconnect: true,
       // 重放去重统一挂在这里：不管重连是服务端 done:reconnect 触发的，
       // 还是 token 续期后客户端自己发起的，行为都一样。
-      onReconnect: () => _replayBuffer.reset(_lines),
+      onReconnect: _resetReplayBuffer,
       onEvent: (event) {
         if (!mounted) return;
         if (event.event == 'done') {
@@ -3083,12 +3084,15 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
         if (newLines.isEmpty) return;
         final dedupedLines = _replayBuffer.consume(newLines);
         if (dedupedLines.isEmpty) return;
-        setState(() {
-          _lines.addAll(dedupedLines);
-          _done = false;
-          _statusText = '运行中';
-        });
-        if (_autoScroll) _scrollToBottom();
+        final wasEmpty = _log.isEmpty;
+        _log.append(dedupedLines);
+        // 正文由 LogView 监听缓冲区自己刷新，整页只在「从无到有」或状态变了时重建。
+        if (wasEmpty || _done || _statusText != '运行中') {
+          setState(() {
+            _done = false;
+            _statusText = '运行中';
+          });
+        }
       },
       onDone: () {
         if (!mounted) return;
@@ -3133,7 +3137,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
       case 2:
         return '已完成';
       default:
-        return _lines.isEmpty ? '等待日志...' : '已完成';
+        return _log.isEmpty ? '等待日志...' : '已完成';
     }
   }
 
@@ -3148,18 +3152,6 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
       default:
         return value;
     }
-  }
-
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 100),
-          curve: Curves.easeOut,
-        );
-      }
-    });
   }
 
   @override
@@ -3203,80 +3195,55 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
               visualDensity: VisualDensity.compact,
             ),
           ),
-          if (_lines.isNotEmpty)
+          if (_log.isNotEmpty)
             IconButton(
               icon: Icon(Icons.copy, color: logTheme.foreground),
               tooltip: '复制全部',
               onPressed: () {
-                Clipboard.setData(ClipboardData(text: _lines.join('\n')));
+                Clipboard.setData(ClipboardData(text: _log.joinAll()));
                 // 特意保留 2s（默认 4s）：这里是日志页，提示条浮在正文上方，
                 // 而复制成功是即时可感知的，没必要占着屏幕挡住刚复制的那几行。
                 // success 快捷方法不转发 duration，所以走 show(tone:)。
                 AppSnack.show(
                   context,
-                  '日志已复制到剪贴板',
+                  // 截断后内存里只有最近一部分，得说清楚复制到的不是全部。
+                  _log.droppedCount > 0
+                      ? '已复制最近 ${_log.length} 行'
+                      : '日志已复制到剪贴板',
                   tone: AppSnackTone.success,
                   duration: const Duration(seconds: 2),
                 );
               },
             ),
-          IconButton(
-            icon: Icon(
-              _autoScroll ? Icons.vertical_align_bottom : Icons.pause,
-              color: _autoScroll ? AppColors.primary : logTheme.mutedForeground,
-            ),
-            tooltip: _autoScroll ? '自动滚动: 开' : '自动滚动: 关',
-            onPressed: () {
-              setState(() => _autoScroll = !_autoScroll);
-              if (_autoScroll) _scrollToBottom();
-            },
-          ),
+          // 原来这里还有一个「自动滚动」开关，已经去掉：停在底部就跟随、
+          // 上翻就停，回到底部由正文右下角的按钮负责（issue #10）。
         ],
       ),
       body: Container(
         color: logTheme.background,
-        child: _loading && _lines.isEmpty
+        child: _loading && _log.isEmpty
             ? const Center(
                 child: CircularProgressIndicator(color: AppColors.primary),
               )
-            : _lines.isEmpty
+            : _log.isEmpty
             ? Center(
                 child: Text(
                   _done ? '无日志内容' : '等待日志输出...',
                   style: TextStyle(color: logTheme.mutedForeground),
                 ),
               )
-            : Theme(
-                data: Theme.of(context).copyWith(
-                  textSelectionTheme: TextSelectionThemeData(
-                    selectionColor: AppColors.primary.withAlpha(80),
-                    selectionHandleColor: AppColors.primary,
-                  ),
+            : LogView(
+                buffer: _log,
+                textStyle: TextStyle(
+                  color: logTheme.foreground,
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  height: 1.6,
                 ),
-                child: Scrollbar(
-                  controller: _scrollController,
-                  child: SingleChildScrollView(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(12),
-                    child: SelectableText.rich(
-                      AnsiTextParser.buildTextSpan(
-                        _lines.join('\n'),
-                        baseStyle: TextStyle(
-                          color: logTheme.foreground,
-                          fontFamily: 'monospace',
-                          fontSize: 12,
-                          height: 1.6,
-                        ),
-                        brightness: logTheme.brightness,
-                      ),
-                      contextMenuBuilder: (context, editableTextState) {
-                        return AdaptiveTextSelectionToolbar.editableText(
-                          editableTextState: editableTextState,
-                        );
-                      },
-                    ),
-                  ),
-                ),
+                brightness: logTheme.brightness,
+                mutedColor: logTheme.mutedForeground,
+                // 这个页面只知道任务、不知道日志记录 id，下载入口在日志详情页。
+                truncatedHint: '完整日志可在「运行日志」里打开这条记录下载',
               ),
       ),
     );

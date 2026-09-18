@@ -11,11 +11,12 @@ import '../../../core/theme/app_theme.dart';
 import '../../../shared/models/task.dart';
 import '../../../shared/models/task_log.dart';
 import '../../../shared/utils/api_utils.dart';
-import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
+import '../../../shared/utils/log_line_buffer.dart';
 import '../../../shared/utils/sse_replay_buffer.dart';
 import '../../../shared/utils/task_command.dart';
 import '../../../shared/widgets/app_snack.dart';
+import '../../../shared/widgets/log_view.dart';
 import '../../tasks/providers/task_provider.dart';
 import '../utils/raw_log_download.dart';
 import '../utils/task_command_lookup.dart';
@@ -34,8 +35,9 @@ class LogStreamPage extends ConsumerStatefulWidget {
 
 class _LogStreamPageState extends ConsumerState<LogStreamPage> {
   final _sseClient = SseClient();
-  final _scrollController = ScrollController();
-  final _lines = <String>[];
+
+  /// 日志正文。增量追加、超长只留最近一部分，渲染与滚动跟随都交给 LogView。
+  final _log = LogLineBuffer();
 
   /// 服务端重连一律从头重放整段历史（没有 Last-Event-ID），
   /// 靠它把重放的行抵扣掉，用户才不会看到日志翻倍。
@@ -43,7 +45,6 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
 
   bool _loading = true;
   bool _done = false;
-  bool _autoScroll = true;
   int? _taskId;
   String _status = '加载中...';
   Color? _logBackgroundColor;
@@ -114,9 +115,7 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
         // 日志详情是高频入口，为一个可能没人点的菜单项多打一发全量请求
         // 会直接拖慢首屏。
         _command = log.command;
-        _lines
-          ..clear()
-          ..addAll(historyLines);
+        _log.replaceAll(historyLines);
         _done = !log.isRunning;
         _loading = false;
         _status = log.isRunning ? '连接中...' : log.statusText;
@@ -125,9 +124,6 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
         // 这里读的是同一个字段，不是客户端另立的一套规则。
         _hasRawFile = (log.logPath ?? '').trim().isNotEmpty;
       });
-      if (_autoScroll && historyLines.isNotEmpty) {
-        _scrollToBottom();
-      }
 
       if (log.isRunning) {
         _connect();
@@ -144,19 +140,27 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
     }
   }
 
+  /// 重连前把已显示的行交给去重缓冲。
+  ///
+  /// 日志太长时前面的行已经从内存里丢掉了，但服务端仍从第一行开始重放，
+  /// 所以要告诉它先按行数跳过那一段，否则第一行就对不上、整段历史被重复追加一遍。
+  void _resetReplayBuffer() {
+    _replayBuffer.reset(_log.lines, skipLeading: _log.droppedCount);
+  }
+
   void _connect() {
     final taskId = _taskId;
     if (taskId == null) {
       return;
     }
 
-    _replayBuffer.reset(_lines);
+    _resetReplayBuffer();
     _sseClient.connect(
       path: ApiEndpoints.logStream(taskId),
       autoReconnect: true,
       // 重放去重统一挂在这里：不管重连是服务端 done:reconnect 触发的，
       // 还是 token 续期后客户端自己发起的，行为都一样。
-      onReconnect: () => _replayBuffer.reset(_lines),
+      onReconnect: _resetReplayBuffer,
       onEvent: (event) {
         if (!mounted) {
           return;
@@ -185,12 +189,12 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
           return;
         }
 
-        setState(() {
-          _lines.addAll(newLines);
-          _status = '运行中';
-        });
-        if (_autoScroll) {
-          _scrollToBottom();
+        final wasEmpty = _log.isEmpty;
+        _log.append(newLines);
+        // 正文由 LogView 监听缓冲区自己刷新。整页只在「从无到有」或状态变了时重建，
+        // 不再每来一段日志就把 AppBar 连同整页重建一遍。
+        if (wasEmpty || _status != '运行中') {
+          setState(() => _status = '运行中');
         }
       },
       onDone: () {
@@ -285,7 +289,7 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
   }
 
   void _copyAll() {
-    Clipboard.setData(ClipboardData(text: _lines.join('\n')));
+    Clipboard.setData(ClipboardData(text: _log.joinAll()));
     // 这里保留原有的 2 秒，不用默认的 4 秒：复制是瞬时完成的动作，
     // 用户下一步多半立刻切到别的 App 去粘贴，提示条浮在日志正文上
     // 压满 4 秒只会挡住他刚复制的那几行。
@@ -293,7 +297,10 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
     // 说明，需要改停留时长时走 show(..., tone: ...)。
     AppSnack.show(
       context,
-      '日志已复制到剪贴板',
+      // 截断后内存里只有最近一部分，得说清楚复制到的不是全部。
+      _log.droppedCount > 0
+          ? '已复制最近 ${_log.length} 行，完整日志请下载原始日志'
+          : '日志已复制到剪贴板',
       tone: AppSnackTone.success,
       duration: const Duration(seconds: 2),
     );
@@ -400,22 +407,10 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
     return lines;
   }
 
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 100),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
-
   @override
   void dispose() {
     _sseClient.close();
-    _scrollController.dispose();
+    _log.dispose();
     super.dispose();
   }
 
@@ -437,15 +432,17 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
     final user = ref.watch(authProvider).user;
     final canOpenScript = _taskId != null && (user?.isOperator ?? false);
     final hasMenuActions =
-        _lines.isNotEmpty || _hasRawFile != null || canOpenScript;
+        _log.isNotEmpty || _hasRawFile != null || canOpenScript;
     final menuBusy = _downloadingRaw || _resolvingScript;
 
     return Scaffold(
       backgroundColor: logTheme.background,
       appBar: AppBar(
-        // actions 现在是 3 项（状态 chip + 自动滚动 + 溢出菜单）。复制 / 下载 /
+        // actions 现在是 2 项（状态 chip + 溢出菜单）。复制 / 下载 /
         // 编辑脚本全折进溢出菜单，就是为了不让它继续往上涨：曾经的 4 个图标在
         // 窄屏上已经把标题压到要截断，再直接加第 5 个就会撑溢出。
+        // 原来的「自动滚动」开关已经去掉：停在底部就跟随、上翻就停，
+        // 回到底部由正文右下角的按钮负责（issue #10）。
         // ellipsis 保留 —— 状态 chip 的文案本身也会变长。
         title: Text(
           '日志 #${widget.logId}',
@@ -475,16 +472,6 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
               visualDensity: VisualDensity.compact,
             ),
           ),
-          IconButton(
-            icon: Icon(_autoScroll ? Icons.vertical_align_bottom : Icons.pause),
-            tooltip: _autoScroll ? '自动滚动: 开' : '自动滚动: 关',
-            onPressed: () {
-              setState(() => _autoScroll = !_autoScroll);
-              if (_autoScroll) {
-                _scrollToBottom();
-              }
-            },
-          ),
           // 三项全被门禁挡掉时（日志详情没加载出来、又不是 operator）整个按钮
           // 都不出现 —— 留一个点开是空的菜单比没有按钮更让人困惑。
           if (hasMenuActions)
@@ -512,13 +499,18 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
               itemBuilder: (_) => [
                 // 复制是纯本地、瞬时完成的，不受任何在飞的请求影响，
                 // 所以这一项**永远可点**（下载几十 MB 原始日志时尤其需要它）。
-                if (_lines.isNotEmpty)
-                  const PopupMenuItem(
+                if (_log.isNotEmpty)
+                  PopupMenuItem(
                     value: _LogStreamAction.copyAll,
                     child: ListTile(
                       contentPadding: EdgeInsets.zero,
-                      leading: Icon(Icons.copy, size: 20),
-                      title: Text('复制全部'),
+                      leading: const Icon(Icons.copy, size: 20),
+                      // 截断后只能复制内存里留着的那部分，菜单上直接说实话。
+                      title: Text(
+                        _log.droppedCount > 0
+                            ? '复制最近 ${_log.length} 行'
+                            : '复制全部',
+                      ),
                     ),
                   ),
                 // 只在拿到日志详情之后才出现：在那之前既不知道有没有原始文件，
@@ -564,46 +556,29 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
       ),
       body: Container(
         color: logTheme.background,
-        child: _loading && _lines.isEmpty
+        child: _loading && _log.isEmpty
             ? const Center(child: CircularProgressIndicator())
-            : _lines.isEmpty
+            : _log.isEmpty
             ? Center(
                 child: Text(
                   _done ? '无日志内容' : '等待日志...',
                   style: TextStyle(color: logTheme.mutedForeground),
                 ),
               )
-            : Theme(
-                data: Theme.of(context).copyWith(
-                  textSelectionTheme: TextSelectionThemeData(
-                    selectionColor: AppColors.primary.withAlpha(80),
-                    selectionHandleColor: AppColors.primary,
-                  ),
+            : LogView(
+                buffer: _log,
+                textStyle: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 13,
+                  color: logTheme.foreground,
+                  height: 1.5,
                 ),
-                child: Scrollbar(
-                  controller: _scrollController,
-                  child: SingleChildScrollView(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(12),
-                    child: SelectableText.rich(
-                      AnsiTextParser.buildTextSpan(
-                        _lines.join('\n'),
-                        baseStyle: TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 13,
-                          color: logTheme.foreground,
-                          height: 1.5,
-                        ),
-                        brightness: logTheme.brightness,
-                      ),
-                      contextMenuBuilder: (context, editableTextState) {
-                        return AdaptiveTextSelectionToolbar.editableText(
-                          editableTextState: editableTextState,
-                        );
-                      },
-                    ),
-                  ),
-                ),
+                brightness: logTheme.brightness,
+                mutedColor: logTheme.mutedForeground,
+                // 超长被截断后，完整内容只在磁盘上的原始日志文件里。
+                // 没有独立文件的日志存在数据库里、本来就短，不会走到截断。
+                truncatedActionLabel: _hasRawFile == true ? '下载完整日志' : null,
+                onTruncatedAction: _downloadRawLog,
               ),
       ),
     );

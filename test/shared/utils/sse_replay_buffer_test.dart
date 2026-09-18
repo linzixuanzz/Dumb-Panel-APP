@@ -54,4 +54,35 @@ void main() {
     expect(buffer.consume(['b', 'c']), isEmpty);
     expect(buffer.isEmpty, isTrue);
   });
+
+  // issue #10：日志页超长时只在内存里保留最近一部分，前面的行已经没有原文了，
+  // 但服务端重连照样从第一行开始重放。
+  group('skipLeading：前面的行已因超长被丢掉', () {
+    test('先按行数跳过丢掉的那段，再逐条抵扣留着的行', () {
+      // 界面上只剩 c、d，a、b 早已被截断丢掉。
+      final buffer = SseReplayBuffer()..reset(['c', 'd'], skipLeading: 2);
+
+      expect(buffer.consume(['a', 'b', 'c']), isEmpty);
+      expect(
+        buffer.consume(['d', 'e']),
+        ['e'],
+        reason: '不跳过的话第一行 a 就对不上，整段历史会被重复追加一遍',
+      );
+      expect(buffer.isEmpty, isTrue);
+    });
+
+    test('跳过之后对不上，照样整段放弃去重、原样放行', () {
+      final buffer = SseReplayBuffer()..reset(['c'], skipLeading: 1);
+
+      expect(buffer.consume(['a', 'x', 'c']), ['x', 'c']);
+      expect(buffer.isEmpty, isTrue);
+    });
+
+    test('界面上一行都没留时也要先跳过', () {
+      final buffer = SseReplayBuffer()..reset(const [], skipLeading: 2);
+
+      expect(buffer.isEmpty, isFalse);
+      expect(buffer.consume(['a', 'b', 'c']), ['c']);
+    });
+  });
 }

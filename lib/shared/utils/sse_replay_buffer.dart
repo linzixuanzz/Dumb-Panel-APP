@@ -15,34 +15,62 @@
 class SseReplayBuffer {
   final List<String> _pending = <String>[];
 
-  bool get isEmpty => _pending.isEmpty;
+  /// 下一条要比对的行在 [_pending] 里的位置。
+  ///
+  /// 用游标而不是 `removeAt(0)`：超长日志重连时要抵扣上万行，
+  /// 每次删表头都要整体搬移，抵扣一遍就成了平方级。
+  int _cursor = 0;
+
+  /// 重放开头还要原样跳过的行数，见 [reset] 的 `skipLeading`。
+  int _skip = 0;
+
+  bool get isEmpty => _skip == 0 && _cursor >= _pending.length;
 
   /// 重连前调用：把当前已经显示给用户的行记下来，等着被重放抵扣。
-  void reset(Iterable<String> alreadyShown) {
+  ///
+  /// [skipLeading] 是日志页因为太长**已经丢掉**的前若干行（只在内存里保留最近一部分，
+  /// 见 LogLineBuffer）。服务端重放是从第一行开始的，这些行本地已经没有原文可比，
+  /// 只能按行数跳过；它们本来就算在「未显示、可下载完整日志」的那部分里，
+  /// 跳过不等于吞掉。不传就是原来的行为。
+  void reset(Iterable<String> alreadyShown, {int skipLeading = 0}) {
     _pending
       ..clear()
       ..addAll(alreadyShown);
+    _cursor = 0;
+    _skip = skipLeading < 0 ? 0 : skipLeading;
   }
 
-  void clear() => _pending.clear();
+  void clear() {
+    _pending.clear();
+    _cursor = 0;
+    _skip = 0;
+  }
 
   /// 返回真正需要追加到界面上的行。
   List<String> consume(List<String> incoming) {
-    if (_pending.isEmpty) {
+    if (isEmpty) {
       return incoming;
     }
 
     final result = <String>[];
     for (final line in incoming) {
-      if (_pending.isNotEmpty && line == _pending.first) {
-        _pending.removeAt(0);
+      if (_skip > 0) {
+        _skip--;
+        continue;
+      }
+      if (_cursor < _pending.length && line == _pending[_cursor]) {
+        _cursor++;
         continue;
       }
 
-      _pending.clear();
+      clear();
       result.add(line);
     }
 
+    if (isEmpty) {
+      // 抵扣完了就把原文放掉，别让上万行一直挂在内存里。
+      clear();
+    }
     return result;
   }
 }

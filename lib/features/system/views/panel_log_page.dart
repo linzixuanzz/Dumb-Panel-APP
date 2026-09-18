@@ -5,10 +5,11 @@ import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/utils/api_utils.dart';
-import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
+import '../../../shared/utils/log_line_buffer.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_snack.dart';
+import '../../../shared/widgets/log_view.dart';
 
 class PanelLogPage extends StatefulWidget {
   const PanelLogPage({super.key});
@@ -23,7 +24,11 @@ class _PanelLogPageState extends State<PanelLogPage> {
 
   bool _loading = true;
   String _selectedLevel = '';
+
+  /// 完整原文，只给「复制」用；显示走 [_log] 按行懒渲染。
+  /// 「行数」是用户自己填的，填个几万行时整段铺成一棵 TextSpan 会直接卡住。
   String _content = '';
+  final _log = LogLineBuffer();
   Color? _logBackgroundColor;
 
   @override
@@ -36,6 +41,7 @@ class _PanelLogPageState extends State<PanelLogPage> {
   void dispose() {
     _keywordController.dispose();
     _linesController.dispose();
+    _log.dispose();
     super.dispose();
   }
 
@@ -70,6 +76,7 @@ class _PanelLogPageState extends State<PanelLogPage> {
         } else {
           _content = data?.toString() ?? '';
         }
+        _log.replaceAll(_content.split('\n'));
         _logBackgroundColor = backgroundColor;
         _loading = false;
       });
@@ -79,6 +86,7 @@ class _PanelLogPageState extends State<PanelLogPage> {
       }
       setState(() {
         _content = extractErrorMessage(error, '加载面板日志失败');
+        _log.replaceAll(_content.split('\n'));
         _loading = false;
       });
     }
@@ -198,22 +206,22 @@ class _PanelLogPageState extends State<PanelLogPage> {
                         style: TextStyle(color: logTheme.mutedForeground),
                       ),
                     )
-                  : SingleChildScrollView(
+                  // 一次性加载的静态日志：从顶部开始看，不跟随。
+                  // 顺带修掉了原来 RichText 不接 SelectionArea、长按选不中的问题
+                  // （LogView 每行用的是 Text.rich，会自动挂到选择区域上）。
+                  : LogView(
+                      buffer: _log,
+                      follow: false,
                       padding: const EdgeInsets.all(14),
-                      child: SelectionArea(
-                        child: RichText(
-                          text: AnsiTextParser.buildTextSpan(
-                            _content,
-                            baseStyle: TextStyle(
-                              color: logTheme.foreground,
-                              fontFamily: 'monospace',
-                              fontSize: 12,
-                              height: 1.55,
-                            ),
-                            brightness: logTheme.brightness,
-                          ),
-                        ),
+                      textStyle: TextStyle(
+                        color: logTheme.foreground,
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        height: 1.55,
                       ),
+                      brightness: logTheme.brightness,
+                      mutedColor: logTheme.mutedForeground,
+                      truncatedHint: '可以用右上角的复制拿到全部内容',
                     ),
             ),
           ),

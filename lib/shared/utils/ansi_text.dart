@@ -9,20 +9,52 @@ class AnsiTextTheme {
   const AnsiTextTheme({required this.foreground, required this.background});
 }
 
+/// 某一行开头时生效的 ANSI 样式（前景 / 背景 / 粗体）。
+///
+/// 日志改成按行懒渲染之后，每行是单独解析的；但颜色序列可以跨行生效
+/// （`\x1B[31m` 开头、隔几行才 `\x1B[0m`）。整段解析时状态会自然往下传，
+/// 拆成行以后就得把「上一行结束时的状态」记下来交给下一行，否则跨行的颜色会丢。
+///
+/// 这里只记「第几号色 / 哪个 RGB」，与配色无关：日志底色是异步加载的、
+/// 明暗也可能切换，状态要能在配色变了之后原样复用，不必重扫整段日志。
+class AnsiLineState {
+  const AnsiLineState._(this._style);
+
+  final _AnsiStyleState _style;
+
+  static const AnsiLineState initial = AnsiLineState._(_AnsiStyleState.plain);
+
+  /// 扫一遍 [line] 里的 SGR 序列，返回行尾时生效的状态。只推状态，不构建 span。
+  AnsiLineState advance(String line) {
+    // 绝大多数日志行不带转义序列，先用 contains 挡掉，省一次正则扫描。
+    if (!line.contains('\x1B')) {
+      return this;
+    }
+    var style = _style;
+    for (final match in AnsiTextParser._ansiPattern.allMatches(line)) {
+      style = style.applyCodes(AnsiTextParser._parseCodes(match.group(1)));
+    }
+    return AnsiLineState._(style);
+  }
+}
+
 class AnsiTextParser {
   static final RegExp _ansiPattern = RegExp(r'\x1B\[([0-9;]*)m');
 
+  /// [start] 是这段文本开头时已经生效的样式，按行渲染时传上一行结束时的状态；
+  /// 整段解析保持默认值即可。
   static TextSpan buildTextSpan(
     String text, {
     required TextStyle baseStyle,
     required Brightness brightness,
+    AnsiLineState start = AnsiLineState.initial,
   }) {
     final palette = _paletteForBrightness(
       brightness,
       defaultForeground: baseStyle.color,
     );
     final spans = <InlineSpan>[];
-    var state = _AnsiStyleState.defaults(palette);
+    var state = start._style;
     var cursor = 0;
 
     for (final match in _ansiPattern.allMatches(text)) {
@@ -30,13 +62,13 @@ class AnsiTextParser {
         spans.add(
           TextSpan(
             text: text.substring(cursor, match.start),
-            style: state.toTextStyle(baseStyle),
+            style: state.toTextStyle(baseStyle, palette),
           ),
         );
       }
 
       final codes = _parseCodes(match.group(1));
-      state = state.applyCodes(codes, palette);
+      state = state.applyCodes(codes);
       cursor = match.end;
     }
 
@@ -44,7 +76,7 @@ class AnsiTextParser {
       spans.add(
         TextSpan(
           text: text.substring(cursor),
-          style: state.toTextStyle(baseStyle),
+          style: state.toTextStyle(baseStyle, palette),
         ),
       );
     }
@@ -138,9 +170,42 @@ class _AnsiPalette {
   });
 }
 
+/// 与配色无关的颜色引用，渲染时才按当前配色落成具体颜色。
+///
+/// 以前状态里直接存解析好的 Color，跨行携带时配色一变（日志底色异步加载完）
+/// 就全错了。30–37 / 90–97 / 40–47 / 100–107 统一记成 0–15 号索引色，
+/// 与 `38;5;n` 走同一条 [_indexedColor]，解析结果与改造前逐一对得上。
+abstract class _AnsiColor {
+  const _AnsiColor();
+
+  Color resolve(_AnsiPalette palette);
+}
+
+class _AnsiIndexedColor extends _AnsiColor {
+  final int index;
+
+  const _AnsiIndexedColor(this.index);
+
+  @override
+  Color resolve(_AnsiPalette palette) => _indexedColor(index, palette);
+}
+
+class _AnsiRgbColor extends _AnsiColor {
+  final int red;
+  final int green;
+  final int blue;
+
+  const _AnsiRgbColor(this.red, this.green, this.blue);
+
+  @override
+  Color resolve(_AnsiPalette palette) =>
+      Color.fromARGB(0xFF, red, green, blue);
+}
+
 class _AnsiStyleState {
-  final Color foreground;
-  final Color background;
+  /// null 表示「默认色」，由配色决定。
+  final _AnsiColor? foreground;
+  final _AnsiColor? background;
   final bool bold;
 
   const _AnsiStyleState({
@@ -149,15 +214,13 @@ class _AnsiStyleState {
     required this.bold,
   });
 
-  factory _AnsiStyleState.defaults(_AnsiPalette palette) {
-    return _AnsiStyleState(
-      foreground: palette.defaultForeground,
-      background: palette.defaultBackground,
-      bold: false,
-    );
-  }
+  static const _AnsiStyleState plain = _AnsiStyleState(
+    foreground: null,
+    background: null,
+    bold: false,
+  );
 
-  _AnsiStyleState applyCodes(List<int> codes, _AnsiPalette palette) {
+  _AnsiStyleState applyCodes(List<int> codes) {
     var nextForeground = foreground;
     var nextBackground = background;
     var nextBold = bold;
@@ -166,8 +229,8 @@ class _AnsiStyleState {
       final code = codes[i];
       switch (code) {
         case 0:
-          nextForeground = palette.defaultForeground;
-          nextBackground = palette.defaultBackground;
+          nextForeground = null;
+          nextBackground = null;
           nextBold = false;
           break;
         case 1:
@@ -177,28 +240,28 @@ class _AnsiStyleState {
           nextBold = false;
           break;
         case 39:
-          nextForeground = palette.defaultForeground;
+          nextForeground = null;
           break;
         case 49:
-          nextBackground = palette.defaultBackground;
+          nextBackground = null;
           break;
         default:
           if (code >= 30 && code <= 37) {
-            nextForeground = palette.colors[code - 30];
+            nextForeground = _AnsiIndexedColor(code - 30);
           } else if (code >= 90 && code <= 97) {
-            nextForeground = palette.brightColors[code - 90];
+            nextForeground = _AnsiIndexedColor(code - 90 + 8);
           } else if (code >= 40 && code <= 47) {
-            nextBackground = palette.colors[code - 40];
+            nextBackground = _AnsiIndexedColor(code - 40);
           } else if (code >= 100 && code <= 107) {
-            nextBackground = palette.brightColors[code - 100];
+            nextBackground = _AnsiIndexedColor(code - 100 + 8);
           } else if (code == 38 || code == 48) {
             final isForeground = code == 38;
-            final parsed = _parseExtendedColor(codes, i, palette);
+            final parsed = _parseExtendedColor(codes, i);
             if (parsed.color != null) {
               if (isForeground) {
-                nextForeground = parsed.color!;
+                nextForeground = parsed.color;
               } else {
-                nextBackground = parsed.color!;
+                nextBackground = parsed.color;
               }
             }
             i = parsed.nextIndex;
@@ -213,19 +276,21 @@ class _AnsiStyleState {
     );
   }
 
-  TextStyle toTextStyle(TextStyle baseStyle) {
+  TextStyle toTextStyle(TextStyle baseStyle, _AnsiPalette palette) {
+    final resolvedForeground =
+        foreground?.resolve(palette) ?? palette.defaultForeground;
+    final resolvedBackground =
+        background?.resolve(palette) ?? palette.defaultBackground;
     return baseStyle.copyWith(
-      color: foreground,
-      backgroundColor: background == Colors.transparent ? null : background,
+      color: resolvedForeground,
+      backgroundColor: resolvedBackground == Colors.transparent
+          ? null
+          : resolvedBackground,
       fontWeight: bold ? FontWeight.w700 : baseStyle.fontWeight,
     );
   }
 
-  _ExtendedColorResult _parseExtendedColor(
-    List<int> codes,
-    int index,
-    _AnsiPalette palette,
-  ) {
+  _ExtendedColorResult _parseExtendedColor(List<int> codes, int index) {
     if (index + 1 >= codes.length) {
       return _ExtendedColorResult(null, index);
     }
@@ -236,7 +301,7 @@ class _AnsiStyleState {
         return _ExtendedColorResult(null, index + 1);
       }
       return _ExtendedColorResult(
-        _indexedColor(codes[index + 2], palette),
+        _AnsiIndexedColor(codes[index + 2]),
         index + 2,
       );
     }
@@ -246,8 +311,7 @@ class _AnsiStyleState {
         return _ExtendedColorResult(null, codes.length - 1);
       }
       return _ExtendedColorResult(
-        Color.fromARGB(
-          0xFF,
+        _AnsiRgbColor(
           codes[index + 2].clamp(0, 255),
           codes[index + 3].clamp(0, 255),
           codes[index + 4].clamp(0, 255),
@@ -258,40 +322,40 @@ class _AnsiStyleState {
 
     return _ExtendedColorResult(null, index + 1);
   }
+}
 
-  Color _indexedColor(int index, _AnsiPalette palette) {
-    if (index < 0) {
-      return palette.defaultForeground;
-    }
-    if (index < 8) {
-      return palette.colors[index];
-    }
-    if (index < 16) {
-      return palette.brightColors[index - 8];
-    }
-    if (index >= 232 && index <= 255) {
-      final level = ((index - 232) * 10) + 8;
-      return Color.fromARGB(0xFF, level, level, level);
-    }
-    if (index >= 16 && index <= 231) {
-      final normalized = index - 16;
-      final red = normalized ~/ 36;
-      final green = (normalized % 36) ~/ 6;
-      final blue = normalized % 6;
-      int component(int value) => value == 0 ? 0 : 55 + value * 40;
-      return Color.fromARGB(
-        0xFF,
-        component(red),
-        component(green),
-        component(blue),
-      );
-    }
+Color _indexedColor(int index, _AnsiPalette palette) {
+  if (index < 0) {
     return palette.defaultForeground;
   }
+  if (index < 8) {
+    return palette.colors[index];
+  }
+  if (index < 16) {
+    return palette.brightColors[index - 8];
+  }
+  if (index >= 232 && index <= 255) {
+    final level = ((index - 232) * 10) + 8;
+    return Color.fromARGB(0xFF, level, level, level);
+  }
+  if (index >= 16 && index <= 231) {
+    final normalized = index - 16;
+    final red = normalized ~/ 36;
+    final green = (normalized % 36) ~/ 6;
+    final blue = normalized % 6;
+    int component(int value) => value == 0 ? 0 : 55 + value * 40;
+    return Color.fromARGB(
+      0xFF,
+      component(red),
+      component(green),
+      component(blue),
+    );
+  }
+  return palette.defaultForeground;
 }
 
 class _ExtendedColorResult {
-  final Color? color;
+  final _AnsiColor? color;
   final int nextIndex;
 
   const _ExtendedColorResult(this.color, this.nextIndex);
