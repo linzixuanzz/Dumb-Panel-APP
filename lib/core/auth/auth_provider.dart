@@ -53,9 +53,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
       return;
     }
 
-    final trusted = await SecureStorage.hasValidTrustedLogin(
-      serverUrl: serverUrl,
-    );
+    // 凭据按面板分片后（issue #13，v1.3.7），可信期本身就存在当前面板的 scope 下，
+    // 不用再把 serverUrl 传进去比对；上面那段 serverUrl 判空仍要留着 ——
+    // 一台面板都没配时没有任何可恢复的会话。
+    final trusted = await SecureStorage.hasValidTrustedLogin();
     if (!trusted) {
       state = const AuthState(status: AuthStatus.unauthenticated);
       return;
@@ -98,10 +99,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
         error: null,
       );
 
+      // serverUrl 判空保留：没选面板时 scope 还是 default，不该往里写可信期。
       final serverUrl = await SecureStorage.getServerUrl();
       if (serverUrl != null && serverUrl.isNotEmpty) {
         await SecureStorage.saveTrustedLoginSession(
-          serverUrl: serverUrl,
           expiresAt: DateTime.now().toUtc().add(const Duration(days: 7)),
         );
       }
@@ -151,10 +152,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
           state = state.copyWith(status: AuthStatus.authenticated, user: user);
         }
 
+        // 同上：可信期写进当前面板的 scope，没选面板时不写。
         final serverUrl = await SecureStorage.getServerUrl();
         if (serverUrl != null && serverUrl.isNotEmpty) {
           await SecureStorage.saveTrustedLoginSession(
-            serverUrl: serverUrl,
             expiresAt: DateTime.now().toUtc().add(const Duration(days: 7)),
           );
         }

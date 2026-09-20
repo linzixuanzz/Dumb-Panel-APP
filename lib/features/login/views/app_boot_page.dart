@@ -329,8 +329,8 @@ class _AppBootPageState extends ConsumerState<AppBootPage> {
   void _backToLogin() {
     // 必须先落到 unauthenticated：卡住时登录态可能仍是 authenticated
     //（可信会话还在 7 天有效期内），那样 GoRouter 会把 /login 直接弹回 /dashboard，
-    // 用户会以为按钮是坏的。与 server_config_page._switchToPanel 同一处理，
-    // 只改登录态，不动本地凭据。
+    // 用户会以为按钮是坏的。这里**只改登录态、不动本地凭据**，所以重新登录成功后
+    // 原来那份 token 只是被覆盖，不会连带清掉其它面板的登录状态。
     ref.read(authProvider.notifier).setUnauthenticated();
     _go('/login?manual=1');
   }
@@ -345,6 +345,9 @@ class _AppBootPageState extends ConsumerState<AppBootPage> {
     // issue #7 的用户是「清空应用数据」才恢复的。这里给出同等效果里**最小**的一档：
     // 只清 token / 用户 / 可信会话，保留面板地址与账号配置，用户不必重新填地址。
     // 跳的是 /login 而不是 /boot：清完立刻重跑自动登录，很可能又卡在同一个地方。
+    //
+    // 凭据按面板分片后（issue #13，v1.3.7），clearAuthSession 的范围自动收窄成
+    // **只清当前面板**：其它面板的登录状态不受影响，要清那些得去「服务器管理」页逐台清。
     await SecureStorage.clearAuthSession();
     if (!mounted) {
       return;
@@ -449,7 +452,9 @@ class _AppBootPageState extends ConsumerState<AppBootPage> {
           ),
           const SizedBox(height: AppSpacing.md),
           Text(
-            '「清除本地会话」只清登录凭据，面板地址和账号配置会保留。',
+            // 按钮文案保持「清除本地会话」不动（既有用例钉着它），
+            // 「只清当前面板」这个限定放在这行说明里。
+            '「清除本地会话」只清当前面板的登录凭据，面板地址和账号配置会保留。',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 12,

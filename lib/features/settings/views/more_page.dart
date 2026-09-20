@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/providers/server_scoped_providers.dart';
 import '../../../core/services/app_update_service.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
@@ -290,7 +290,9 @@ class _MorePageState extends ConsumerState<MorePage> {
             icon: Icons.info_outline,
             title: '关于',
             isLight: isLight,
-            onTap: () => _showAboutDialog(context),
+            // 原先是本页的 _showAboutDialog 弹窗，issue #12 要补作者/项目/反馈三组
+            // 外链，弹窗装不下，已改成独立页（issue #12 / v1.3.7）
+            onTap: () => context.push('/about'),
           ),
 
           // Logout
@@ -420,93 +422,15 @@ class _MorePageState extends ConsumerState<MorePage> {
       ),
     );
     if (confirm == true) {
+      // 退出的只是**当前面板**（凭据按面板分片，issue #13 / v1.3.7），其它面板的登录状态还在。
       await ref.read(authProvider.notifier).logout();
+      // 和切换面板走同一个失效函数：不清的话「A 退出 → 切到 B」会把 A 的任务/日志
+      // 原样带到 B 的界面上。这些 provider 都不是 autoDispose。
+      invalidateServerScopedProviders(ref);
       if (context.mounted) {
         context.go('/server-config?manual=1');
       }
     }
-  }
-
-  Future<void> _showAboutDialog(BuildContext context) async {
-    final isLight = Theme.of(context).brightness == Brightness.light;
-    final packageInfoFuture = PackageInfo.fromPlatform();
-    await showDialog<void>(
-      context: context,
-      builder: (dialogCtx) => AlertDialog(
-        title: const Text('关于'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withAlpha(20),
-                    // 图标底板一律走 sm，不跟外层弹窗（lg）同档。
-                    borderRadius: BorderRadius.circular(AppRadius.sm),
-                  ),
-                  child: const Icon(
-                    Icons.dashboard_customize_outlined,
-                    color: AppColors.primary,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        '呆呆面板',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      FutureBuilder<PackageInfo>(
-                        future: packageInfoFuture,
-                        builder: (context, snapshot) {
-                          final info = snapshot.data;
-                          final versionLabel = info == null
-                              ? '版本 -'
-                              : '版本 ${info.version}${info.buildNumber.trim().isEmpty ? '' : '+${info.buildNumber}'}';
-                          return Text(
-                            versionLabel,
-                            style: const TextStyle(fontSize: 12),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Text(
-              '轻量级定时任务管理平台',
-              style: TextStyle(
-                fontSize: 13,
-                color: isLight ? AppColors.slate600 : AppColors.slate300,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          SizedBox(
-            width: double.infinity,
-            height: 44,
-            child: FilledButton(
-              onPressed: () => Navigator.pop(dialogCtx),
-              child: const Text('知道了'),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
 

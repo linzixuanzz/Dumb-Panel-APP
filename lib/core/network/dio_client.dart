@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:logger/logger.dart';
+import '../storage/secure_storage.dart';
 import 'app_user_agent.dart';
 
 final _logger = Logger(printer: PrettyPrinter(methodCount: 0));
@@ -50,10 +51,36 @@ class DioClient {
 
   String get baseUrl => _baseUrl;
 
+  /// 当前面板的代号，[setBaseUrl] 在**地址真的变了**时自增（issue #13，v1.3.7）。
+  ///
+  /// 给 SSE 用：`SseClient._generation` 是实例级的，只管得住「同一个 SseClient 自己的新旧连接」；
+  /// 换面板时在飞的是**别的页面**持有的实例，它们的 `_generation` 一点没变，
+  /// 那次重连就会读到新面板的 baseUrl 和 token，把 B 的日志推进还没 dispose 的 A 页面里。
+  ///
+  /// 放在 DioClient 而不是 SseClient，是因为 sse_client 本来就 import 了 dio_client，
+  /// 反过来会成环，而且方向也不对——底层的 network client 不该依赖上层的 SSE。
+  /// 也不做成「切换时遍历关掉所有实例」：4 个 SseClient 全是页面私有字段
+  /// （task_list / log_stream / dep_list / subscription_list），全仓没有注册表，
+  /// 一个静态代号就够了，且不需要任何一方记得注册。
+  static int panelGeneration = 0;
+
   void setBaseUrl(String url) {
-    _baseUrl = url.endsWith('/') ? url.substring(0, url.length - 1) : url;
+    final normalized =
+        url.endsWith('/') ? url.substring(0, url.length - 1) : url;
+    // 地址真的变了才算「换面板」。必须先比对再赋值：启动时 main.dart 会拿本来就存着的
+    // 地址调一次，登录流程里也会用同一个地址重复调，无条件自增会把那几次也当成换面板，
+    // 顺手作废掉正在正常工作的 SSE 流。
+    if (_baseUrl.isNotEmpty && _baseUrl != normalized) {
+      panelGeneration++;
+    }
+    _baseUrl = normalized;
     dio.options.baseUrl = _baseUrl;
     dio.options.headers.addAll(AppUserAgent.defaultHeaders);
+    // 登录凭据按面板分片后（issue #13，v1.3.7），scope 切换全部收口在这一行。
+    // 放这里是因为它同步、无 await：baseUrl 一改，后面任何一次读 token 拿到的就已经是
+    // 新面板那份，中间不存在「请求打到 B、带的却是 A 的 token」的窗口。
+    // 每个 setBaseUrl 调用点都自动获得正确的 scope，不需要各自再记得切一次。
+    SecureStorage.setActiveServer(_baseUrl);
   }
 
   /// 专供 token 刷新使用：每次调用都新建实例，且**不挂任何拦截器**。

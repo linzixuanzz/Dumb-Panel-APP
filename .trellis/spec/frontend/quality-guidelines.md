@@ -104,6 +104,23 @@ navigator.pop();
 rootMessenger.showSnackBar(const SnackBar(content: Text('已保存')));
 ```
 
+### ⚠️ 这条门禁**完全不覆盖** `android/` 下的 Kotlin
+
+`flutter analyze` 只看 Dart。`MainActivity.kt` 写成什么样、`AndroidManifest.xml`
+少声明了哪个组件，它一个字都不会说，**CI 同样没有 Kotlin 门禁**
+（`.github/workflows/` 下既没有 `ktlint` 也没有 `compileKotlin`）。
+
+所以：**改了 `android/` 下任何东西，「analyze 绿 + test 绿」不构成验证**，
+必须另跑一次真实编译：
+
+```powershell
+flutter build apk --debug          # 或
+cd android; ./gradlew :app:compileDebugKotlin
+```
+
+跑之前先看下面「构建与工具链注意」里的 `JAVA_HOME` 一条，
+这台机器直接跑 gradlew 会撞上一个误导性极强的报错。
+
 ---
 
 ## 测试现状
@@ -216,6 +233,8 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 | 给 provider 加 `.autoDispose` | 底部导航 tab 常驻，会丢状态并重复请求 | |
 | Notifier 的**写操作**里 try/catch 吞异常 | UI 的 `_showActionError` 拿不到错误，失败静默 | |
 | 新增 `// ignore:` 注释 | 全库目前零使用，加了就破坏「基线 7 个 info」的可读性 | |
+| 异步的原生操作在 `MethodChannel` handler 里立刻 `result.success` | 「提交后才知道成败」的链路（安装、下载、任何要等系统广播的动作）一旦提前收口，**分级错误码永远到不了 Dart 侧**，用户只会看到一个笼统的失败 | 把 `result` 挂起、等系统回调再由唯一出口回一次，写法见 `MainActivity.kt` 的 `InstallResultReceiver.begin/finish` |
+| 挂起 `result` 却不配兜底超时 | 个别 ROM 一条广播都不回，Dart 侧的 `Future` 永挂，弹窗永远停在「正在安装」 | `begin()` 里 `postDelayed` 一个超时任务，`finish()` 里撤销；并保证同一个 `result` 只会被回一次 |
 
 ---
 
@@ -266,6 +285,8 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 - [ ] 请求失败时用户看得见原因，不是「暂无数据」也不是假的「保存成功」
 - [ ] 没有引入新的圆角取值 / 裸颜色 / 影子模型
 - [ ] 如果动了 `dio_client.dart` 的 `validateStatus`，**所有**受影响调用点都逐个确认过
+- [ ] 如果动了 `android/`（Kotlin / Manifest），另跑过 `flutter build apk --debug` 或 `gradlew :app:compileDebugKotlin`——analyze 与 test 都看不见那一侧
+- [ ] 如果动了平台通道的错误码，Dart 侧 `_installErrorText` 与原生侧同步改过
 
 ---
 
@@ -275,6 +296,38 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
   **路径含空格会让 `flutter test` 在 native assets 构建阶段失败**
   （hook runner 未给 dart 可执行文件加引号）。
   当前用目录联接 `D:\flutter-nospace` 绕过。
+
+### ★ `JAVA_HOME` 指着 Java 8，跑 Gradle 前必须先改（本机实测，v1.3.7）
+
+本机 `JAVA_HOME` 是 `C:\Program Files\Eclipse Adoptium\jdk-8.0.502.7-hotspot\`，
+而 AGP 8.11.1 + Gradle 8.14（`android/settings.gradle.kts`、`gradle-wrapper.properties`）
+**要求 JDK 17**。
+
+**坑在报错本身**：版本不对时 Gradle 不会说「需要 JDK 17」，而是先抛
+
+```
+Could not read workspace metadata from ...\metadata.bin
+```
+
+照着这句去查会一路查到缓存损坏上，方向完全是错的。**认准这条报错 = JDK 版本不对。**
+
+正确做法，跑任何 `gradlew` 之前先切：
+
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Java\jdk-17"
+```
+
+如果之前已经用 Java 8 起过 Gradle，残留的 daemon 会继续用旧 JDK，光改环境变量没用，
+还要：
+
+```powershell
+cd android; ./gradlew --stop          # 停掉旧 daemon（必要时再手动杀掉残留进程）
+Remove-Item "$env:USERPROFILE\.gradle\caches\8.14" -Recurse -Force   # 让缓存重建
+```
+
+> `flutter build apk` 会自己挑 JDK（走 Flutter 的 `--android-studio-dir` / `JAVA_HOME` 解析），
+> 通常不用手动切；**直接调 `gradlew` 才要**。只想确认 Kotlin 编得过时，
+> `flutter build apk --debug` 是省事的那条路。
 
 ### ★ 本地 `flutter build apk --release` 产出的是**未签名** APK，装不上
 

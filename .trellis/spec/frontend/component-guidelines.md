@@ -170,6 +170,22 @@ final effectivePadding = bordered
 > 4. 必须用固定色时统一走 `AppColors`，**不要写裸 `Color(0xFF...)`**；
 > 5. 不要新增第六档圆角。
 
+#### 第 2 条的例外：要和既有组件像素一致的**复刻件**
+
+「复刻件」指的是：因为 Dart 私有类 import 不到，只能在另一个文件里照抄一份的同款组件。
+这类组件**可以沿用 `isLight ? A : B`**，而且应该沿用。
+
+已知这一对是 `more_page.dart` 的 `_SettingsItem` 与 `about_page.dart` 的 `_LinkItem`
+（v1.3.7 / APP issue #12）——后者是前者的跨文件复刻，两者并排出现在设置系页面里，
+配色必须逐字相同。
+
+理由是**这里没有能完整替代三元的令牌**：
+`isLight ? slate500 : slate400`（副标题）恰好等于 `surfaces.mutedText`，
+但 trailing 图标的 `isLight ? slate400 : slate600` **没有对应令牌**。
+一半用令牌一半写三元，反而比两条都写三元更难看出「这两个文件必须一致」。
+
+> 🔴 **改任一侧都要同步改另一侧**。它们之间没有编译期约束，漂了只有肉眼能发现。
+
 ### 前景色：淡底走 `tintFg`，实底走 `solidFg`，两者明暗方向**相反**
 
 ```dart

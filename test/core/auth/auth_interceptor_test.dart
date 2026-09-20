@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:daidai_app/core/auth/auth_interceptor.dart';
 import 'package:daidai_app/core/auth/token_refresher.dart';
 import 'package:daidai_app/core/network/api_endpoints.dart';
+import 'package:daidai_app/core/network/dio_client.dart';
 import 'package:daidai_app/core/storage/secure_storage.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -23,12 +24,19 @@ void main() {
 
   late int authFailedCalls;
 
-  setUp(() {
+  setUp(() async {
     // flutter_secure_storage 自带的内存实现，不需要额外依赖，也不需要 mock 平台通道。
-    FlutterSecureStorage.setMockInitialValues({
-      'access_token': 'access-old',
-      'refresh_token': 'refresh-1',
-    });
+    //
+    // 不能再直接塞裸 key：凭据按面板分片后（issue #13，v1.3.7）真正的 key 是
+    // `access_token::<sha256(url)前16位>`，往 `access_token` 里塞值一律读成 null。
+    // 所以改成「先定 scope 再走 API 写」，和生产代码共用同一条 key 生成路径，
+    // 以后 scope 规则再变也不用同步改测试。
+    FlutterSecureStorage.setMockInitialValues({});
+    DioClient.instance.setBaseUrl('https://panel.test');
+    await SecureStorage.saveTokens(
+      accessToken: 'access-old',
+      refreshToken: 'refresh-1',
+    );
     // 续期动作已经收敛到 TokenRefresher 单例（SSE 也调它）。
     // 单例状态会跨用例串场，不重置的话上一条用例的假 dio 会被下一条复用。
     TokenRefresher.instance.resetForTest();
@@ -231,7 +239,9 @@ void main() {
   });
 
   test('没有 refresh token 时不发刷新请求，直接判定会话失效', () async {
-    FlutterSecureStorage.setMockInitialValues({'access_token': 'access-old'});
+    // 只留 access token：清空后单写一条，scope 沿用 setUp 里定好的那个。
+    FlutterSecureStorage.setMockInitialValues({});
+    await SecureStorage.saveAccessToken('access-old');
 
     final apiAdapter = FakeHttpAdapter(
       (_) => jsonResponse({'error': 'token 已过期'}, status: 401),

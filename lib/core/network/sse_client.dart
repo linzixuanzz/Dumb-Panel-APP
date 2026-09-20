@@ -57,6 +57,20 @@ class SseClient {
   /// 页面推日志，`_client` 字段被后者覆盖，前者永远没人关。
   int _generation = 0;
 
+  /// 当前面板的代号，由 `DioClient.setBaseUrl()` 在**地址真的变了**时自增（issue #13，v1.3.7）。
+  ///
+  /// `_generation` 是实例级的，只管得住「同一个 SseClient 自己的新旧连接」；
+  /// 换面板时在飞的是**别的页面**持有的 SseClient 实例，它们的 `_generation` 一点没变，
+  /// 于是那次重连会读到新面板的 baseUrl 和 token，把 B 的日志推进还没 dispose 的 A 页面里。
+  ///
+  /// 不做成「切换时遍历关掉所有实例」是因为 4 个 SseClient 全是页面私有字段
+  /// （task_list / log_stream / dep_list / subscription_list），全仓没有注册表，
+  /// 要么加一个全局注册表、要么改那 4 个页面。一个静态代号就够了，且不用任何一方记得注册。
+  static int panelGeneration = 0;
+
+  /// 本轮连接发起时的面板代号，与 [panelGeneration] 对不上就说明面板已经换了。
+  int _panelGenerationAtConnect = 0;
+
   /// 本轮连接是否已经用掉那一次「续期后重连」的额度。
   ///
   /// 等价于 dio 侧打在 `RequestOptions.extra` 上的 `_kRetriedAfterRefresh`：
@@ -91,11 +105,16 @@ class SseClient {
     _onDone = onDone;
     _onError = onError;
     _onReconnect = onReconnect;
+    _panelGenerationAtConnect = panelGeneration;
 
     await _doConnect(++_generation);
   }
 
-  bool _isStale(int generation) => _closed || generation != _generation;
+  bool _isStale(int generation) =>
+      _closed ||
+      generation != _generation ||
+      // 面板换了：这条流是上一台面板的，后续回调与重连一律作废
+      _panelGenerationAtConnect != panelGeneration;
 
   Future<void> _doConnect(int generation) async {
     if (_isStale(generation)) return;

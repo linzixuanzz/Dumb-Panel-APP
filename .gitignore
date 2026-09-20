@@ -55,3 +55,6 @@ app.*.map.json
 *.keystore
 android/key.properties
 keystore-base64.txt
+
+# 各家 AI 编码工具的本机配置，不入库
+/.claude/

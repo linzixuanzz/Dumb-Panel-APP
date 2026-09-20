@@ -8,18 +8,26 @@
 
 ```
 lib/
-├── main.dart              (38 行)  启动引导：UA 初始化 → 恢复 baseUrl → 注入拦截器 → 恢复登录态 → runApp
+├── main.dart              (47 行)  启动引导：UA 初始化 → 恢复 baseUrl → **迁移凭据 scope** → 注入拦截器 → 恢复登录态 → runApp
 ├── app.dart               (26 行)  MaterialApp.router：主题、locale、AppLockGate
-├── core/      11 个文件            应用级基础设施（网络 / 认证 / 存储 / 路由 / 主题 / 服务）
-├── features/  16 个模块 / 31 个文件 业务功能，按领域切分
-└── shared/    15 个文件            跨 feature 复用：models 9 / utils 4 / widgets 2
+├── core/      14 个文件            应用级基础设施（网络 / 认证 / 存储 / 路由 / 主题 / 服务 / 跨 feature provider）
+├── features/  16 个模块            业务功能，按领域切分
+└── shared/                        跨 feature 复用：models / utils / widgets
 ```
 
-合计 59 个 dart 文件、约 30,676 行。
+> ⚠️ **不要拿本文里的文件数当清单用，也不要新增这类总数**。
+> 这份总览此前写的「合计 59 个 dart 文件」就被当成清单用过一次，而实测是 93 个；
+> 下面几节标题里的括号数字（`shared/` 的「15 个文件」等）同样早已漂移，别照着信。
+> 要数文件请直接 `glob lib/**/*.dart`。本文真正的内容是**分类与约定**，
+> 括号里的行数只是定位线索，会随任何改动漂移。
+
+> `main.dart` 里 `migrateLegacyAuthScope()` 的位置是硬要求（必须夹在 `setBaseUrl` 与
+> `restoreTrustedLocalSession()` 之间），理由见 [hook-guidelines.md](./hook-guidelines.md)
+> 的「凭据按面板 scope 分片」。
 
 ---
 
-## `lib/core/` — 基础设施（12 个文件）
+## `lib/core/` — 基础设施（14 个文件）
 
 | 子目录 | 文件 | 职责 |
 |---|---|---|
@@ -31,10 +39,12 @@ lib/
 | | `auth_service.dart` (160) | 登录、初始化、改密、健康检查 |
 | | `auth_interceptor.dart` | Bearer 注入 + 401 排队重发（续期动作委托给 `TokenRefresher`） |
 | | `token_refresher.dart` | **全仓库唯一**的 access token 续期入口，单飞（dio 与 SSE 共用） |
-| `storage/` | `secure_storage.dart` (327) | `FlutterSecureStorage`（token/user/panels）+ `SharedPreferences`（serverUrl/UI 状态） |
-| `router/` | `app_router.dart` (257) | `routerProvider`、全部 `GoRoute`、`redirect` 鉴权 |
+| `storage/` | `secure_storage.dart` (384) | `FlutterSecureStorage`（token/user/panels）+ `SharedPreferences`（serverUrl/UI 状态）；token/user/可信期**按面板 scope 分片**，见 hook-guidelines |
+| `router/` | `app_router.dart` (259) | `routerProvider`、全部 `GoRoute`、`redirect` 鉴权 |
 | `theme/` | `app_theme.dart` (272) | `AppColors` 色板（含 `success`/`info`/`danger`/`warning`/`neutral` 语义状态色）+ `AppTheme.light()/dark()` |
-| `services/` | `app_update_service.dart` (393) | APP 自身版本检查与更新对话框 |
+| | `design_tokens.dart` | `AppRadius` / `AppSpacing` / `AppBorderWidth` / `AppSurfaces` / `AppTapTarget` |
+| `services/` | `app_update_service.dart` | APP 自身版本检查、下载与内置安装（原生通道的 Dart 侧，见文末「android/ 原生侧与平台通道」） |
+| `providers/` | `server_scoped_providers.dart` | `invalidateServerScopedProviders(ref)`：切面板 / 退出登录时一次失效 10 个服务器级 provider（v1.3.7 / issue #13）。**它天然要 import 全部 feature 的 provider**，同类先例是 `router/app_router.dart` |
 
 **约定**：`core/` 里的东西被多个 feature 依赖，且**不含业务语义**。
 新增基础能力先问：是否有 2 个以上 feature 会用？否则放进对应 feature。
@@ -56,7 +66,7 @@ features/
 ├── scripts/        views/                       (1 文件, 2868 行)
 ├── security/       views/                       (1 文件, 1249 行)
 ├── server_config/  views/                       (1 文件)
-├── settings/       views/                       (2 文件)
+├── settings/       views/                       (3 文件：more / sponsor / about)
 ├── subscriptions/  views/                       (1 文件, 1737 行)
 ├── system/         views/                       (3 文件)
 ├── tasks/          views/ providers/            (3 文件, 其中 task_list_page.dart 3178 行)
@@ -190,3 +200,79 @@ import '../../../shared/models/task.dart';
 ```
 
 顺序习惯：`dart:` → `package:` → 相对路径（未强制，`analysis_options.yaml` 未开 `directives_ordering`）。
+
+---
+
+## `android/` 原生侧与平台通道
+
+本仓库的原生 Kotlin 代码**只有一个文件**：
+`android/app/src/main/kotlin/com/daidai/panel/MainActivity.kt`，
+里面是 `MainActivity`（平台通道 handler）与 `InstallResultReceiver`（安装结果广播接收器）。
+
+### 全 APP 只有一条平台通道
+
+```
+com.daidai.panel/app_install
+```
+
+| 方法 | 入参 | 干什么 |
+|---|---|---|
+| `installApk` | `path`、`sourceHost` | 内置安装下载好的 APK |
+| `openUnknownSourceSettings` | — | 把用户送到「允许安装未知应用」授权页 |
+| `openUrl` | `url` | 用系统浏览器打开外链（关于页那几个写死的仓库/issue 链接） |
+
+> **通道名是历史名字**。`openUrl` 与安装毫无关系，但它仍挂在这条通道上——
+> 这里的约定是：**`com.daidai.panel/app_install` 就是「本 APP 唯一的原生平台通道」**，
+> 新增任何原生能力一律挂它，**不要再开第二条**。多开一条只会让 Dart 侧多一份
+> `MethodChannel` 常量、原生侧多一个 handler 注册点，而它们必须逐字对齐。
+>
+> Dart 侧目前有两处各自 `const MethodChannel('com.daidai.panel/app_install')`：
+> `core/services/app_update_service.dart` 与 `features/settings/views/about_page.dart`。
+
+### 内置安装走 `PackageInstaller` Session API，**不是** `Intent(ACTION_VIEW)`
+
+这是硬约定，别「简化」回 Intent：`targetSdk 36 ≥ 30` 会按包可见性过滤 Intent 的候选列表，
+系统安装器对本 APP 不可见，`ACTION_VIEW` 解析出空集并抛 `ActivityNotFoundException`
+——这正是 issue #11 的报错。`PackageInstaller` 由本进程把 APK 字节写进会话，
+全程不做 Intent 解析，对「包可见性 / ROM 纯净模式 / 第三方安装器缺失」三种成因都免疫。
+
+Manifest 里那条 `<queries>` 的 `ACTION_VIEW` + `application/vnd.android.package-archive`
+是留给可能的回退路径兜底的，**不要**用 `QUERY_ALL_PACKAGES` 去绕——那是大锤，
+也改不了 ROM 侧禁用安装器的情况。
+
+配套的三条硬要求：
+
+- `InstallResultReceiver` 必须在 Manifest 里以 `android:exported="false"` 声明。
+  它和 `MainActivity` 不是同一个实例，只能靠 `companion object` 的静态字段传递待回调的
+  `MethodChannel.Result`，这是这套 API 的标准用法。
+- 回调用的 `PendingIntent` 在 API 31+ **必须带 `FLAG_MUTABLE`**（系统要往里回填安装状态，
+  不带会被直接拒绝），且它的 `Intent` 必须**显式指明组件**——显式 Intent 才不会踩
+  Android 14「可变 PendingIntent 不能配隐式 Intent」那条限制。
+- 解析整包验签 + 拷贝几十 MB 字节要跑在子线程，留在平台主线程必 ANR。
+
+### 错误码是两侧共同的契约
+
+`installApk` 的错误码与 `core/services/app_update_service.dart` 的 `_installErrorText`
+**一一对应，改一侧必须同时改另一侧**。当前 7 个：
+
+`NO_INSTALLER` / `NEED_UNKNOWN_SOURCE` / `VERIFY_FAILED` / `FILE_MISSING` /
+`PATH_NOT_ALLOWED` / `UNTRUSTED_SOURCE` / `SESSION_FAILED`
+
+漏配不会崩，只会退化成把英文原文摊给用户看（可接受的降级，但不要留着）。
+
+`openUrl` 的错误码是 `INVALID_URL` / `NO_BROWSER`，**Dart 侧刻意不区分这两个码**，
+一律退回「复制链接 + `AppSnack.warn`」——对用户来说两种情况的下一步动作是同一个。
+
+### `openUrl` 的两条约定
+
+- **只放行 `https://` 前缀**。放开 scheme 等于让 Dart 侧任意字符串都能拉起任意组件
+  （`intent://`、`file://` 都塞得进来），是白送的注入面（issue #12 / v1.3.7）。
+- **不需要给它加 `<queries>` 声明**。`startActivity` 不受 Android 11 包可见性过滤，
+  受限的是 `queryIntentActivities` / `resolveActivity` 这类**查询** API。
+  这是下一个人最容易误加 `<queries>` 的地方。
+
+> 仓库**刻意不引 `url_launcher`**：引入会改 `GeneratedPluginRegistrant`，
+> 意味着必须重跑 `flutter build apk` 才敢发版。为了几个写死的外链不值得。
+
+> 🔴 改了 `android/` 下任何东西，`flutter analyze` 都**看不见**。
+> 必须另跑构建验证，见 [quality-guidelines.md](./quality-guidelines.md)。

@@ -38,6 +38,42 @@ String _applyGitHubMirror(String url) {
   return url;
 }
 
+/// 原生侧安装失败的 code → 中文文案。
+///
+/// 键必须与 `MainActivity.kt` 的 `InstallException.code` 一一对应，漏一个只会退化成
+/// 显示英文原文（可接受的降级）。`NO_INSTALLER` 放第一位 —— 它是 issue #11 那位用户
+/// 唯一会撞上的那条（v1.3.7）。
+const _installErrorText = {
+  'NO_INSTALLER': '系统没有找到可用的安装器。请到通知栏或文件管理器里手动打开刚下载的安装包，'
+      '或先在系统设置里恢复「软件包安装程序」。',
+  'NEED_UNKNOWN_SOURCE': '需要先允许「呆呆面板」安装未知应用。已为你打开设置页，授权后回到这里再点一次。',
+  'VERIFY_FAILED': '安装包校验未通过，可能下载不完整，请点「重新下载」。',
+  'FILE_MISSING': '安装包已被系统清理，请点「重新下载」。',
+  'PATH_NOT_ALLOWED': '安装包位置异常，请点「重新下载」。',
+  'UNTRUSTED_SOURCE': '更新来源不可信，已拒绝安装。',
+  'SESSION_FAILED': '系统安装会话失败，可能是存储空间不足或被系统限制，请重试或手动安装。',
+};
+
+/// 内置安装失败，且原因已经翻译成能直接说给用户听的中文。
+///
+/// 单独立一个类型（写法照 `raw_log_download.dart` 的 `RawLogDownloadException`），
+/// 是为了让弹窗能区分「下载阶段失败」和「安装阶段失败」—— 这两者原先挤在同一个
+/// catch 里，安装异常被贴上「下载失败: 」前缀，把 issue #11 的排查方向整个带偏了。
+class AppInstallException implements Exception {
+  const AppInstallException(this.message, {this.code, this.detail});
+
+  final String message;
+
+  /// 原生侧的错误码，用来决定重试按钮给「重新下载」还是「重试安装」。
+  final String? code;
+
+  /// 未经翻译的原始异常文本，给「复制错误详情」按钮用。
+  final String? detail;
+
+  @override
+  String toString() => message;
+}
+
 class AppUpdateInfo {
   final String latestVersion;
   final String currentVersion;
@@ -132,13 +168,23 @@ class AppUpdateService {
 
   /// Download APK and install it.
   /// Uses GitHub mirror for acceleration and reuses existing downloads.
+  ///
+  /// 下载与安装是两段，失败必须分开报：安装阶段的异常走 [onInstallError]，
+  /// 不能再和下载异常挤在同一个 catch 里被贴上「下载失败」前缀 —— issue #11 就是被
+  /// 这个前缀带偏的，用户和维护者都以为是下载坏了，实际下载完全成功（v1.3.7）。
+  ///
+  /// [forceRedownload] 为真时先把已下载的包和旁文件删掉再重来，对应弹窗上的「重新下载」。
   static Future<void> downloadAndInstall(
     String url,
     String assetName,
     ValueChanged<double> onProgress,
     VoidCallback onDone,
-    ValueChanged<String> onError,
-  ) async {
+    ValueChanged<String> onError, {
+    required ValueChanged<AppInstallException> onInstallError,
+    bool forceRedownload = false,
+  }) async {
+    String filePath = '';
+
     try {
       if (!_isTrustedDownloadUrl(url)) {
         throw const FormatException('更新地址不可信，已拒绝下载');
@@ -148,22 +194,35 @@ class AppUpdateService {
       final safeName = assetName.trim().isEmpty
           ? 'daidai_update.apk'
           : assetName.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
-      final filePath = '${dir.path}/$safeName';
+      filePath = '${dir.path}/$safeName';
 
       final existingFile = File(filePath);
+      // 旁文件只记「下载成功那一刻的字节数」。原先复用的唯一依据是「文件 > 1MB」，
+      // 下载途中进程被杀（用户划掉 APP / OOM）留下的半截包会被一直复用，装不上也不自愈。
+      final stampFile = File('$filePath.ok');
       bool needsDownload = true;
 
-      if (await existingFile.exists()) {
-        final existingSize = await existingFile.length();
-        if (existingSize > 1024 * 1024) {
+      if (!forceRedownload &&
+          await existingFile.exists() &&
+          await stampFile.exists()) {
+        final recorded = int.tryParse((await stampFile.readAsString()).trim());
+        if (recorded != null &&
+            recorded > 0 &&
+            await existingFile.length() == recorded) {
           needsDownload = false;
           onProgress(1.0);
-        } else {
-          await existingFile.delete();
         }
       }
 
       if (needsDownload) {
+        // 先把旧包和旧旁文件一起清掉，避免「新包下到一半失败、旧旁文件还在」的错配
+        if (await stampFile.exists()) {
+          await stampFile.delete();
+        }
+        if (await existingFile.exists()) {
+          await existingFile.delete();
+        }
+
         final downloadUrl = _applyGitHubMirror(url);
 
         final response = await _dio.download(
@@ -183,19 +242,52 @@ class AppUpdateService {
             finalHost.endsWith('.$_kGitHubAssetHost'))) {
           throw const FormatException('更新资源跳转到了不受信任的来源');
         }
-      }
 
-      onDone();
-
-      if (Platform.isAndroid) {
-        final originalHost = Uri.parse(url).host.toLowerCase();
-        await _platform.invokeMethod('installApk', {
-          'path': filePath,
-          'sourceHost': originalHost,
-        });
+        // 只有走到这里才算下载完整，旁文件必须最后写
+        await stampFile.writeAsString('${await existingFile.length()}');
       }
     } catch (e) {
+      debugPrint('[update] download failed: $e');
       onError(e.toString());
+      return;
+    }
+
+    if (!Platform.isAndroid) {
+      onDone();
+      return;
+    }
+
+    try {
+      final originalHost = Uri.parse(url).host.toLowerCase();
+      await _platform.invokeMethod('installApk', {
+        'path': filePath,
+        'sourceHost': originalHost,
+      });
+      // 原生侧的 result 要等系统回了会话状态才结，所以走到这里说明安装确认界面
+      // 已经弹出来了，此时才算这次更新交接完成
+      onDone();
+    } on PlatformException catch (e) {
+      debugPrint('[update] install failed: $e');
+      onInstallError(AppInstallException(
+        _installErrorText[e.code] ?? e.message ?? '安装失败',
+        code: e.code,
+        detail: e.toString(),
+      ));
+    } catch (e) {
+      debugPrint('[update] install failed: $e');
+      onInstallError(AppInstallException('安装失败：$e', detail: e.toString()));
+    }
+  }
+
+  /// 打开系统的「安装未知应用」授权页，失败返回 false 由调用方给兜底提示。
+  static Future<bool> openUnknownSourceSettings() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      await _platform.invokeMethod('openUnknownSourceSettings');
+      return true;
+    } catch (e) {
+      debugPrint('[update] open unknown source settings failed: $e');
+      return false;
     }
   }
 
@@ -231,8 +323,12 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   bool _downloading = false;
   double _progress = 0;
   String? _error;
+  // 原始异常文本与原生错误码分开存：前者给「复制错误详情」，后者决定重试按钮的形态
+  String? _errorDetail;
+  String? _installCode;
+  bool _copied = false;
 
-  void _startDownload() {
+  void _startDownload({bool force = false}) {
     if (widget.info.downloadUrl.isEmpty) {
       setState(() => _error = '未找到 APK 下载链接');
       return;
@@ -241,6 +337,9 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       _downloading = true;
       _progress = 0;
       _error = null;
+      _errorDetail = null;
+      _installCode = null;
+      _copied = false;
     });
 
     AppUpdateService.downloadAndInstall(
@@ -250,17 +349,55 @@ class _UpdateDialogState extends State<_UpdateDialog> {
         if (mounted) setState(() => _progress = p);
       },
       () {
-        if (mounted) setState(() => _downloading = false);
+        // 安装确认界面已经交给系统了，这里把更新弹窗收起来，免得用户重复点「立即更新」
+        if (mounted) Navigator.of(context).pop();
       },
       (e) {
         if (mounted) {
           setState(() {
             _downloading = false;
             _error = '下载失败: $e';
+            _errorDetail = e;
           });
         }
       },
+      onInstallError: (e) {
+        if (mounted) {
+          setState(() {
+            _downloading = false;
+            _error = e.message;
+            _errorDetail = e.detail;
+            _installCode = e.code;
+          });
+        }
+      },
+      forceRedownload: force,
     );
+  }
+
+  /// 要不要重下整个包。
+  ///
+  /// 安装阶段失败时包本身通常是好的（权限没开、安装器拉不起、会话失败），
+  /// 再拉一次几十 MB 纯属浪费；只有下载阶段失败或包真有问题才重下。
+  bool get _needsRedownload =>
+      _installCode == null ||
+      _installCode == 'VERIFY_FAILED' ||
+      _installCode == 'FILE_MISSING' ||
+      _installCode == 'PATH_NOT_ALLOWED';
+
+  Future<void> _openUnknownSourceSettings() async {
+    final ok = await AppUpdateService.openUnknownSourceSettings();
+    if (!mounted || ok) return;
+    setState(() {
+      _error = '打不开系统设置页，请手动到「设置 → 应用 → 特殊权限 → 安装未知应用」里允许呆呆面板。';
+    });
+  }
+
+  Future<void> _copyErrorDetail() async {
+    // 有原始异常就复制原始异常：下次提 issue 能直接贴文本，不用再靠截图认字
+    await Clipboard.setData(ClipboardData(text: _errorDetail ?? _error ?? ''));
+    if (!mounted) return;
+    setState(() => _copied = true);
   }
 
   @override
@@ -333,7 +470,10 @@ class _UpdateDialogState extends State<_UpdateDialog> {
             const SizedBox(height: 6),
             Center(
               child: Text(
-                '下载中 ${(_progress * 100).toStringAsFixed(0)}%',
+                // 进度条满格但弹窗还在，说明正卡在「把安装交给系统」这一步
+                _progress >= 1
+                    ? '正在安装…'
+                    : '下载中 ${(_progress * 100).toStringAsFixed(0)}%',
                 style: const TextStyle(fontSize: 12),
               ),
             ),
@@ -347,7 +487,8 @@ class _UpdateDialogState extends State<_UpdateDialog> {
           ] else ...[
             const SizedBox(height: 12),
             Text(
-              '更新包通过 GitHub 加速镜像下载，校验包名与签名后再安装。已下载的安装包会自动复用，无需重复下载。',
+              // 原文承诺「已下载的安装包会自动复用」，安装失败时格外误导（issue #11）
+              '更新包通过 GitHub 加速镜像下载，校验包名与签名后交给系统安装。若安装失败，可按提示重试或去开启安装权限。',
               style: TextStyle(
                 fontSize: 12,
                 color: widget.isLight
@@ -362,6 +503,27 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       actions: _downloading
           ? null
           : [
+              // 失败态才出现的两个出路：一个去开权限，一个把报错原文捞出来
+              if (_error != null)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    TextButton(
+                      onPressed: _openUnknownSourceSettings,
+                      child: const Text(
+                        '去开启权限',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _copied ? null : _copyErrorDetail,
+                      child: Text(
+                        _copied ? '已复制' : '复制错误详情',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
               Row(
                 children: [
                   Expanded(
@@ -379,8 +541,14 @@ class _UpdateDialogState extends State<_UpdateDialog> {
                       child: SizedBox(
                         height: 44,
                         child: FilledButton(
-                          onPressed: _startDownload,
-                          child: const Text('立即更新'),
+                          onPressed: () => _startDownload(
+                            force: _error != null && _needsRedownload,
+                          ),
+                          child: Text(
+                            _error == null
+                                ? '立即更新'
+                                : (_needsRedownload ? '重新下载' : '重试安装'),
+                          ),
                         ),
                       ),
                     ),

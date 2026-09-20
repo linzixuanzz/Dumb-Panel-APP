@@ -131,6 +131,22 @@ void initState() {
 再次进入页面会先看到上次的数据再刷新。这是刻意的（底部导航 5 个 tab 用
 `NoTransitionPage` 常驻，见 `app_router.dart:100-125`）。
 
+> 代价：**换了面板 / 退出登录之后这些状态是脏的**。所以切面板
+> （`server_config_page._switchToPanel`）与退出登录（`more_page._logout`）
+> **必须**调 `invalidateServerScopedProviders(ref)`
+> （`lib/core/providers/server_scoped_providers.dart`，v1.3.7 / issue #13），
+> 否则 A 面板的任务列表会原样显示在 B 上，用户可能对着 A 的任务点「运行」、
+> 请求却打到了 B。
+>
+> **新增任何服务器级 provider，都要同时加进那个函数**——它是唯一一份、两个页面共用，
+> 写成两份必然只被改其中一份。当前失效 10 个：`dashboard` / `task` / `taskView` /
+> `envList` / `logList` / `script` / `depList` / `subscriptionList` /
+> `notificationList` / `userList`。设备级的 `appLockProvider` 与核心的
+> `authProvider` / `routerProvider` **刻意不在其中**，别顺手补上去。
+>
+> 这个函数放在 `core/` 而不是某个 feature 里，是因为它天然要 import 全部 feature 的
+> provider；同类先例是 `core/router/app_router.dart`。
+
 ---
 
 ## 网络层：现状与陷阱
@@ -285,9 +301,37 @@ final msg = extractErrorMessage(error, '加载失败');   // api_utils.dart:44
 
 | 后端 | 存什么 |
 |---|---|
-| `FlutterSecureStorage` | access/refresh token、user、panels 配置、app lock 配置、可信登录有效期 |
+| `FlutterSecureStorage` | access/refresh token、user、可信登录有效期 —— 这四项**按面板 scope 分片**（v1.3.7 / issue #13），真实 key 形如 `access_token::<sha256(url) 前 16 位>`，scope 由 `SecureStorage.scopeOf(url)` 现算；panels 配置、app lock 配置**保持全局**（前者是面板列表本身，分片等于自锁；后者是设备级的，分片后换面板就要重设锁） |
 | `SharedPreferences` | `server_url`、legacy server list、UI 状态（前缀 `ui_state_`） |
 
-特殊约定：**7 天本地可信登录**。启动时若 `hasValidTrustedLogin(serverUrl)` 为真，
-直接置 `authenticated` 而不打服务端（`main.dart:33` → `auth_provider.dart:44-70`），
+### 凭据按面板 scope 分片
+
+分片前 token / user / 可信期是全局一份裸 key，「切面板」只能先把上一台的凭据删掉，
+切回去就得重新登录、重新过 2FA。分片后每台面板各存一份，互不覆盖。
+
+- **scope 的主键是 url，不是面板 id**。`login_page.dart` 每次登录成功都是裸 new 一个
+  `PanelConfig` 覆盖保存（不是 `copyWith`），首次生成的 id 下次登录就被换掉，
+  用 id 当 scope 会对不上号，症状正是「刚登完下次启动又要登」。
+- `scopeOf()` 统一去掉结尾斜杠；`http://` 与 `https://`、带端口与不带端口算不同 scope，
+  这是预期——改了面板地址就等于换了一台，重新登录一次。
+- 还没选定面板时落在固定 scope `default`。**不要让它变成 `null` 拼进 key**：
+  一旦有人在 `access_token::null` 下写过 token，后面谁都读不回来。
+
+**scope 切换只有一个入口**：`DioClient.setBaseUrl()` 末尾的
+`SecureStorage.setActiveServer()`。它是同步方法、无 `await`，保证 baseUrl 与 scope
+原子同步，中间不存在「请求打到 B、带的却是 A 的 token」的窗口。
+新增 `setBaseUrl` 调用点不需要自己切 scope。
+
+**升级迁移**：`SecureStorage.migrateLegacyAuthScope()` 在 `main.dart` 里的位置是硬要求——
+必须排在 `setBaseUrl` **之后**、`restoreTrustedLocalSession()` **之前**；
+顺序颠倒 = 存量用户升级后第一次启动读不到 token，等于把所有人踢下线一次。
+迁移内部是「先写新 → 读回校验 → 再删老」，写失败就原样留着下次再试；
+**绝不能用 `getPanels()` 那种 `catch => []` 的吞异常写法**——国产 ROM 上 Keystore 失效是真事，
+吞掉之后老 key 已删、新 key 没写成，凭据就永久丢了。老 key 是否存在本身就是幂等判据，
+不需要另外记 `*_migrated` 标记。
+
+特殊约定：**7 天本地可信登录**。启动时若 `hasValidTrustedLogin()` 为真，
+直接置 `authenticated` 而不打服务端（`main.dart:51` → `auth_provider.dart:44-70`），
 目的是「避免每次打开 APP 都重新打登录日志」（`auth_provider.dart:45` 注释）。
+签名**不带 `serverUrl`**：可信期本身就存在该面板的 scope 下，
+「是哪台面板的」已由 key 表达，不需要另存一个 url 再比对一次。

@@ -11,6 +11,7 @@ import '../../features/tasks/views/task_form_page.dart';
 import '../../features/logs/views/log_list_page.dart';
 import '../../features/logs/views/log_stream_page.dart';
 import '../../features/envs/views/env_list_page.dart';
+import '../../features/settings/views/about_page.dart';
 import '../../features/settings/views/more_page.dart';
 import '../../features/settings/views/sponsor_page.dart';
 import '../../features/subscriptions/views/subscription_list_page.dart';
@@ -245,6 +246,13 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/sponsors',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (_, state) => const SponsorPage(),
+      ),
+      // 关于页（issue #12 / v1.3.7）。受上面 83 行的登录门禁约束，只有登录后能进；
+      // 入口就在设置页，所以没影响——以后若想在登录页放「关于」，得先改那行判断。
+      GoRoute(
+        path: '/about',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, state) => const AboutPage(),
       ),
       GoRoute(
         path: '/open-api/:id/logs',

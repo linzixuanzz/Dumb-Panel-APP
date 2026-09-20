@@ -1,6 +1,8 @@
 import 'package:daidai_app/core/auth/auth_interceptor.dart';
 import 'package:daidai_app/core/auth/token_refresher.dart';
 import 'package:daidai_app/core/network/api_endpoints.dart';
+import 'package:daidai_app/core/network/dio_client.dart';
+import 'package:daidai_app/core/storage/secure_storage.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -19,11 +21,16 @@ import '../../support/fake_http_adapter.dart';
 void main() {
   const uploadPath = ApiEndpoints.scriptsUpload;
 
-  setUp(() {
-    FlutterSecureStorage.setMockInitialValues({
-      'access_token': 'access-old',
-      'refresh_token': 'refresh-1',
-    });
+  setUp(() async {
+    // 凭据按面板分片后（issue #13，v1.3.7）key 带 scope，裸 key 会一律读成 null，
+    // 所以先用 setBaseUrl 把 scope 定下来，再走 API 写。
+    // 这个文件原本没有 setBaseUrl，补上这一行否则它跑在 default scope 上。
+    FlutterSecureStorage.setMockInitialValues({});
+    DioClient.instance.setBaseUrl('https://panel.test');
+    await SecureStorage.saveTokens(
+      accessToken: 'access-old',
+      refreshToken: 'refresh-1',
+    );
     TokenRefresher.instance.resetForTest();
   });
 

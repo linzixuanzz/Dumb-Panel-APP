@@ -4,10 +4,10 @@ import 'package:go_router/go_router.dart';
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/auth/auth_service.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/providers/server_scoped_providers.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
-import '../../dashboard/providers/dashboard_provider.dart';
 
 class ServerConfigPage extends ConsumerStatefulWidget {
   const ServerConfigPage({super.key, this.manageMode = false});
@@ -121,10 +121,12 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
       context: context,
       builder: (dialogCtx) => AlertDialog(
         title: const Text('切换服务器'),
+        // v1.3.7 起切面板不再退出当前账号，两台面板的登录状态各存各的（issue #13），
+        // 所以这里的「需要退出当前账号」不再成立，文案一并改掉。
         content: Text(
           isNewPanel
-              ? '服务器已保存。立即切换到“$panelLabel”并重新登录吗？'
-              : '切换到“$panelLabel”需要退出当前账号后重新登录，是否继续？',
+              ? '服务器已保存。立即切换到“$panelLabel”吗？'
+              : '切换到“$panelLabel”？当前账号不会退出，之前登录过的面板会直接进入。',
         ),
         actions: [
           Row(
@@ -144,7 +146,7 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
                   height: 44,
                   child: FilledButton(
                     onPressed: () => Navigator.pop(dialogCtx, true),
-                    child: Text(isNewPanel ? '立即切换' : '切换登录'),
+                    child: Text(isNewPanel ? '立即切换' : '切换'),
                   ),
                 ),
               ),
@@ -161,14 +163,63 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
     String finalUrl, {
     required bool skipAutoLogin,
   }) async {
-    await SecureStorage.clearAuthSession();
+    // v1.3.7 起**不再清凭据**（issue #13）：这里原来第一行就是 clearAuthSession()，
+    // 那是纯客户端自加的限制 —— 后端从没要求切面板必须退出（access 20 天 / refresh 60 天，
+    // /auth/refresh 不要密码不要 2FA，两台面板是两套独立后端零互踢）。
+    // 凭据按面板分片存着，setBaseUrl 顺带把 scope 切过去，切回已登录过的面板
+    // 直接进首页，不用重登、也不用再过一遍 2FA。
     DioClient.instance.setBaseUrl(finalUrl);
     await SecureStorage.saveServerUrl(finalUrl);
-    ref.invalidate(dashboardProvider);
+
+    // 上一台面板的数据必须当场作废，否则会原样显示在新面板上，详见函数内注释。
+    invalidateServerScopedProviders(ref);
+
+    // 新面板还有 token 且在可信期内 → 直接恢复成已登录；没命中时它自己会把状态
+    // 置成 unauthenticated，所以下面不用再补一次 setUnauthenticated()。
+    await ref.read(authProvider.notifier).restoreTrustedLocalSession();
 
     if (!mounted) return;
-    ref.read(authProvider.notifier).setUnauthenticated();
+    if (ref.read(authProvider).status == AuthStatus.authenticated) {
+      context.go('/dashboard');
+      return;
+    }
     context.go(skipAutoLogin ? '/login?manual=1' : '/boot');
+  }
+
+  Future<void> _clearPanelSession(PanelConfig panel) async {
+    final panelLabel = panel.name.isNotEmpty ? panel.name : panel.url;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('清除登录状态'),
+        content: Text('清除“$panelLabel”保存在本机的登录凭据？下次切换到它需要重新登录。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogCtx, true),
+            child: const Text('清除'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    await SecureStorage.clearAuthSessionForUrl(panel.url);
+    if (!mounted) return;
+
+    // 清的是当前正在用的这台，那当前会话也就没了，得当场踢回登录页，
+    // 不能让用户拿着一个已经被删掉凭据的界面继续点。
+    if (panel.url == _activeServerUrl) {
+      invalidateServerScopedProviders(ref);
+      ref.read(authProvider.notifier).setUnauthenticated();
+      context.go('/login?manual=1');
+      return;
+    }
+
+    _showSuccess('已清除“$panelLabel”的登录状态');
   }
 
   Future<void> _connect({String? url, bool skipAutoLogin = true}) async {
@@ -338,7 +389,7 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
               ),
               const SizedBox(height: 6),
               Text(
-                _isManageMode ? '新增、删除或切换服务器，当前账号不会被直接中断。' : '选择已有面板或添加新面板',
+                _isManageMode ? '新增、删除或切换服务器，每台面板的登录状态各自保存。' : '选择已有面板或添加新面板',
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -400,13 +451,33 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
                                 ),
                               ),
                             ),
-                          IconButton(
+                          // 凭据分片后每台面板各存一份登录状态，所以除了「删除服务器」，
+                          // 还要给一个「只清这台的登录状态、保留地址」的出口（issue #13）。
+                          // 两个动作收进同一个菜单，免得 trailing 挤成三个图标。
+                          PopupMenuButton<String>(
                             icon: Icon(
-                              Icons.delete_outline,
+                              Icons.more_vert,
                               size: 20,
-                              color: theme.colorScheme.error,
+                              color: theme.colorScheme.onSurfaceVariant,
                             ),
-                            onPressed: () => _deletePanel(panel),
+                            onSelected: (value) => value == 'clear'
+                                ? _clearPanelSession(panel)
+                                : _deletePanel(panel),
+                            itemBuilder: (_) => [
+                              const PopupMenuItem(
+                                value: 'clear',
+                                child: Text('清除该面板登录状态'),
+                              ),
+                              PopupMenuItem(
+                                value: 'delete',
+                                child: Text(
+                                  '删除服务器',
+                                  style: TextStyle(
+                                    color: theme.colorScheme.error,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
@@ -472,7 +543,8 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
               if (_isManageMode && isAuthenticated) ...[
                 const SizedBox(height: 12),
                 Text(
-                  '新增服务器后会先保存配置，只有你确认切换时才会退出当前账号。',
+                  '登录状态按面板分别保存在本机加密存储中，切换面板不会退出账号；'
+                  '不想留着某台的凭据，可在它的菜单里「清除该面板登录状态」。',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),

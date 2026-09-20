@@ -12,11 +12,17 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await AppUserAgent.initialize();
 
-  // 恢复服务器地址
+  // 恢复服务器地址（setBaseUrl 顺带把凭据 scope 切到这台面板上）
   final serverUrl = await SecureStorage.getServerUrl();
   if (serverUrl != null && serverUrl.isNotEmpty) {
     DioClient.instance.setBaseUrl(serverUrl);
   }
+
+  // 老版本的登录凭据是全局一份裸 key，v1.3.7 起按面板分片（issue #13）。
+  // 位置是硬要求：必须在上面的 setBaseUrl 之后、下面的 restoreTrustedLocalSession 之前 ——
+  // 放到恢复登录态后面，存量用户升级后第一次启动就读不到 token，正好制造「升级后全被踢下线」。
+  // 老数据不存在时它两次读就返回，冷启动成本可忽略。
+  await SecureStorage.migrateLegacyAuthScope();
 
   final container = ProviderContainer();
 

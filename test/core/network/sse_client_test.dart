@@ -23,13 +23,16 @@ void main() {
 
   late int sessionExpiredCalls;
 
-  setUp(() {
-    FlutterSecureStorage.setMockInitialValues({
-      'access_token': 'access-old',
-      'refresh_token': 'refresh-1',
-    });
-    TokenRefresher.instance.resetForTest();
+  setUp(() async {
+    // 凭据按面板分片后（issue #13，v1.3.7）key 带 scope，裸 key 会一律读成 null。
+    // setBaseUrl 必须排在写 token 之前 —— 它就是切 scope 的地方。
+    FlutterSecureStorage.setMockInitialValues({});
     DioClient.instance.setBaseUrl('https://panel.test');
+    await SecureStorage.saveTokens(
+      accessToken: 'access-old',
+      refreshToken: 'refresh-1',
+    );
+    TokenRefresher.instance.resetForTest();
     sessionExpiredCalls = 0;
     TokenRefresher.instance.onSessionExpired = () => sessionExpiredCalls++;
   });

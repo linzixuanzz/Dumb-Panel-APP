@@ -18,14 +18,17 @@ import '../../support/fake_sse_http_client.dart';
 void main() {
   const refreshPath = ApiEndpoints.refresh;
 
-  setUp(() {
-    FlutterSecureStorage.setMockInitialValues({
-      'access_token': 'access-old',
-      'refresh_token': 'refresh-1',
-    });
+  setUp(() async {
+    // 凭据按面板分片后（issue #13，v1.3.7）key 带 scope，裸 key 会一律读成 null。
+    // setBaseUrl 必须排在写 token 之前 —— 它就是切 scope 的地方。
+    FlutterSecureStorage.setMockInitialValues({});
+    DioClient.instance.setBaseUrl('https://panel.test');
+    await SecureStorage.saveTokens(
+      accessToken: 'access-old',
+      refreshToken: 'refresh-1',
+    );
     // 单例状态会串场：不重置的话上一条用例的假 dio 会被下一条复用。
     TokenRefresher.instance.resetForTest();
-    DioClient.instance.setBaseUrl('https://panel.test');
   });
 
   test('并发调用只打一次刷新接口，两个调用方拿到同一个新 token', () async {
@@ -156,7 +159,9 @@ void main() {
   });
 
   test('没有 refresh token 时直接失败，不发请求', () async {
-    FlutterSecureStorage.setMockInitialValues({'access_token': 'access-old'});
+    // 只留 access token：清空后单写一条，scope 沿用 setUp 里定好的那个。
+    FlutterSecureStorage.setMockInitialValues({});
+    await SecureStorage.saveAccessToken('access-old');
     final refreshAdapter = FakeHttpAdapter(
       (_) => jsonResponse({'access_token': 'access-new'}),
     );

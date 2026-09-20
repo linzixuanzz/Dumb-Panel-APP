@@ -43,6 +43,11 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+        <!-- 接收 PackageInstaller 会话的状态广播（issue #11 / v1.3.7）。
+             exported=false：只接收我们自己用显式 PendingIntent 发出的那一条，不对外开放。 -->
+        <receiver
+            android:name=".InstallResultReceiver"
+            android:exported="false" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
@@ -58,6 +63,15 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- targetSdk 36 ≥ 30 会按包可见性过滤 Intent 的候选列表，不声明这一条，
+             系统安装器对本 APP 就是不可见的，ACTION_VIEW 会解析出空集并抛
+             ActivityNotFoundException —— 这正是 issue #11 的报错。
+             内置安装现在走 PackageInstaller 不再依赖它，这里保留是给可能的回退路径兜底。
+             不用 QUERY_ALL_PACKAGES 绕：那是大锤，也改不了 ROM 侧禁用安装器的情况。 -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:mimeType="application/vnd.android.package-archive"/>
         </intent>
     </queries>
 </manifest>
