@@ -2,15 +2,45 @@
 
 ## 目标版本
 
-- **预计 APP 版本**：v1.3.7
-- **当前基线版本**：v1.3.6+26
-- **记录日期**：2026-09-18
+- **预计 APP 版本**：v1.3.8
+- **当前基线版本**：v1.3.7+27
+- **记录日期**：2026-09-21
 
 ## 更新内容
 
 > 待发布版本草稿。后续每修复一个问题、优化一个体验或新增一个功能，都先记录到这里；最终发版时再整理为正式版本号文件，例如 `v1.3.7.md`。
 
 （暂无）
+
+## v1.3.7 遗留的已知项
+
+v1.3.7 修了 issue #11 #12 #13（内置安装改用 PackageInstaller、多服务器保持登录、新增关于页），
+下面是那一轮刻意留下的：
+
+- **Kotlin 侧没有任何自动化门禁**。`flutter analyze` 完全不覆盖 `android/`，本轮整条安装链路重写
+  只靠一次 `gradlew :app:compileDebugKotlin` 手工编译验证。改 `MainActivity.kt` /
+  `AndroidManifest.xml` 时必须自己记得跑。
+  另注：这台开发机的 `JAVA_HOME` 指向 Java 8，而 AGP 8.11 要 JDK 17，直接跑 gradlew 会先抛一个
+  具有误导性的 `Could not read workspace metadata ... metadata.bin`，而不是版本错误；
+  如果还有 Java 8 的 GradleDaemon 残留，得先 `gradlew --stop` 并杀掉它，再删 `~/.gradle/caches/<ver>`。
+
+- **安装链路没有真机验证**。PackageInstaller、未知来源授权引导、失败态的四个按钮分支，
+  都只有编译佐证；「已授权 / 未授权 / 国产 ROM 纯净模式」三种场景需要人工各过一遍。
+
+- **7 天本地可信窗口仍写死在 `auth_provider.dart`**。窗口一过就判未登录，即使 access token
+  还有十几天。正确的修法是把「窗口过期但 token 还在 → 打一次 /auth/user 续窗口」放进
+  `app_boot_page._bootSteps`（那里已有超时与失败态机制），**绝不能放进 `main.dart`** ——
+  那行在 `runApp` 之前且无超时，加网络请求等于面板宕机就白屏卡死，正是 issue #7 的老毛病。
+
+- **`PanelConfig.password` 仍明文存储**。本轮只删掉了名字骗人的空壳 `sanitizedForStorage()`
+  （它是恒等变换，叫 sanitized 却什么都不做），密码本身照旧在 `rememberPassword` 为真时明文落盘。
+
+- **`ui_state_*` 不按面板分片**。任务页的分组折叠、选中视图、脚本收藏等 UI 偏好仍是全局一份，
+  切面板后会串。不致命，但观感差。
+
+- **「清除本地会话」按钮文案没改**。分片后它的语义已经是「只清当前面板」，但
+  `test/features/login/app_boot_page_test.dart` 用 `find.text('清除本地会话')` 钉着这个字符串，
+  本轮只把限定写进了旁边的说明文字与代码注释。
 
 ## v1.3.6 遗留的已知项
 
