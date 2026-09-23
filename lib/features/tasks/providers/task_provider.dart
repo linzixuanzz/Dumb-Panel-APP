@@ -41,6 +41,22 @@ class TaskListState {
     this.selectedViewId,
   });
 
+  /// 此刻不能拖拽排序的原因，能拖返回 null。条件与文案对齐网页端 tasks/index.vue 的
+  /// dragSortDisabledReason（只取 APP 也有的两条）：
+  /// - 视图带排序规则：展示顺序由规则决定，拖出来的位置刷新后又会被规则排回去；
+  /// - 有任务在运行：面板默认排序把运行中的任务临时提到本区最前，展示顺序和 list_order 对不上，
+  ///   而 [TaskNotifier.moveTask] 拿「看得见的邻居」当锚，拖了会白拖，甚至落到别的位置。
+  ///   「已启用 / 已禁用」筛选是服务端按 status 精确匹配，运行中的会被筛掉，所以文案给的是这条出路。
+  String? get dragSortDisabledReason {
+    if (sortRules.isNotEmpty) {
+      return '当前视图自带排序规则，切到不带排序的视图再拖拽';
+    }
+    if (tasks.any((task) => task.isRunning)) {
+      return '运行中的任务被临时排到了最前，此时拖拽的落点会算错；等它跑完再拖，或先切到「已启用」/「已禁用」筛选再排';
+    }
+    return null;
+  }
+
   TaskListState copyWith({
     List<Task>? tasks,
     int? total,
@@ -85,9 +101,10 @@ class TaskNotifier extends StateNotifier<TaskListState> {
 
   /// 任务列表**一次性全量拉取**（`all=1`），刻意没有 `loadMore`。
   ///
-  /// 分组下拉项、全选、拖拽排序都建立在「全部任务都在内存里」这个前提上：
-  /// 改成增量分页会让分组项残缺、全选变成「只全选已加载的」，
-  /// 排序保存更会按当前列表顺序把未加载任务的 sort_order 写坏 —— 属于数据损坏。
+  /// 分组下拉项、全选都建立在「全部任务都在内存里」这个前提上：
+  /// 改成增量分页会让分组项残缺、全选变成「只全选已加载的」。
+  /// （拖拽排序已改走 `PUT /tasks/sort`，兄弟序列由面板按整桶去取，不再依赖这里是否全量；
+  /// 以前逐条写 sort_order 时，分页会把没加载到的任务写坏。）
   /// 列表卡顿由页面侧的 `ListView.builder` 虚拟化解决，不靠减少取回来的数据量。
   Future<void> load({bool refresh = false}) async {
     state = state.copyWith(loading: true, error: null);
@@ -247,26 +264,108 @@ class TaskNotifier extends StateNotifier<TaskListState> {
     await load(refresh: true);
   }
 
-  Future<void> saveTaskOrder(List<Task> tasks) async {
-    // 后端当前没有独立的任务排序接口，但任务更新接口允许写入 sort_order。
-    // 这里按当前拖拽后的列表顺序写入 10、20、30...，后续插入任务时仍有间隔。
-    for (var index = 0; index < tasks.length; index++) {
+  /// 批量改通知开关（面板 v3.3.3 / issue #149 的 `PUT /tasks/batch/notify`）。
+  ///
+  /// 只带要改的开关，`null` = 不修改：面板那边是指针字段，没传的列原样保留，传 false 也会写入。
+  /// 不带面板的 `all` 字段 —— APP 列表是 all=1 全量拉取，「全选」本来就是当前筛选下的全部任务。
+  Future<void> batchSetNotify(
+    List<int> ids, {
+    bool? onFailure,
+    bool? onSuccess,
+  }) async {
+    try {
       await _dio.put(
-        ApiEndpoints.taskById(tasks[index].id),
-        data: {'sort_order': (index + 1) * 10},
+        ApiEndpoints.tasksBatchNotify,
+        data: {
+          'task_ids': ids,
+          // `?` 是空感知元素：值为 null（不修改）时整个键都不放进 body。
+          'notify_on_failure': ?onFailure,
+          'notify_on_success': ?onSuccess,
+        },
       );
+    } on DioException catch (e) {
+      if (_isMissingPanelRoute(e)) {
+        throw const PanelUpgradeRequiredException(
+          '当前面板版本不支持，请升级到 v3.3.3 或更高',
+        );
+      }
+      rethrow;
     }
     await load(refresh: true);
   }
 
-  void reorderLocalTasks(int oldIndex, int newIndex) {
+  /// 拖拽排序：松手一次只发一次 `PUT /tasks/sort`（面板 v3.2.1 起），面板只写 list_order。
+  ///
+  /// 以前是逐条 `PUT /tasks/:id {sort_order}` 把整张列表重写一遍，但 sort_order 在面板里是
+  /// 「开机任务串行执行顺序」的契约（面板 server/model/task.go 的 ListOrder 注释）：
+  /// APP 上拖一次就悄悄改写了开机编排；而默认排序里 list_order 排在 sort_order 前面，
+  /// 网页端拖过的桶里 APP 的拖拽又等于白拖。
+  Future<void> moveTask(int oldIndex, int newIndex) async {
     final items = List<Task>.from(state.tasks);
+    // ReorderableListView 给的 newIndex 是「移除前」的下标，往下拖要先减一。
     if (newIndex > oldIndex) {
       newIndex--;
     }
-    final item = items.removeAt(oldIndex);
-    items.insert(newIndex, item);
+    if (newIndex == oldIndex) {
+      return;
+    }
+    final source = items.removeAt(oldIndex);
+    items.insert(newIndex, source);
+    // 先在本地挪到位（乐观更新），否则松手瞬间列表会先弹回原位、等请求回来再跳一次。
     state = state.copyWith(tasks: items);
+
+    // 桶 = 置顶与否 + 状态分区，口径同面板 taskSortGroup（server/handler/task_query.go）：
+    // 启用 / 排队中 / 运行中一区，禁用一区，其余一区。面板只许桶内互拖，跨桶回 400。
+    int statusGroup(Task task) {
+      if (task.isDisabled) return 1;
+      if (task.isEnabled || task.isQueued || task.isRunning) return 0;
+      return 2;
+    }
+
+    bool sameBucket(Task other) =>
+        other.isPinned == source.isPinned &&
+        statusGroup(other) == statusGroup(source);
+
+    // 落点锚取「看得见的邻居」，口径同网页端 tasks/index.vue 的 onEnd：
+    // 后一条同桶 → 插到它前面；否则前一条同桶 → 插到它后面。
+    // 贴着桶边界松手（比如拖到置顶区最后一条）时后一条已是别的桶，只认后一条会把没跨区的拖动也发成跨区。
+    // 两侧都不同桶就是真跨区了，照样发出去，由面板回 400 说明该用哪个按钮。
+    final next = newIndex + 1 < items.length ? items[newIndex + 1] : null;
+    final prev = newIndex > 0 ? items[newIndex - 1] : null;
+    final useNext =
+        next != null &&
+        (sameBucket(next) || prev == null || !sameBucket(prev));
+    try {
+      await _dio.put(
+        ApiEndpoints.tasksSort,
+        data: {
+          'source_id': source.id,
+          // useNext 为假时 prev 一定存在：能走到这里说明列表至少两条、确实挪了位，
+          // 后一条为空（拖到最底）时前一条必有；后一条在时，只有前一条同桶才会选它。
+          'target_id': useNext ? next.id : prev!.id,
+          'position': useNext ? 'before' : 'after',
+        },
+      );
+    } on DioException catch (e) {
+      // ≤ v3.2.0 没有 /tasks/sort，但有 PUT /tasks/:id：「sort」被当成任务 id 解析成 0，
+      // 回的是 404 {"error":"任务不存在"}，不是 NoRoute 的那两种形态。新面板的 Sort 自己只会说
+      // 「源任务不存在 / 目标任务不存在」，所以这句原话可以当成老面板的特征。
+      final data = e.response?.data;
+      final oldPanelUpdateRoute =
+          e.response?.statusCode == 404 &&
+          data is Map &&
+          data['error'] == '任务不存在';
+      if (oldPanelUpdateRoute || _isMissingPanelRoute(e)) {
+        throw const PanelUpgradeRequiredException(
+          '当前面板版本不支持，请升级到 v3.2.1 或更高',
+        );
+      }
+      rethrow;
+    } finally {
+      // 成功要拿面板整桶重编号后的顺序；失败（跨桶 400、任务已被删、老面板）更要拉一次，
+      // 把上面乐观挪过的位置按服务端顺序弹回去。
+      await load(refresh: true);
+    }
   }
 
   Future<TaskLog?> fetchLatestLog(int id) async {
@@ -332,3 +431,28 @@ class TaskNotifier extends StateNotifier<TaskListState> {
 final taskProvider = StateNotifierProvider<TaskNotifier, TaskListState>((ref) {
   return TaskNotifier();
 });
+
+/// 面板版本太老、没有某条接口时抛出。[message] 已经是给用户看的中文，
+/// 页面照常走 `extractErrorMessage`（它会读到这里的 message），不用另开分支。
+class PanelUpgradeRequiredException implements Exception {
+  const PanelUpgradeRequiredException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// 「这台面板没有这条路由」的 404。靠形状判断、不看版本号（spec/frontend/panel-contract.md）：
+/// - Docker 部署（nginx 反代）：gin 默认的纯文本 `404 page not found`，没有面板格式的错误 JSON；
+/// - 二进制部署（面板自己托管前端）：NoRoute 回 `{"error":"route not found"}`
+///   （面板 server/static_frontend.go 的 handleNoRoute）。
+/// 面板业务上的 404 都带自己的中文 error（如「没有找到要修改的任务」），不会被当成缺路由。
+bool _isMissingPanelRoute(DioException e) {
+  if (e.response?.statusCode != 404) {
+    return false;
+  }
+  final data = e.response?.data;
+  final error = data is Map ? data['error'] : null;
+  return error == null || error == 'route not found';
+}

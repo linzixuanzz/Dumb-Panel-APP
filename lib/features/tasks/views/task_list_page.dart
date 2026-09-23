@@ -80,7 +80,6 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   bool _groupReorderMode = false;
   bool _selectionMode = false;
   bool _taskSortMode = false;
-  bool _taskOrderDirty = false;
   Timer? _debounce;
   bool _scrollRestoreStarted = false;
   bool _restoredScrollOffset = false;
@@ -386,25 +385,130 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     }
   }
 
-  Future<void> _finishTaskSortMode(List<Task> tasks) async {
-    if (!_taskOrderDirty) {
-      setState(() => _taskSortMode = false);
+  /// 批量设置通知开关（面板 v3.3.3 / issue #149）。只作用于选中的任务；
+  /// APP 的列表是全量拉取，「全选」就是当前筛选下的全部任务，不需要面板的 `all`。
+  Future<void> _performBatchNotify() async {
+    final ids = _selectedTaskIds.toList()..sort();
+    if (ids.isEmpty) {
+      return;
+    }
+    final choice = await _showBatchNotifyDialog(ids.length);
+    if (choice == null) {
       return;
     }
 
     try {
-      await ref.read(taskProvider.notifier).saveTaskOrder(tasks);
+      await ref
+          .read(taskProvider.notifier)
+          .batchSetNotify(
+            ids,
+            onFailure: choice.onFailure,
+            onSuccess: choice.onSuccess,
+          );
       if (!mounted) {
         return;
       }
-      setState(() {
-        _taskSortMode = false;
-        _taskOrderDirty = false;
-      });
-      _showSuccess('任务排序已保存');
+      _setSelectionMode(false);
+      _showSuccess('已更新 ${ids.length} 个任务的通知设置');
     } catch (error) {
-      await _showActionError(error, '保存任务排序失败');
+      // 老面板没有这条接口时，provider 已经翻译成「请升级」的中文，这里照常展示。
+      await _showActionError(error, '批量设置通知失败');
     }
+  }
+
+  /// 失败 / 成功两行，各「开启 / 关闭 / 不修改」三档；APP 没有终止通知，所以不放那一行。
+  /// 返回的开关为 null 表示「不修改」，整体返回 null 表示取消。
+  Future<({bool? onFailure, bool? onSuccess})?> _showBatchNotifyDialog(
+    int count,
+  ) {
+    // 失败默认「开启」—— #149 要的就是一键打开失败通知；成功默认不动，免得顺手把成功通知也改了。
+    var failure = 'on';
+    var success = 'keep';
+    bool? toSwitch(String value) => value == 'keep' ? null : value == 'on';
+    const segments = [
+      ButtonSegment(value: 'on', label: Text('开启')),
+      ButtonSegment(value: 'off', label: Text('关闭')),
+      ButtonSegment(value: 'keep', label: Text('不修改')),
+    ];
+
+    return showDialog<({bool? onFailure, bool? onSuccess})>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          // 两项都「不修改」时面板会回 400，干脆不让提交。
+          final nothingToChange = failure == 'keep' && success == 'keep';
+          return AlertDialog(
+            title: const Text('批量设置通知'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('将修改选中的 $count 个任务'),
+                  const SizedBox(height: 16),
+                  const Text('失败时通知'),
+                  const SizedBox(height: 8),
+                  SegmentedButton<String>(
+                    segments: segments,
+                    selected: {failure},
+                    // 窄屏上三段带勾选图标会挤不下，靠底色区分选中即可。
+                    showSelectedIcon: false,
+                    onSelectionChanged: (selection) =>
+                        setDialogState(() => failure = selection.first),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text('成功时通知'),
+                  const SizedBox(height: 8),
+                  SegmentedButton<String>(
+                    segments: segments,
+                    selected: {success},
+                    showSelectedIcon: false,
+                    onSelectionChanged: (selection) =>
+                        setDialogState(() => success = selection.first),
+                  ),
+                  const SizedBox(height: 16),
+                  // 面板这条接口只改开关、不碰渠道（与网页端弹窗同一句提示）。
+                  const AppNotice(
+                    color: AppColors.primary,
+                    text: '不修改任务绑定的通知渠道；没绑渠道的任务会发到默认推送渠道',
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 44,
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(dialogContext),
+                        child: const Text('取消'),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: SizedBox(
+                      height: 44,
+                      child: FilledButton(
+                        onPressed: nothingToChange
+                            ? null
+                            : () => Navigator.pop(dialogContext, (
+                                onFailure: toSwitch(failure),
+                                onSuccess: toSwitch(success),
+                              )),
+                        child: const Text('确定'),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   Future<void> _openLatestLog(Task task) async {
@@ -976,16 +1080,22 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                         AppChipButton(
                           label: _taskSortMode ? '完成' : '排序',
                           icon: _taskSortMode ? Icons.check : Icons.swap_vert,
-                          onTap: () async {
-                            if (_taskSortMode) {
-                              await _finishTaskSortMode(state.tasks);
-                            } else {
-                              setState(() {
-                                _taskSortMode = true;
-                                _groupReorderMode = false;
-                                _taskOrderDirty = false;
-                              });
+                          // 每次松手已经各自保存过了（见 _buildTaskReorderView），
+                          // 「完成」只是退出排序模式，不再攒到这里统一提交。
+                          onTap: () {
+                            // 此刻拖了也白拖（视图带排序规则 / 有任务在跑），就不进排序模式，只说原因。
+                            // 退出不拦：「完成」任何时候都要能点。
+                            final reason = state.dragSortDisabledReason;
+                            if (!_taskSortMode && reason != null) {
+                              _showWarning(reason);
+                              return;
                             }
+                            setState(() {
+                              _taskSortMode = !_taskSortMode;
+                              if (_taskSortMode) {
+                                _groupReorderMode = false;
+                              }
+                            });
                           },
                         ),
                       ],
@@ -1196,6 +1306,15 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                             _performBatchTaskAction(_TaskBatchAction.disable),
                       ),
                       const SizedBox(width: 8),
+                      // 放在「批量删除」前面：删除是红色的破坏性动作，保持在最右。
+                      AppTintedActionButton(
+                        label: '通知设置',
+                        icon: Icons.notifications_outlined,
+                        color: AppColors.purple500,
+                        enabled: selectedCount > 0,
+                        onTap: _performBatchNotify,
+                      ),
+                      const SizedBox(width: 8),
                       AppTintedActionButton(
                         label: '批量删除',
                         icon: Icons.delete_outline,
@@ -1215,7 +1334,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                 child: AppNotice(
                   color: AppColors.primary,
                   icon: Icons.swap_vert,
-                  text: '长按拖拽调整当前任务列表顺序，点击「完成」保存',
+                  text: '长按拖拽调整任务顺序，松手即保存',
                   accentText: true,
                 ),
               ),
@@ -1636,10 +1755,22 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     return ReorderableListView.builder(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
       itemCount: tasks.length,
-      onReorder: (oldIndex, newIndex) {
-        // 只先调整本地顺序，等用户点击“完成”后再统一保存到后端，避免拖一下就请求多次。
-        ref.read(taskProvider.notifier).reorderLocalTasks(oldIndex, newIndex);
-        setState(() => _taskOrderDirty = true);
+      onReorder: (oldIndex, newIndex) async {
+        // 松手即保存，一次拖拽只发一次 PUT /tasks/sort（面板按落点把整桶重编号）。
+        // 不再攒到「完成」时逐条提交：那样 N 条任务要发 N 个请求，而且写的是开机顺序 sort_order。
+        // 失败时 provider 已按服务端顺序把列表弹回去，这里只负责把原因（跨区提示 / 请升级）说出来。
+        // 进排序模式时拦过一次，但排序模式里列表还会刷新（每次松手后、下拉刷新、切状态筛选），
+        // 刷出运行中的任务后就得在这里再拦；不调 moveTask，被拖的那条自然弹回原位。
+        final reason = ref.read(taskProvider).dragSortDisabledReason;
+        if (reason != null) {
+          _showWarning(reason);
+          return;
+        }
+        try {
+          await ref.read(taskProvider.notifier).moveTask(oldIndex, newIndex);
+        } catch (error) {
+          await _showActionError(error, '保存任务排序失败');
+        }
       },
       itemBuilder: (context, index) {
         final task = tasks[index];

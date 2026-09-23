@@ -133,10 +133,20 @@ class DepMirrorConfig {
     );
   }
 
-  Map<String, dynamic> toRequestJson() => {
-    'pip_mirror': pipMirror.trim(),
-    'npm_mirror': npmMirror.trim(),
-    'linux_mirror': linuxMirror.trim(),
+  /// 只挑出相对 [initial] 真改过的字段（对齐面板网页端 v3.3.2 / issue #146）。
+  ///
+  /// 面板 `PUT /deps/mirrors` 的三个字段是 `*string`：键不在 body 里，那一类源整个不动。
+  /// 以前恒提交三个键，会出三种事：dnf / yum 系统上空的 `linux_mirror` 必报 400
+  /// （而 pip / npm 已经先写进去了）；只改 npm 也会落下「用户选过镜像」的标记，
+  /// 把旧默认源的一次性迁移永久关掉；老面板上只改 pip 也会因为 apt 源「一条都没变」报错。
+  /// 空串也算改动 ——「恢复默认」就是清空，不算的话它永远发不出去。
+  Map<String, dynamic> changedRequestJson(DepMirrorConfig initial) => {
+    if (pipMirror.trim() != initial.pipMirror.trim())
+      'pip_mirror': pipMirror.trim(),
+    if (npmMirror.trim() != initial.npmMirror.trim())
+      'npm_mirror': npmMirror.trim(),
+    if (linuxMirror.trim() != initial.linuxMirror.trim())
+      'linux_mirror': linuxMirror.trim(),
   };
 }
 
@@ -325,10 +335,11 @@ class DepListNotifier extends StateNotifier<DepListState> {
     return const DepMirrorConfig();
   }
 
-  Future<void> setMirrors(DepMirrorConfig config) async {
+  /// [payload] 由 [DepMirrorConfig.changedRequestJson] 算出，只含改过的键。
+  Future<void> setMirrors(Map<String, dynamic> payload) async {
     await _dio.put(
       ApiEndpoints.depsMirrors,
-      data: config.toRequestJson(),
+      data: payload,
     );
   }
 }
@@ -678,33 +689,54 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     }
   }
 
+  // ⚠️ 镜像源候选清单（这里的 Linux 三档，加上 _showMirrorDialog 里 pip / npm 两个 Wrap）
+  // 是面板 web/src/views/deps/index.vue 的**手写副本**，顺序与文案逐项对齐。面板不下发这份清单
+  // （spec/frontend/panel-contract.md「镜像源预设列表」），面板改候选或换默认源时这里要跟着改。
+  // 「(默认)」陈述的是面板后端的事实（DefaultPipMirror / defaultLinuxMirror，v3.3.2 起是腾讯云）；
+  // 「恢复默认」是空串 —— 清空后由面板落到它自己的默认源，APP 不需要知道默认是谁。
+  // 天翼云：Debian / Ubuntu / pip 已实测可用（#150）；天翼云没有 Alpine 镜像，apk 档不要加。
   List<MapEntry<String, String>> _linuxMirrorOptions(DepMirrorConfig config) {
     if (config.linuxPackageManager == 'apk') {
       return const [
-        MapEntry('阿里云 (默认)', 'https://mirrors.aliyun.com/alpine'),
+        MapEntry('阿里云', 'https://mirrors.aliyun.com/alpine'),
         MapEntry('清华大学', 'https://mirrors.tuna.tsinghua.edu.cn/alpine'),
-        MapEntry('腾讯云', 'https://mirrors.cloud.tencent.com/alpine'),
+        MapEntry('腾讯云 (默认)', 'https://mirrors.cloud.tencent.com/alpine'),
         MapEntry('华为云', 'https://repo.huaweicloud.com/alpine'),
+        MapEntry('中科大', 'https://mirrors.ustc.edu.cn/alpine'),
+        MapEntry('恢复默认', ''),
       ];
     }
     if (config.linuxPackageManager == 'apt') {
       if (config.linuxDistribution == 'debian') {
         return const [
-          MapEntry('阿里云 Debian (默认)', 'https://mirrors.aliyun.com/debian'),
+          MapEntry('阿里云 Debian', 'https://mirrors.aliyun.com/debian'),
           MapEntry(
             '清华大学 Debian',
             'https://mirrors.tuna.tsinghua.edu.cn/debian',
           ),
-          MapEntry('腾讯云 Debian', 'https://mirrors.cloud.tencent.com/debian'),
+          MapEntry(
+            '腾讯云 Debian (默认)',
+            'https://mirrors.cloud.tencent.com/debian',
+          ),
+          MapEntry('华为云 Debian', 'https://repo.huaweicloud.com/debian'),
+          MapEntry('天翼云 Debian', 'https://mirrors.ctyun.cn/debian'),
+          MapEntry('恢复默认', ''),
         ];
       }
       return const [
-        MapEntry('阿里云 Ubuntu (默认)', 'https://mirrors.aliyun.com/ubuntu'),
+        MapEntry('阿里云 Ubuntu', 'https://mirrors.aliyun.com/ubuntu'),
         MapEntry('清华大学 Ubuntu', 'https://mirrors.tuna.tsinghua.edu.cn/ubuntu'),
-        MapEntry('腾讯云 Ubuntu', 'https://mirrors.cloud.tencent.com/ubuntu'),
+        MapEntry(
+          '腾讯云 Ubuntu (默认)',
+          'https://mirrors.cloud.tencent.com/ubuntu',
+        ),
         MapEntry('华为云 Ubuntu', 'https://repo.huaweicloud.com/ubuntu'),
+        MapEntry('天翼云 Ubuntu', 'https://mirrors.ctyun.cn/ubuntu'),
+        MapEntry('恢复默认', ''),
       ];
     }
+    // 不支持的包管理器（dnf / yum / zypper 等）不给任何快捷项，连「恢复默认」也不给：
+    // 输入框本来就是禁用的，与面板「快捷选择」整体禁用一致。
     return const [];
   }
 
@@ -719,8 +751,19 @@ class _DepListPageState extends ConsumerState<DepListPage> {
       if (nextConfig == null) {
         return;
       }
+      // 只提交改过的字段，理由见 DepMirrorConfig.changedRequestJson。
+      final payload = nextConfig.changedRequestJson(config);
+      if (payload.isEmpty) {
+        // 与网页端一致：什么都没改就不发请求。
+        if (mounted) {
+          AppSnack.show(context, '镜像源未变更');
+        }
+        return;
+      }
+      // 只有 Linux 源真的被改了才拦：以前按「值非空」判，拦不住回填的空串，
+      // 空串照样提交上去，dnf / yum 系统上面板回 400。
       if (!nextConfig.linuxMirrorSupported &&
-          nextConfig.linuxMirror.trim().isNotEmpty) {
+          payload.containsKey('linux_mirror')) {
         // 系统不支持而不是保存出错，用警告而不是失败。
         _showWarning(
           nextConfig.linuxMirrorMessage.isNotEmpty
@@ -733,7 +776,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
         setState(() => _mirrorSaving = true);
       }
       try {
-        await ref.read(depListProvider.notifier).setMirrors(nextConfig);
+        await ref.read(depListProvider.notifier).setMirrors(payload);
         _showSuccess('镜像源设置成功');
       } catch (error) {
         _showError(_extractError(error, '镜像源设置失败'));
@@ -776,23 +819,34 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                     ),
                   ),
                   const SizedBox(height: 10),
+                  // pip / npm 这两份候选同样是面板 index.vue 的手写副本，说明见 _linuxMirrorOptions。
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children:
                         const [
                           MapEntry(
-                            '阿里云 (默认)',
+                            '阿里云',
                             'https://mirrors.aliyun.com/pypi/simple',
                           ),
                           MapEntry(
                             '清华大学',
                             'https://pypi.tuna.tsinghua.edu.cn/simple',
                           ),
+                          MapEntry('豆瓣', 'https://pypi.doubanio.com/simple'),
                           MapEntry(
-                            '腾讯云',
+                            '腾讯云 (默认)',
                             'https://mirrors.cloud.tencent.com/pypi/simple',
                           ),
+                          MapEntry(
+                            '华为云',
+                            'https://repo.huaweicloud.com/repository/pypi/simple',
+                          ),
+                          MapEntry(
+                            '天翼云',
+                            'https://mirrors.ctyun.cn/pypi/simple',
+                          ),
+                          MapEntry('恢复默认', ''),
                         ].map((entry) {
                           return ActionChip(
                             label: Text(entry.key),
@@ -824,6 +878,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                             '华为云',
                             'https://repo.huaweicloud.com/repository/npm/',
                           ),
+                          ('恢复默认', ''),
                         ].map((entry) {
                           return ActionChip(
                             label: Text(entry.$1),

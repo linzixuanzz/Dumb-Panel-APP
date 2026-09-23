@@ -179,7 +179,9 @@ final dio = dioWithAdapter(FakeHttpAdapter(
 
 ### 可测性改造：Notifier 的可选 `Dio` 参数
 
-`TaskNotifier` / `LogListNotifier` / `AuthInterceptor` 都加了**仅供测试**的可选注入参数：
+碰 dio 的 10 个 Notifier（`Task` / `TaskView` / `LogList` / `EnvList` / `DepList` / `Script` /
+`NotificationList` / `SubscriptionList` / `UserList` / `Dashboard`）与 `AuthInterceptor`
+都有**仅供测试**的可选注入参数：
 
 ```dart
 TaskNotifier({Dio? dio}) : _injectedDio = dio, super(const TaskListState());
@@ -187,7 +189,7 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 ```
 
 **不要在构造时就把 `DioClient.instance.dio` 存进字段**：单例的 baseUrl 会随切换面板
-被改写，存下来会拿到旧地址。要给别的 Notifier 补测试时照抄这个形状。
+被改写，存下来会拿到旧地址。新增碰 dio 的 Notifier 时照抄这个形状。
 
 ### 新增功能至少要覆盖什么
 
@@ -201,17 +203,13 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 | 纯 UI 调整 | 不强制 |
 | 新增 `shared/utils/` 函数 | 建议补纯函数单测（这类最容易测，已经有 `api_utils` / `duration_utils` / `sse_replay_buffer` 三份可以照抄） |
 
-**测试的现实障碍**：全库 11 个 `StateNotifier`，只有 `TaskNotifier` / `LogListNotifier` 带
-`{Dio? dio}`。另外 7 个（`ScriptNotifier` / `NotificationListNotifier` / `SubscriptionListNotifier` /
-`DepListNotifier` / `UserListNotifier` / `DashboardNotifier` / `EnvListNotifier`）直接取
-`DioClient.instance.dio` 单例，**假 dio 注不进去**；剩下 2 个（`AuthNotifier` 走 `AuthService`、
-`AppLockController` 走 `SecureStorage`）本来就不碰 dio。
-若要给那 7 个补测试，先按上面的形状加可选 `Dio` 构造参数。
+**注入点已经齐了**：全库 12 个 `StateNotifier`，碰 dio 的 10 个都带 `{Dio? dio}`（见上），
+剩下 2 个（`AuthNotifier` 走 `AuthService`、`AppLockController` 走 `SecureStorage`）本来就不碰 dio。
+给任何列表 provider 补测试都不用再先改构造函数，直接 `XxxNotifier(dio: dioWithAdapter(...))`。
 
-> ⚠️ **这是补 `error` 字段的前置条件**。上表「触碰列表 provider 必须有测试证明 `error` 被设置
-> 且能被 UI 消费」是硬性要求，而缺 `error`（或有字段但 UI 不读）的
-> Dep / Script / Notification / User / Subscription **恰好一个都注入不了 dio**。
-> 顺序反了就会写到一半发现测不了，只能回头改构造函数。
+> 上表「触碰列表 provider 必须有测试证明 `error` 被设置且能被 UI 消费」的现成写法：
+> Task / Log 在 `test/features/list_error_state_test.dart`，
+> Notification / User / Dep / Script / Subscription 在 `test/features/list_error_state_more_test.dart`，照抄即可。
 
 ---
 
@@ -254,21 +252,26 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 代码注释**记录「为什么」和踩过的坑**，不解释「是什么」。这是仓库里执行得相当好的一条，值得延续：
 
 ```dart
-// lib/features/tasks/providers/task_provider.dart:134
+// lib/features/tasks/providers/task_provider.dart:234
 // 面板批量任务接口使用 task_ids 字段，不能复用环境变量的 ids 字段。
 
-// lib/features/envs/views/env_list_page.dart:67-68
+// lib/features/envs/views/env_list_page.dart:161-162
 // The panel backend caps page_size at 100. Requesting a larger value
 // silently falls back to 20, which previously made the app stop after 40 rows.
 
-// lib/core/auth/auth_provider.dart:204
+// lib/core/auth/auth_provider.dart:207
 // NAS / Nginx Proxy Manager 反代旧面板时，登录接口可能因为 CORS 来源端口不一致返回 403。
 
-// lib/features/tasks/providers/task_provider.dart:168-169
-// 后端当前没有独立的任务排序接口，但任务更新接口允许写入 sort_order。
+// lib/features/tasks/providers/task_provider.dart:124-125
+// 只在非空时才带上：面板对空 filters 走的是 SQL 分页快路径，
+// 带一个 `[]` 会把它推进「全表进内存再过滤」的慢路径。
 ```
 
-> 少量注释是英文（`env_list_page.dart:67`），绝大多数是中文。新注释写中文。
+> 这里原先的第四条范例是「后端当前没有独立的任务排序接口，但任务更新接口允许写入 sort_order」，
+> v1.3.8 拖拽排序改走 `PUT /tasks/sort` 后那句注释连同逐条写 `sort_order` 的代码一起删了。
+> 注释写的是「为什么」，前提一变它就成了反话——**改代码时同一处的注释要跟着改或删**。
+
+> 少量注释是英文（`env_list_page.dart:161`），绝大多数是中文。新注释写中文。
 
 ---
 

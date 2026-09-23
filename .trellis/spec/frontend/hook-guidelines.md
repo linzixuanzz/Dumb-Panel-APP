@@ -50,14 +50,17 @@
 ## Notifier 的标准形态
 
 ```dart
-// lib/features/tasks/providers/task_provider.dart:55-85, 246-248
+// lib/features/tasks/providers/task_provider.dart（节选）
 class TaskNotifier extends StateNotifier<TaskListState> {
-  TaskNotifier() : super(const TaskListState());   // 无参构造，不注入依赖
+  // dio 仅供测试注入；生产路径不传，provider 里是 TaskNotifier() 无参 new
+  TaskNotifier({Dio? dio}) : _injectedDio = dio, super(const TaskListState());
+  final Dio? _injectedDio;
+  Dio get _dio => _injectedDio ?? DioClient.instance.dio;   // 直接摸单例，不经 ref.read
 
   Future<void> load({bool refresh = false}) async {
     state = state.copyWith(loading: true, error: null);
     try {
-      final dio = DioClient.instance.dio;           // 直接摸单例，不经 ref.read
+      final dio = _dio;
       final response = await dio.get(ApiEndpoints.tasks, queryParameters: queryParams);
       final paginated = extractPaginated(response.data);
       final items = paginated.items.map((e) => Task.fromJson(e)).toList();
@@ -75,22 +78,29 @@ final taskProvider = StateNotifierProvider<TaskNotifier, TaskListState>((ref) {
 
 ### 三条关键约定
 
-1. **Notifier 不接受依赖注入，直接用 `DioClient.instance.dio`**。
+1. **Notifier 不经 riverpod 注入依赖，直接用 `DioClient.instance.dio`**。
+   碰 dio 的 10 个 Notifier 都带一个**仅供测试**的可选 `{Dio? dio}`，生产路径不传，
+   经 `_dio` getter 回落到单例（形状和「别在构造时存单例」的理由见
+   [quality-guidelines.md](./quality-guidelines.md)「可测性改造」）。
    唯一例外是 `AuthNotifier`，它通过 `ref.read(authServiceProvider)` 拿 service
    （`core/auth/auth_provider.dart:229-231`）。这也是**唯一有 service 层的 feature**——
    其余 feature 的 Notifier 直接发 HTTP，没有中间层。
-   > 副作用：这些 Notifier 无法被单测替换掉网络，是第 0 期 R5 补测试时的主要障碍。
 
 2. **写操作后统一 `await load()` 全量重拉**，不做本地乐观更新：
    ```dart
-   // lib/features/tasks/providers/task_provider.dart:106-129
+   // lib/features/tasks/providers/task_provider.dart
    Future<void> runTask(int id) async {
-     await DioClient.instance.dio.put(ApiEndpoints.taskRun(id));
+     await _dio.put(ApiEndpoints.taskRun(id));
      await load(refresh: true);
    }
    ```
-   例外只有拖拽排序会先改本地再提交（`task_provider.dart:179-187` `reorderLocalTasks`、
-   `env_list_page.dart:227-233` `reorderLocal`）。
+   例外只有拖拽排序会先改本地再提交：
+   - 任务：`task_provider.dart` 的 `moveTask`（v1.3.8 起）。先在本地挪位（乐观更新，
+     否则松手瞬间列表会先弹回原位），再**只发一次** `PUT /tasks/sort {source_id, target_id, position}`，
+     最后在 `finally` 里 `await load()`——成功拿面板整桶重编号后的顺序，失败（跨桶 400 / 老面板 404）
+     靠这次重拉把本地顺序弹回服务端顺序。它（以及 `batchSetNotify`）catch `DioException`
+     只为把「面板没有这条路由」翻译成 `PanelUpgradeRequiredException`，其余照样 `rethrow`，不违反下一条。
+   - 环境变量：`env_list_page.dart` 的 `reorderLocal`（`:389`）。
 
 3. **写操作方法本身不 try/catch，异常向上抛给 UI**。
    UI 侧用 `try { await ... } catch (error) { _showActionError(error, '...'); }`
@@ -252,12 +262,13 @@ final msg = extractErrorMessage(error, '加载失败');   // api_utils.dart:44
 | 真·滚动加载更多 | `log_list_page.dart:98-102` `loadMore()` |
 
 > 注释里记录了踩坑原因：「后端 `page_size` 上限 100，请求更大值会静默退回 20，
-> 导致列表只显示 40 行」（`env_list_page.dart:67-69`）。改分页逻辑前先读这条。
+> 导致列表只显示 40 行」（`env_list_page.dart:161-162`）。改分页逻辑前先读这条。
 
-> **任务列表不要改成增量分页**（issue #107 已裁决）。分组下拉项、全选、拖拽排序
+> **任务列表不要改成增量分页**（issue #107 已裁决）。分组下拉项、全选
 > 都建立在「全部任务都在内存里」这个前提上：分页会让分组项残缺、全选退化成
-> 「只全选已加载的」，排序保存更会按当前列表顺序把未加载任务的 `sort_order` 写坏，
-> 属于数据损坏而不是显示问题。列表卡顿由渲染侧解决 ——
+> 「只全选已加载的」。（拖拽排序 v1.3.8 起改走 `PUT /tasks/sort`，兄弟序列由面板按整桶去取，
+> 已不依赖这里是否全量；以前逐条写 `sort_order` 时，分页会把未加载任务的顺序写坏。）
+> 列表卡顿由渲染侧解决 ——
 > `task_list_page.dart` 把分组摊平成一维行列表（`utils/task_list_rows.dart`）
 > 后交给 `ListView.builder`，只有可见区域的卡片会被建出来。
 > 服务端 `all=1` 分支同理是**永久兼容红线**：线上 v1.1.1~v1.3.2 老客户端全都硬编码传它。

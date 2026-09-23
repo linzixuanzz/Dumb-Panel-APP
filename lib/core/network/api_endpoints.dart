@@ -55,6 +55,15 @@ class ApiEndpoints {
   static const String tasksBatchDisable = '$baseApi/tasks/batch/disable';
   static const String tasksBatchDelete = '$baseApi/tasks/batch/delete';
   static const String tasksBatchRun = '$baseApi/tasks/batch/run';
+
+  /// 批量改通知开关（面板 v3.3.3 / issue #149 新增）。老面板没有这条路由，
+  /// 会落进 NoRoute 的 404，见 `TaskNotifier.batchSetNotify` 的形状探测。
+  static const String tasksBatchNotify = '$baseApi/tasks/batch/notify';
+
+  /// 列表拖拽排序（面板 v3.2.1 新增，只写 list_order）。⚠️ 和 `reorder` 一样是
+  /// **静态段**：老面板没有它时，`PUT /tasks/sort` 会被 `PUT /tasks/:id` 接走，
+  /// 见 `TaskNotifier.moveTask` 里对老面板那种 404 的判断。
+  static const String tasksSort = '$baseApi/tasks/sort';
   static const String tasksCleanLogs = '$baseApi/tasks/clean-logs';
   static const String tasksExport = '$baseApi/tasks/export';
   static const String tasksImport = '$baseApi/tasks/import';
