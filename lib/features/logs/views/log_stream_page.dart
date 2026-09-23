@@ -18,11 +18,12 @@ import '../../../shared/utils/task_command.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/log_view.dart';
 import '../../tasks/providers/task_provider.dart';
+import '../utils/log_open_preference.dart';
 import '../utils/raw_log_download.dart';
 import '../utils/task_command_lookup.dart';
 
 /// AppBar 溢出菜单里的动作。
-enum _LogStreamAction { copyAll, downloadRaw, openScript }
+enum _LogStreamAction { copyAll, downloadRaw, openScript, openAtBottom }
 
 class LogStreamPage extends ConsumerStatefulWidget {
   final int logId;
@@ -65,6 +66,16 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
   String? _command;
   bool _resolvingScript = false;
 
+  /// 交给 LogView 的 follow，只在加载时定一次（issue #147）：
+  /// 运行中的日志跟随；已结束的日志按账户偏好，定位到底部就借用跟随模式
+  /// （缓冲区不会再变，等于「打开就在底部 + 上翻后给回到底部按钮」），否则从顶部开始。
+  /// ⚠️ 不能跟着 _done 变：运行中的日志收到 done 时 _done 会翻成 true，
+  /// LogView 中途切换 follow 会把正在看的位置整个重排。
+  bool _follow = true;
+
+  /// 账户偏好「打开已结束的日志时定位到底部」的当前值；null = 面板不支持，菜单里不给这一项。
+  bool? _openAtBottom;
+
   @override
   void initState() {
     super.initState();
@@ -87,6 +98,8 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
     });
 
     try {
+      // 偏好与日志详情一起发，不多等一个往返；它自己吞掉所有错误，不会让日志加载失败。
+      final openAtBottomFuture = loadOpenFinishedLogAtBottom();
       final response = await DioClient.instance.dio.get(
         ApiEndpoints.logById(widget.logId),
       );
@@ -102,12 +115,17 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
       final historyLines = log.isRunning
           ? const <String>[]
           : _splitLines(content);
+      // LogView 只在第一次建出来时按 follow 定位，所以得先等偏好回来再填正文。
+      final openAtBottom = await openAtBottomFuture;
 
       if (!mounted) {
         return;
       }
 
       setState(() {
+        _openAtBottom = openAtBottom;
+        _follow =
+            log.isRunning || (openAtBottom ?? kOpenFinishedLogAtBottomDefault);
         _taskId = log.taskId;
         _taskName = log.taskName;
         // 面板 v3.2.0 起才在日志详情里带 command；拿不到就保持 null，
@@ -306,6 +324,40 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
     );
   }
 
+  /// 切换账户偏好「打开已结束的日志时定位到底部」。
+  ///
+  /// 只影响**下次**打开：眼前这条不重排，免得正在看的位置被整个挪走。
+  /// 先改界面再发请求，失败时改回去并告诉用户（这是用户动作，不能像网页端首载迁移那样静默）。
+  Future<void> _toggleOpenAtBottom() async {
+    // 菜单项只在 _openAtBottom 非 null 时出现，走到这里一定有值。
+    final next = !_openAtBottom!;
+    setState(() => _openAtBottom = next);
+    try {
+      final saved = await saveOpenFinishedLogAtBottom(next);
+      if (!mounted) {
+        return;
+      }
+      if (!saved) {
+        // v3.3.1 / v3.3.2：认 list 组但不认这个键，回 200 却没存，只能靠回显认出来。
+        // 文案与批量设置通知的老面板提示一致（task_provider.dart）。
+        setState(() => _openAtBottom = !next);
+        AppSnack.warn(context, '当前面板版本不支持，请升级到 v3.3.3 或更高');
+        return;
+      }
+      AppSnack.success(
+        context,
+        next ? '已开启：下次打开已结束的日志会定位到底部' : '已关闭：下次打开已结束的日志从顶部开始',
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _openAtBottom = !next);
+      // 与本页下载原始日志一样用 extractListErrorMessage：断网时给中文说明，不甩英文。
+      AppSnack.error(context, extractListErrorMessage(error, '保存设置失败'));
+    }
+  }
+
   /// 跳到这条日志对应任务所执行的脚本编辑页。
   ///
   /// 复用现成的 `/scripts/view` 深链（`state.extra` 就是脚本路径，ScriptViewPage
@@ -439,7 +491,7 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
       backgroundColor: logTheme.background,
       appBar: AppBar(
         // actions 现在是 2 项（状态 chip + 溢出菜单）。复制 / 下载 /
-        // 编辑脚本全折进溢出菜单，就是为了不让它继续往上涨：曾经的 4 个图标在
+        // 编辑脚本 / 定位偏好全折进溢出菜单，就是为了不让它继续往上涨：曾经的 4 个图标在
         // 窄屏上已经把标题压到要截断，再直接加第 5 个就会撑溢出。
         // 原来的「自动滚动」开关已经去掉：停在底部就跟随、上翻就停，
         // 回到底部由正文右下角的按钮负责（issue #10）。
@@ -472,8 +524,10 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
               visualDensity: VisualDensity.compact,
             ),
           ),
-          // 三项全被门禁挡掉时（日志详情没加载出来、又不是 operator）整个按钮
+          // 各项全被门禁挡掉时（日志详情没加载出来、又不是 operator）整个按钮
           // 都不出现 —— 留一个点开是空的菜单比没有按钮更让人困惑。
+          // 「定位到底部」开关不用算进 hasMenuActions：它只在日志详情加载成功后
+          // 才有值，那时 _hasRawFile 一定非 null，按钮本来就在。
           if (hasMenuActions)
             PopupMenuButton<_LogStreamAction>(
               // 有请求在飞时原地转圈：下载 / 兜底查询都可能要几秒，折进菜单之后
@@ -537,6 +591,13 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
                       title: Text('编辑对应脚本'),
                     ),
                   ),
+                // 面板没有 list 组（v3.3.0 及更早）时不给：v3.2.4 ~ v3.3.0 的 PUT 会误写编辑器偏好。
+                if (_openAtBottom != null)
+                  CheckedPopupMenuItem(
+                    value: _LogStreamAction.openAtBottom,
+                    checked: _openAtBottom!,
+                    child: const Text('打开已结束的日志时定位到底部'),
+                  ),
               ],
               onSelected: (action) async {
                 switch (action) {
@@ -548,6 +609,9 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
                     break;
                   case _LogStreamAction.openScript:
                     await _openScriptEditor();
+                    break;
+                  case _LogStreamAction.openAtBottom:
+                    await _toggleOpenAtBottom();
                     break;
                 }
               },
@@ -567,6 +631,7 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
               )
             : LogView(
                 buffer: _log,
+                follow: _follow,
                 textStyle: TextStyle(
                   fontFamily: 'monospace',
                   fontSize: 13,

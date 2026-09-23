@@ -12,6 +12,11 @@ class ApiEndpoints {
   static const String password = '$baseApi/auth/password';
   static const String captchaConfig = '$baseApi/auth/captcha-config';
 
+  /// 当前账户的界面偏好（面板 v3.2.4 起有 editor 组，v3.3.1 加 list 组，
+  /// v3.3.3 在 list 组里加了 log_open_at_bottom）。APP 只读写这一个键，
+  /// 见 features/logs/utils/log_open_preference.dart。
+  static const String preferences = '$baseApi/auth/preferences';
+
   // System
   static const String health = '$baseApiV1/health';
   static const String version = '$baseApiV1/version';
