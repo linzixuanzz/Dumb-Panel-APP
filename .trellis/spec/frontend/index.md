@@ -17,7 +17,7 @@
 | 网络 | `dio ^5.7.0`（REST）+ `http ^1.2.2`（仅 SSE） | `pubspec.yaml:19-20`、`lib/core/network/sse_client.dart:3` |
 | 路由 | `go_router ^14.8.1` | `pubspec.yaml:23` |
 | 代码生成 | **无**。全库 0 个 `.g.dart`，`pubspec.yaml` 无 `build_runner` / `freezed` / `json_serializable` | `pubspec.yaml:43-47` |
-| 规模 | `lib/` **89** 个 dart 文件 / 约 **35,978** 行；`test/` **26** 个 `*_test.dart` / **416** 个用例 | 全量统计（2026-09-02 实跑） |
+| 规模 | `lib/` **94** 个 dart 文件 / 约 **39,982** 行；`test/` **40** 个 `*_test.dart` / **559** 个用例 | 全量统计（2026-10-04 实跑，v1.3.9 开发中） |
 
 服务端（Go 面板）在**另一个仓库**，本仓库只消费它的 HTTP API。
 本目录的 `../backend/` 是 `trellis init` 留下的 Go/ORM 模板，与本仓库无关，见 `../backend/index.md`。
@@ -29,12 +29,12 @@
 | 文档 | 覆盖内容 | 状态 |
 |---|---|---|
 | [directory-structure.md](./directory-structure.md) | `lib/core` / `lib/features` / `lib/shared` 三层职责、feature 内部结构、命名 | 已按代码填写 |
-| [component-guidelines.md](./component-guidelines.md) | Widget 构建、私有子组件、主题与样式现状（含反模式统计） | 已按代码填写 |
-| [hook-guidelines.md](./hook-guidelines.md) | **已改写为「Riverpod Provider 与数据获取约定」**（本仓库是 Flutter，无 React hooks） | 已按代码填写 |
+| [component-guidelines.md](./component-guidelines.md) | Widget 构建、私有子组件、主题与样式现状（含反模式统计）、日志正文 `LogView` / `LogLineBuffer`（#10 基线、表头偏移、锚点滑动与选区保护） | 已按代码填写 |
+| [hook-guidelines.md](./hook-guidelines.md) | **已改写为「Riverpod Provider 与数据获取约定」**（本仓库是 Flutter，无 React hooks）；含 SSE 重放去重与实时日志页 live-logs 快照的衔接（APP #15） | 已按代码填写 |
 | [state-management.md](./state-management.md) | `StateNotifier` + 手写不可变 State 类、`copyWith`、`_unset` 哨兵、错误态现状 | 已按代码填写 |
-| [quality-guidelines.md](./quality-guidelines.md) | lint 基线、7 个既有 info、测试现状、禁止/必须模式、审查清单 | 已按代码填写 |
+| [quality-guidelines.md](./quality-guidelines.md) | lint 基线、7 个既有 info、测试现状、禁止/必须模式、审查清单、日志视图测试约定（布局计数 / 选区 / 页面级假 SSE） | 已按代码填写 |
 | [type-safety.md](./type-safety.md) | JSON 解析防御式写法、后端默认值不得写死、运行模式分支 | 已按代码填写 |
-| [panel-contract.md](./panel-contract.md) | **APP 与面板的契约**：什么该下发什么不该、形状探测、config 必须字符串、未知值要诚实、冻结快照 | 第 2 期新增 |
+| [panel-contract.md](./panel-contract.md) | **APP 与面板的契约**：什么该下发什么不该、形状探测、config 必须字符串、未知值要诚实、冻结快照、实时日志 SSE / live-logs 的现状形状、面板关停时 SSE 的结束事件（v3.3.5 起三条流都发 `reconnect`；依赖 / 订阅页把非关停的 `timeout` 显示成「完成」是 APP 既有问题，待修） | 第 2 期新增 |
 
 > **关于 `hook-guidelines.md` 的命名**：文件名来自 `trellis init` 的 React 模板。
 > Flutter 没有 hooks（本仓库也未使用 `flutter_hooks`），因此该文件的**内容**已整体改写为
@@ -69,7 +69,7 @@
 **新增调用点必须自行确认 catch 兜得住 4xx**。唯一的例外是
 `/auth/captcha-config` 保留请求级 `< 500`（老面板没这个接口，404 = 没配验证码）。
 
-### 3. 测试有 416 个用例，但覆盖面是**有选择的**
+### 3. 测试有 559 个用例，但覆盖面是**有选择的**
 
 不追覆盖率，只保护「改错了用户会丢数据 / 丢会话 / 看到错误信息」的地方：
 
@@ -77,7 +77,8 @@
 系统配置 schema 的读写往返、通知渠道 schema 解析与降级、
 枚举换算的诚实性、cron 模板解析、订阅鉴权请求体、
 任务标签往返（订阅标签不丢）、任务视图规则的解析与回写（排序规则不丢）、
-日志底色的主题回落、命令→脚本路径解析、编辑器搜索的命中与回绕。
+日志底色的主题回落、命令→脚本路径解析、编辑器搜索的命中与回绕、
+日志缓冲区的截断与跟随（逐行追加、选区保持）、实时日志页快照与 SSE 的衔接。
 
 **绝大部分 UI 代码仍然零覆盖** —— 圆角、间距、配色、布局对 `flutter test` 全部不可见。
 不要把「测试通过」当成界面没问题。

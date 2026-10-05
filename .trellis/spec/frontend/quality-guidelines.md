@@ -141,12 +141,14 @@ test/
 └── widget_test.dart                     空态 vs 错误态的渲染差异
 ```
 
-> ⚠️ **上面这棵树不是全量**，它停在第 0/1 期的形态。`test/` 下实际有 **16 个 `*_test.dart`**，
-> 树里只画了 7 个。没画进来的：`features/system/system_config_schema_test.dart`、
+> ⚠️ **上面这棵树不是全量**，它停在第 0/1 期的形态。`test/` 下实际有 **40 个 `*_test.dart`**
+> （2026-10-04 glob），树里只画了 7 个。没画进来的包括：`features/system/system_config_schema_test.dart`、
 > `features/notifications/notify_field_schema_test.dart`、`features/tasks/cron_schema_test.dart`、
 > `features/subscriptions/subscription_auth_test.dart`、`features/envs/env_transfer_test.dart`、
 > `features/logs/raw_log_download_test.dart`、`shared/panel_enums_test.dart`、
-> `shared/duration_utils_test.dart`、`shared/utils/api_utils_test.dart`。
+> `shared/duration_utils_test.dart`、`shared/utils/api_utils_test.dart`，以及日志视图那三份：
+> `shared/utils/log_line_buffer_test.dart`、`shared/widgets/log_view_test.dart`、
+> `features/tasks/task_live_log_page_test.dart`（写法见下方「日志视图与实时日志页的测试约定」）。
 > **判断某条链路有没有测试请直接 glob `test/**/*_test.dart`，不要只看这棵树。**
 
 > `TokenRefresher` 是单例，`setUp` 里必须调 `resetForTest()`：
@@ -177,6 +179,10 @@ final dio = dioWithAdapter(FakeHttpAdapter(
 安全存储用 `FlutterSecureStorage.setMockInitialValues({...})`
 （flutter_secure_storage 自带的内存实现，不需要 mock 平台通道）。
 
+SSE 不经 dio。页面内部自己 `new SseClient()` 时，用 `http.runWithClient(body, () => FakeSseHttpClient(...))`
+注入（`SseClient` 的默认工厂是 `http.Client()`，它认 zone），不用给页面加构造参数；
+完整写法见下方「日志视图与实时日志页的测试约定」第 5 条。
+
 ### 可测性改造：Notifier 的可选 `Dio` 参数
 
 碰 dio 的 10 个 Notifier（`Task` / `TaskView` / `LogList` / `EnvList` / `DepList` / `Script` /
@@ -201,6 +207,7 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 | 触碰「读取-修改-回写」的表单 | 必须有测试证明**未知字段不丢失**（见下方通知渠道案例） |
 | 触碰列表 provider | 必须有测试证明请求失败时 `error` 被设置且能被 UI 消费 |
 | 纯 UI 调整 | 不强制 |
+| 触碰日志视图（`LogView` / `LogLineBuffer` / 实时日志页） | 新分支配结构性断言与 `debugPrintLayouts` 计数，**不写计时断言**，见下方「日志视图与实时日志页的测试约定」 |
 | 新增 `shared/utils/` 函数 | 建议补纯函数单测（这类最容易测，已经有 `api_utils` / `duration_utils` / `sse_replay_buffer` 三份可以照抄） |
 
 **注入点已经齐了**：全库 12 个 `StateNotifier`，碰 dio 的 10 个都带 `{Dio? dio}`（见上），
@@ -210,6 +217,59 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 > 上表「触碰列表 provider 必须有测试证明 `error` 被设置且能被 UI 消费」的现成写法：
 > Task / Log 在 `test/features/list_error_state_test.dart`，
 > Notification / User / Dep / Script / Subscription 在 `test/features/list_error_state_more_test.dart`，照抄即可。
+
+### 日志视图与实时日志页的测试约定（#10 / APP #15）
+
+目的：让「卡不卡」「选区跑没跑」这类以前只能上真机看的东西，在 `flutter test` 里有稳定的断言。
+现成写法在 `test/shared/widgets/log_view_test.dart`、`test/shared/utils/log_line_buffer_test.dart`、
+`test/features/tasks/task_live_log_page_test.dart`；契约本身见 component-guidelines.md「日志正文」
+与 hook-guidelines.md「实时日志页」。
+
+1. **只做结构性断言，不计时。** JIT debug 的耗时同一个用例跑两次能差 ±30%。该断言的是：
+   - 下方列表行数：key 以 `log-below-` 开头的 `SliverPadding`（`skipOffstage: false`）下的 `SliverList`，
+     `(delegate as SliverChildBuilderDelegate).childCount` 在跟随中 ≤ 200；
+   - 走的是重建还是原地滑：比较前后 `log-below-<代号>` 这个 key，变了就是走了 `_jumpToLatest`；
+   - 停在底部：`position.pixels` 与 `maxScrollExtent` 差 ≤ 0.5，最新一行 `findsOneWidget`。
+2. **一帧排了多少行，用 `debugPrintLayouts` 数。** 置 `debugPrintLayouts = true`、临时替换 `debugPrint`，
+   数以 `Laying out` 开头且含 `RenderParagraph` 的消息，推一帧 `pump(16ms)`，`finally` 里两样都还原
+   （不还原会污染后面的用例）。这个数只在真正执行布局时才涨，和机器快慢、编译模式都无关。阈值：
+   原地滑的帧 **≤ 100**（一屏约 30 行加缓存区）；`_jumpToLatest` 重建的那几帧 **≤ 210**
+   （尾段 200 行 + 余量，#10 就定下的代价）。改前贴底的那一帧是几千。
+   必须保留的一条：从 9800 行起逐行追加越过 1 万行上限、每 20 行出一帧，60 帧都 ≤ 100——
+   它钉的是「浮动上限 + 锚点不动」的灾难帧，#10 的原测试全绿也测不出来。
+3. **选区用鼠标拖。** 触摸拖动会滚动列表。`tester.startGesture(pos, kind: PointerDeviceKind.mouse)` →
+   `moveTo` → `up`，并 `addTearDown(gesture.removePointer)`。读选中的字：遍历 `tester.binding.renderViews`
+   下的 `RenderParagraph`，对 `selections` 里不折叠的取 `selection.textInside(plainText)`；
+   清选区：`tester.state<SelectableRegionState>(find.byType(SelectableRegion)).clearSelection()`。
+4. **改实现、对外语义不变时，把旧实现搬进测试当对照。** `_OriginalBuffer` 就是改造前逐行搬表的
+   `LogLineBuffer`；随机操作序列逐步比对，`maxLines` 要同时覆盖 < 10 和 ≥ 10（两条代码路径）。
+   几十万次逐行比较用 `if (...) fail(...)`，逐个 `expect` 太慢。
+5. **页面级：真实页面 + 假 dio + 假 SSE，不改页面构造。**
+
+   ```dart
+   setUp(() {
+     FlutterSecureStorage.setMockInitialValues({});
+     DioClient.instance.setBaseUrl('https://panel.test');
+   });
+   // 页面直接用 DioClient 单例：换掉它的适配器（responder 可以是 async，用来模拟慢网）
+   DioClient.instance.dio.httpClientAdapter = FakeHttpAdapter((options) { /* 按 path 回 */ });
+   // SseClient 的默认工厂是 http.Client()，认 zone：用 runWithClient 注入假客户端
+   await http.runWithClient(() async {
+     await _openPage(tester);
+     // ……断言……
+     await _closePage(tester);
+   }, () => FakeSseHttpClient((_) => sseResponse(frame)));
+   ```
+
+   - 页面 AppBar 里有常驻的转圈，**不能 `pumpAndSettle`**：用固定次数的 `pump(Duration)` 推进
+     （`_openPage` 是 `pumpWidget` 后推 20 次 20ms；轮询一秒一跳，等它放弃要推够 17 秒）；
+   - 收尾（`_closePage`）先 `pumpWidget(const SizedBox())` 再 `pump(3s)`，把重连、提示条这些定时器放完；
+   - 回落了几次用 `FakeHttpAdapter.countOf(path)` 数；「复制全部」的内容用
+     `setMockMethodCallHandler(SystemChannels.platform, …)` 截 `Clipboard.setData`，`addTearDown` 里置回 null；
+   - **造数照面板的真实形状**：快照照 `ReadLastLines` 取最后 4096 字节、`utf8.decode(allowMalformed: true)`
+     后按 `\n` 切（首行半截、末尾一个空串）；历史照 `writeSSEData` 写成一个帧、每行一条 `data:`；
+     「快照恰好从历史第 2 行开始」用 65 行、后 64 行每行连换行正好 64 字节（合计 4096）来造，
+     并先断言这个前提成立。
 
 ---
 
@@ -290,6 +350,7 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 - [ ] 如果动了 `dio_client.dart` 的 `validateStatus`，**所有**受影响调用点都逐个确认过
 - [ ] 如果动了 `android/`（Kotlin / Manifest），另跑过 `flutter build apk --debug` 或 `gradlew :app:compileDebugKotlin`——analyze 与 test 都看不见那一侧
 - [ ] 如果动了平台通道的错误码，Dart 侧 `_installErrorText` 与原生侧同步改过
+- [ ] 如果动了 `LogView` / `LogLineBuffer` / 实时日志页：`log_view_test`、`log_line_buffer_test`、`task_live_log_page_test` 全过；新加的「跟随但锚点不滑」分支同时设了 `holdTrim`（见 component-guidelines.md「日志正文」）
 
 ---
 

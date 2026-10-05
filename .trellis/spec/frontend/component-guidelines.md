@@ -386,6 +386,179 @@ ConstrainedBox(
 
 ---
 
+## 日志正文：`LogView` + `LogLineBuffer`（#10 建立，APP #15 补逐行追加路径）
+
+三个页面共用：`TaskLiveLogPage`（`task_list_page.dart`，任务运行日志）、`LogStreamPage`
+（`log_stream_page.dart`，日志详情 / 运行中日志）、`PanelLogPage`（`panel_log_page.dart`，
+`follow: false` 的静态日志）。**新的日志页接这一套**，不要再把整段 `join('\n')` 铺成一棵
+`RichText` —— 那是 #10 之前几万行就卡死的写法（脚本「调试运行」弹窗 `_ScriptDebugRunSheet`
+还是它；依赖安装、订阅拉取两页是各自的 `ListView`、没有上限，都未迁，在 backlog）。
+
+> #10（`ef8368e`）当时没有写进 spec，下面的「基线」是按现有代码补的。
+> 运行中日志的数据从哪来、怎么去重见 [hook-guidelines.md](./hook-guidelines.md)「实时日志页」一节；
+> 面板推流的形状见 [panel-contract.md](./panel-contract.md)「实时日志」一节。
+
+### 基线（#10）
+
+| 部件 | 约定 | 位置 |
+|---|---|---|
+| 行缓冲 | 按行追加；追加时顺手算好每行「行首生效的 ANSI 样式」（`ansiStateAt`），按行渲染时靠它续上跨行颜色、不回扫；内存严格只留最近 `kLogBufferMaxLines = 10000` 行，丢掉的计入 `droppedCount`，截断提示与「复制最近 N 行」的 N 就是它 | `lib/shared/utils/log_line_buffer.dart` |
+| 绝对行号 | 第 n 行的绝对位置 = `droppedCount + 下标`，裁剪不改变它；`replaceAll`（含 `clear`）让 `generation + 1`，绝对行号从 0 重数 | 同上 |
+| 双列表 | `CustomScrollView` 以锚点 `_anchor`（绝对行号）为界：之前的行在上方 `SliverList`（反向生长），之后的行在下方 `SliverList`（新行都接这里）；锚点之上真有行才设 `center`，否则短日志会被顶在屏幕中间 | `lib/shared/widgets/log_view.dart` 的 `_LogViewState.build` |
+| 回到底部 | 不跳很远的偏移（懒加载列表要把中间每一行都排一遍），而是锚点挪到 `total - 200`（`_kTailWindow`）、`_sliverGeneration++` 换掉两个列表的 key、按估算行高先 `jumpTo` 到尾段附近，帧后再贴底校正 | `_jumpToLatest` |
+| 跟随 | 距底 ≤ `kLogFollowTolerance`（32px）才算在底部；「用户在滚」只认手势（拖动的 `ScrollStartNotification.dragDetails`、滚轮 / 触控板的 `UserScrollNotification`），程序贴底不算；手指还在屏幕上时绝不 `jumpTo`（会打断手势） | `_handleScrollNotification`、`_stickToBottom` |
+| 暂缓裁剪 | 不跟随时 `holdTrim = true`：上限放宽到 2 倍、超了一次裁回 `maxLines`，否则每来一行眼前的内容就被往上推一行；`dispose` / 换缓冲区时复位成 false（缓冲区归页面所有，比视图活得久） | `LogLineBuffer.holdTrim`、`_setFollowing`、`dispose` |
+| 静态日志 | `follow: false`：从顶部开始，无跟随、无「回到底部」、不挂选区回调 | `LogView.follow` |
+
+### 契约：`LogLineBuffer` 用表头偏移裁剪（APP #15）
+
+**1. 范围与触发**：改 `LogLineBuffer` 的裁剪或存储方式，或新增读它的地方。运行中日志是 SSE
+每条 `data:` 行 `append` 一次、一次 1 行；改前缓冲区满后每来一行就把两张 1 万元素的表
+`removeRange(0, 1)`，5 万行历史重放的数据通路要 1.6~2.4 秒（桌面 AOT，基本都花在搬表上）。
+
+**2. 签名**（对外不变，只多一个测试用 getter）
+
+```dart
+int get length;  bool get isEmpty;  bool get isNotEmpty;
+int get droppedCount;  int get totalCount;  int get generation;
+List<String> get lines;                 // 只读；表头有待搬走的行时是拷贝
+String lineAt(int index);
+AnsiLineState ansiStateAt(int index);
+bool holdTrim;
+void append(Iterable<String> lines);  void replaceAll(Iterable<String> lines);  void clear();
+String joinAll();
+@visibleForTesting int get debugCompactions;   // 真正 removeRange 的累计次数
+```
+
+**3. 契约**
+
+- **逻辑上当场裁好**：每次 `append` / `replaceAll` 后，长度一超 `holdTrim ? 2 × maxLines : maxLines`
+  就裁回 `maxLines`。`length` / `droppedCount` / `totalCount` / `lines` / `joinAll` / `lineAt` /
+  `ansiStateAt` 与「每次当场 `removeRange`」的原版**逐行一致**。
+- **物理上攒着搬**：裁剪只做 `_head += excess`；`_head >= maxLines ~/ 10`（1 万行时是 1000）
+  才把两张表一起 `removeRange(0, _head)` 并清零。跟随时物理上最多多留一成；
+  `maxLines < 10` 时 `~/ 10` 为 0，每次都搬，与原版同一条路。
+- 所有按下标取值都要加 `_head`，`length = _lines.length - _head`；`replaceAll` 必须把 `_head` 清零。
+- `lines`：`_head == 0` 时是不复制的只读视图；否则是 `sublist(_head)` 的只读**拷贝**（O(n)）。
+  **逐行 / 逐帧的路径禁止读 `lines`**，用 `length` + `lineAt`；现在只有重连去重
+  （`_resetReplayBuffer`）和测试读它。
+- 通知：`append` 空集合不通知、也不裁；`replaceAll` 一定通知。
+
+**4. 边界矩阵**
+
+| 情况 | 行为 |
+|---|---|
+| `maxLines` 为 1~9 | `_head` 恒为 0，每次都真搬，与原版完全一样 |
+| 跟随中逐行越过上限 | 每行逻辑上裁 1 行（`droppedCount` 每行 +1，截断提示逐行准确），每 `maxLines ~/ 10` 行真搬一次 |
+| `holdTrim` 期间超过 2 倍 | 一次裁回 `maxLines`；这时 `excess > maxLines ~/ 10`，当场搬表 |
+| `holdTrim` 由 true 改 false | 不立即裁，下一次追加时按正常上限裁（别在滚动回调里改正在布局的列表） |
+| `replaceAll` / `clear` | `_head`、`droppedCount` 清零，`generation + 1` |
+
+**5. 用例**
+
+- 正常：上限 1 万，逐行追加 5 万行 → 每一步 `length == min(total, 10000)`、`lineAt(0)` 是第 `total - kept` 行；搬表 ≤ 50 次（原版 4 万次）。
+- 基础：上限 100，逐行追加 109 行 → `length 100`、`droppedCount 9`、`debugCompactions 0`；第 110 行 → 搬 1 次。
+- 错误：上限浮动到 `maxLines + 10%`，见第 7 段。
+
+**6. 必须有的测试**（`test/shared/utils/log_line_buffer_test.dart`，不计时）
+
+- 改造前的实现原样搬进测试当对照（`_OriginalBuffer`），`maxLines ∈ {1, 2, 7, 10, 25, 100}` 各随机走 400 步
+  （逐行追加 / 整批追加 / 切 `holdTrim` / `replaceAll` / `clear`），每步比上面七项，
+  并逐行比 `lineAt` 与按 `ansiStateAt` 渲染出的 `TextSpan`；
+- 上限 100：109 行不搬、110 行搬 1 次；`_head ≠ 0` 时 `lines.add` 抛 `UnsupportedError`（拷贝也必须只读）；
+- 逐行 5 万行：逻辑上始终严格 1 万行，`0 < debugCompactions ≤ 50`（攒够了必须真搬，内存不能只涨不落）。
+
+**7. 错误 vs 正确**
+
+```dart
+// ❌ 摊还裁剪（调研原案 R1）：上限浮动到 1.1 万，超了才一次裁回 1 万
+final limit = holdTrim ? maxLines * 2 : maxLines + maxLines ~/ 10;
+```
+
+「最近 N 行」不再严格；更致命的是只要 LogView 有任何「跟随但锚点不滑」的状态，`droppedCount`
+越过锚点后，每次成批裁剪都让下方列表从 11000 行一下缩到 10000 行，屏幕附近已建好的行
+（下标都 ≥ 10000）被整体回收，`RenderSliverList` 只能从第 0 行重排到当前偏移：单帧 10,020 次
+段落布局，JIT 4.4 秒、web profile 1.27 秒（核实实测）。#10 的原测试全绿，测不出来。
+
+```dart
+// ✅ 表头偏移（_trim）：逻辑上这一刻就裁好，物理上攒够一成再搬
+final excess = length - maxLines;
+_head += excess;
+_droppedCount += excess;
+if (_head >= maxLines ~/ 10) {
+  _lines.removeRange(0, _head);
+  _lineStarts.removeRange(0, _head);
+  _head = 0;
+}
+```
+
+配改前的 LogView 跑同一个越界场景，最差帧 11 ms / 56 次布局，所以它可以独立上线。
+
+### 约定：跟随时锚点随尾部滑动（APP #15）
+
+**是什么**：`_handleBufferChanged` 里，跟随中、手指不在屏幕上、也没有选区时，把锚点原地滑到
+`max(droppedCount, totalCount - 200)`，下方列表始终只放最后 ≤ 200 行。各状态下来新行时：
+
+| 状态 | 行为 |
+|---|---|
+| 跟随、无手势、无选区、`_glued`，且原点不变 | `_anchor = next` → `setState` → 帧后贴底 |
+| 同上但 `!_glued`，或 `(next > dropped) != _centered`（短日志第一次超过 200 行，原点要换） | `_jumpToLatest()` 重建 |
+| 手指在屏幕上（`_userScrolling`） | 锚点不动、不贴底，新行接在下方列表末尾 |
+| 有选区（`_hasSelection`） | 同上，另外 `holdTrim = true`；`_following` 不变，不出「回到底部」按钮 |
+| 不跟随（用户上翻） | 锚点不动，`_glued = false`，`holdTrim = true` |
+| `generation` 变了（整段替换） | 跟随中 → `_jumpToLatest()`；否则把锚点夹进 `[dropped, total]`、原地不动 |
+
+`_glued` 的意思是「下方列表恰好是最后 200 行」：跟随模式的 `_resetAnchor()` 置 true，
+`_setFollowing(false)` 置 false，`_resumeAfterPause()` 发现下方超过 200 行时置 false。
+
+**暂停结束**（手势的 `ScrollEndNotification`、选区清掉都走 `_resumeAfterPause`）：下方列表超过
+200 行 → `_glued = false`；挪到帧后再判（滚动结束通知可能在布局中派发，选区回调也可能只是
+「先清再全选」的中间一步）：不在底部 → `_jumpToLatest()`；还在底部 → 先 `_stickToBottom()`，
+下一批新行来时因 `!_glued` 走重建。**禁止直接滑回 200 行**：下方列表一下缩短，已建好的行全被
+回收、从第 0 行重排，滚动位置还落在新列表的底之外。
+
+**选区保护**：`SelectionArea(onSelectionChanged: widget.follow ? _handleSelectionChanged : null)`，
+`plainText` 非空才算有选区（点一下落个光标不算）；有选区时 `holdTrim = !_following || hasSelection`
+——不暂缓的话缓冲区会裁过锚点，下方列表整体错位，选中的字照样会变。`_jumpToLatest()` 会把选中的行
+一起回收、却不触发选区回调，所以它要**先**把 `_hasSelection` 置 false、复位 `holdTrim`，**再**
+`_selectionAreaKey.currentState?.selectableRegion.clearSelection()`（清选区会同步回调，那时看到的
+已是「无选区」）。
+
+**为什么**：
+
+- 锚点不动时新行全接在下方列表末尾，贴底一跳 `RenderSliverList` 要逐个排版跳过的每一行
+  （一帧来 k 行就排 k 行），打开运行中任务时整段历史一下涌进来，单帧最长约 200 ms（JIT）。
+  滑动之后来再多行也只重排屏幕附近那几十行（2 万行重放出帧合计 2037 → 186 ms，JIT）。
+- 选区漂移已实测：锚点一滑，选区停在原来的屏幕行上，选中的字变成下一行的字，「复制」拿到的是错的。
+- **不做滞回**（攒够一批才滑）：每次滑都是一次从零重排，约每 200 行一个 26~66 ms 的尖峰
+  （web profile），比均匀的小代价更显眼。
+- **代价如实记**：日志不到 1 万行时，每批新行都要重排一屏（测试视口约 56 行）而不是只排新来的
+  几行，桌面 web profile 稳态帧耗时是改前的 1.45~2 倍（如 3.1 对 1.6 ms），超过 1 万行持平；
+  用户自己滑回底部（没点按钮）后走重建路径，新行晚 2 帧出现（改前 1 帧）；有长行时偶尔要多等
+  一帧校正。**手机没实测**，真机重点看：一直有输出的任务挂 5~10 分钟的发热掉帧（120Hz 一帧
+  8.3 ms）、长按选择、拖滚动条。
+
+**错误 vs 正确**
+
+```dart
+// ❌ 选区保护写成「仍跟随，只是有选区时不滑」，也不设 holdTrim
+if (_following && !_userScrolling) {
+  if (!_hasSelection) _anchor = next;
+}
+// 选区挂着时照样贴底，把选中的那几行带出屏幕；再来约 1 万行，缓冲区裁过锚点，
+// 下方列表整体错位，选中的字跟着变。
+```
+
+```dart
+// ✅ 有选区按「不跟随」处理：不滑、不贴底（_stickToBottom 同样判 _hasSelection）、暂缓裁剪
+if (_following && !_userScrolling && !_hasSelection) { /* 滑锚点，或走 _jumpToLatest() */ }
+widget.buffer.holdTrim = !_following || hasSelection;   // _handleSelectionChanged 里
+```
+
+测试写法见 [quality-guidelines.md](./quality-guidelines.md)「日志视图与实时日志页的测试约定」。
+
+---
+
 ## `BuildContext` 跨异步使用
 
 约定是 **`await` 之后先判 `mounted`**：

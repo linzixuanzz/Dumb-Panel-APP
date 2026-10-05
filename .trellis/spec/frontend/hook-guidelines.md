@@ -276,7 +276,9 @@ final msg = extractErrorMessage(error, '加载失败');   // api_utils.dart:44
 ### SSE：独立客户端，不经 dio，但**与 dio 共用同一个续期入口**
 
 `lib/core/network/sse_client.dart` 用 `package:http` 手动解析 `event:` / `data:` 行，
-自己加 `Authorization` 头，支持 `autoReconnect`（收到 `event: done` + `data: reconnect` 时 1 秒后重连）。
+自己加 `Authorization` 头，支持 `autoReconnect`（收到 `event: done` + `data: reconnect` 时 1 秒后重连一次；
+这次连不上不再重试，直接 `onError`，恢复与否由页面决定）。面板 v3.3.5 起正常关停时三条流（实时日志、依赖、订阅）
+都发 `reconnect`，各页表现与约束见 [panel-contract.md](./panel-contract.md)「面板关停时的结束事件」。
 
 用于：任务实时日志、日志流、依赖安装日志、订阅拉取流。
 对应端点在 `ApiEndpoints` 里都是 `baseApiV1` 前缀。
@@ -303,6 +305,114 @@ final msg = extractErrorMessage(error, '加载失败');   // api_utils.dart:44
 > 所以 `connect()` 有一个 `onReconnect` 回调，页面必须在里面把「已显示的行」
 > 灌进 `SseReplayBuffer`（`lib/shared/utils/sse_replay_buffer.dart`）做去重，
 > 否则重连一次日志翻一倍。
+> 日志太长、前面的行已从内存丢掉时，用 `reset(_log.lines, skipLeading: _log.droppedCount)`
+> 让它先按行数跳过那一段（两个日志页的 `_resetReplayBuffer` 都是这么写的）。
+> **灌进去的必须是面板重放的前缀**（之前 SSE 送来的内容）：`SseReplayBuffer` 第一处对不上就
+> 整个放行（宁可重复不能吞行），别的来源交给它只会叠成两份，或者恰好对上时把历史吞掉——
+> `live-logs` 的快照就是这种，见下一节。
+
+### 实时日志页：live-logs 快照与 SSE 的衔接（`TaskLiveLogPage`，APP #15 R3′）
+
+**1. 范围与触发**：`_TaskLiveLogPageState`（`lib/features/tasks/views/task_list_page.dart`）里任何改动
+「正文 `_log` 从哪来、何时整段替换、何时去重、轮询何时放弃 / 回落」的地方。这个页面同时消费面板
+三个接口（形状见 [panel-contract.md](./panel-contract.md)「实时日志」一节）。`LogStreamPage` 不在此列：
+它运行中先清空正文、只用 SSE。
+
+**2. 签名**
+
+| 接口 | 页面怎么用 |
+|---|---|
+| `GET ApiEndpoints.taskLiveLogs(id)` → `{logs, done, status}` | 首屏快照与状态；没在运行、或 SSE 出错后，每秒轮询一次 |
+| SSE `ApiEndpoints.logStream(id)`（`autoReconnect: true`，`onReconnect: _resetReplayBuffer`） | 运行中的正文：先整段历史，再实时行 |
+| `GET ApiEndpoints.taskLatestLog(id)` → `{content, …}` / 404 | 运行已结束、手里只有快照或什么都没有时回落一次 |
+
+页面状态：`_logFromSse`（正文是不是 SSE 来的）、`_liveStatus`（最近一次 live-logs 的 `status`）、
+`_pollTimer` / `_pollAttempts`；方法 `_applyLiveSnapshot`、`_startPolling`、`_fallbackToLatestLog`、
+`_resetReplayBuffer`、`_connectSSE`。
+
+**3. 契约**
+
+1. 正文任一时刻只有一个来源：快照（`_logFromSse == false`）或 SSE（`true`），**两者不拼接**。
+2. 快照只负责先给用户看点东西：`_resetReplayBuffer()` 在 `!_logFromSse` 时只 `_replayBuffer.clear()`；
+   只有 SSE 来的内容才 `reset(_log.lines, skipLeading: _log.droppedCount)`。
+3. 第一条 SSE data（`SseClient` 每条 `data:` 行回调一次，所以就是历史第一行）：
+   `_logFromSse = true` + `_log.replaceAll(newLines)`，**不过** `consume`；之后照常 `consume` → `append`。
+4. `_applyLiveSnapshot` 只在 `!_logFromSse` 时 `replaceAll(logs)`：SSE 出错降级轮询、再连上时，
+   正文仍是 SSE 的内容，重放去重对得上。
+5. `done`：`finished`、`finished-late`（面板 v3.2.0 起）都算结束 → `_done = true`、「已完成」；
+   这时若 `!_logFromSse`（这条流一行数据都没送来：live-logs 时还在跑，连上 SSE 时已经结束），
+   **保留快照**并调 `_fallbackToLatestLog()`。`reconnect` → 运行中；其它值不算结束
+   （`timeout` 显示「等待日志...」，不认识的值原样显示，见 `_statusFromStreamDone`）。
+6. 轮询每一跳在 `await` live-logs 之后、动任何状态之前先判 `identical(timer, _pollTimer)`，
+   不是当前这一轮就整跳作废；放弃分支同样只许当前这一轮执行。
+7. 放弃（`_pollAttempts >= 15` 且状态仍是「等待日志...」）：停轮询 →
+   `!_logFromSse && _liveStatus != kTaskStatusQueued` 时 `await _fallbackToLatestLog()` →
+   `_done = true`（不再跟着「有没有日志」走）、状态 `_log.isEmpty ? '暂无日志' : '已完成'`。
+8. `_fallbackToLatestLog()` 吞掉一切错误；`await` 之后 `!mounted || _logFromSse || content.isEmpty`
+   都不动正文（SSE 已经来了就以 SSE 为准）；否则归一 `\r\n`、去掉结尾空行后 `replaceAll`。
+9. `SseAuthFailure` 不降级轮询（同上一节）。
+
+**4. 校验与错误矩阵**
+
+| 场景 | 正文 | 状态 / 请求 |
+|---|---|---|
+| 运行中：几十行快照（首行半截）+ SSE 300 行历史 | 300 行，首行是历史第 1 行 | 「复制全部」= 这 300 行 |
+| 快照恰好从历史第 2 行开始、每行完整 | 历史一行不少 | — |
+| SSE 只回 `done: finished` / `finished-late` | 先留着快照，再换成 latest-log 全量 | latest-log 恰 1 次，不出现「无日志内容」 |
+| 同上，latest-log 404 | 保留快照（日志不到 4KB 时它就是全量） | 不空白 |
+| SSE 断线 → 轮询 → 再连（面板重放 305 行） | 305 行、无重复 | 共 2 条 SSE，「已完成」 |
+| 刚跑完（live-logs `logs: []`、`status: 1`） | 第 15 跳放弃时换成 latest-log | latest-log 恰 1 次，「已完成」 |
+| 刚跑完 + live-logs 每次 1.5 秒 | 同上 | 放弃后 live-logs 调用数不再增加 |
+| 刚跑完、latest-log 404 | 「无日志内容」 | AppBar「暂无日志」、不再转圈、正文不挂「等待日志输出...」 |
+| 一直排队（`status: 0.5`） | 「无日志内容」 | **不回落**（拿到的会是上一次运行的日志），「暂无日志」 |
+
+**5. 正常 / 基础 / 错误用例**
+
+- 正常：打开运行中任务 → 先看到快照 → 历史第一行到达时整段换成 SSE 内容 → 实时追加。
+- 基础：从任务列表点「运行」一个几秒就结束的任务 → live-logs 已经是空的 → 约 15 秒后回落 latest-log。
+- 错误：live-logs 说还在跑、SSE 连上时已经结束（短任务常见）→ 只回 done → 不得空白。
+  调研原案 R3「运行中不展示快照」就会在这里显示「无日志内容」，已否决。
+
+**6. 必须有的测试**（`test/features/tasks/task_live_log_page_test.dart`；造数与注入写法见
+[quality-guidelines.md](./quality-guidelines.md)「日志视图与实时日志页的测试约定」）
+
+- 快照 + 300 行历史：`totalCount == 300`、`lines.first == history.first`、剪贴板 == `history.join('\n')`；
+- 快照恰好从第 2 行开始：先自检 `snapshot == [...history.skip(1), '']`，再断言 `lines == history`。
+  它钉的是契约第 2 条——快照首行是半截时第一处就对不上，就算把快照交给去重也不会吞行，钉不住；
+- `finished`、`finished-late` 各一条：没有「无日志内容」、有「已完成」、`countOf(latestLog) == 1`、`lines == history`；
+- 矩阵其余各行各一条；慢网那条要在放弃后再推 20 秒，断言 live-logs 调用数不变、latest-log 仍是 1 次。
+
+**7. 错误 vs 正确**
+
+```dart
+// ❌ 改前：把 live-logs 快照当成重放前缀
+void _resetReplayBuffer() {
+  _replayBuffer.reset(_log.lines, skipLeading: _log.droppedCount);   // _log 还是 4KB 快照
+}
+// 首行半截 → 第一处就对不上 → 去重放行 → 快照 + 整段历史叠成两份（300 行显示成 354 行）。
+// 若再配上「第一条 data 整段替换」：快照恰好从第 2 行开始时，第 2 行起逐行对上，整段历史被吞，只剩 1 行。
+```
+
+```dart
+// ✅
+void _resetReplayBuffer() {
+  if (!_logFromSse) {
+    _replayBuffer.clear();   // 快照不是前缀：等第一条 data 来了整段换掉
+    return;
+  }
+  _replayBuffer.reset(_log.lines, skipLeading: _log.droppedCount);
+}
+```
+
+```dart
+// ❌ 轮询回调 await 之后不判这一跳是否过期
+final resp = await DioClient.instance.dio.get(ApiEndpoints.taskLiveLogs(widget.taskId));
+_applyLiveSnapshot(extractData(resp.data));
+// 慢过 1 秒的上一跳在「放弃 + 回落」之后才回来：空快照盖掉回落的正文 → 重新拉起轮询
+// → 15 秒后再回落……无限循环，每轮都重拉一遍最近一次日志。
+// ✅ await 之后、动任何状态之前：
+if (!identical(timer, _pollTimer)) return;
+```
 
 ---
 
