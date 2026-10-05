@@ -14,7 +14,7 @@ import '../utils/log_line_buffer.dart';
 /// 与面板 Web 端 useLogAutoFollow 的取值思路一致（它是 40，容器内边距更大）。
 const double kLogFollowTolerance = 32;
 
-/// 回到底部时，锚点下方只放最后这么多行。
+/// 回到底部时，锚点下方只放最后这么多行；跟随期间锚点也随尾部滑动，一直保持这么多行。
 ///
 /// 按行高不定的懒加载列表，跳到很远的偏移要把中间每一行都布局一遍
 /// （几千行就是明显的一顿）。所以「回到底部」不直接跳，而是把锚点挪到末尾附近：
@@ -27,7 +27,8 @@ const int _kTailWindow = 200;
 /// 跟随规则：
 /// - 停在底部（误差 [kLogFollowTolerance] 以内）时，新日志到来自动贴底；
 /// - 用户手动往上翻，就不再跟随，新日志只往下面接，眼前的内容一动不动；
-/// - 手动滚回底部、或点「回到底部」按钮，恢复跟随。
+/// - 手动滚回底部、或点「回到底部」按钮，恢复跟随；
+/// - 选中了文字（长按 / 拖选）时暂停跟随，选区清掉后接着跟（APP #15）。
 ///
 /// 「是不是用户在滚」只认手势（拖动 / 惯性 / 滚轮），程序自己的贴底跳转不算：
 /// 内容变高不会改变滚动位置，只有用户操作才会让它离开底部。
@@ -85,9 +86,26 @@ class _LogViewState extends State<LogView> {
   int _sliverGeneration = 0;
   int _bufferGeneration = 0;
 
+  /// 锚点是否紧贴尾部：下方列表恰好是最后 [_kTailWindow] 行（APP #15）。
+  ///
+  /// 只有紧贴着，跟随时才能原地滑锚点。不紧贴（刚恢复跟随，或手势、选区期间
+  /// 新行接在下方列表末尾、锚点没滑）时原地滑会让下方列表一下子缩短，
+  /// 屏幕附近已经排好版的行全部被回收、从第 0 行重排，所以一律走「回到底部」重建。
+  bool _glued = false;
+
   bool _following = true;
   bool _userScrolling = false;
   bool _stickScheduled = false;
+
+  /// 用户有没有选中文字（长按 / 拖选）。
+  ///
+  /// 有选区时按「不跟随」处理：不滑锚点、不贴底，并暂缓裁剪。锚点一滑，
+  /// 屏幕上每一行都会换成别的内容，选区还停在原来那几个位置上，
+  /// 选中的字就成了下一行的字，点「复制」拿到的不是用户选的那段（APP #15 核实时实测过）。
+  bool _hasSelection = false;
+
+  /// 换锚点重建列表时要顺手清掉选区，靠它拿到 SelectionArea 里的选区状态。
+  final _selectionAreaKey = GlobalKey<SelectionAreaState>();
 
   @override
   void initState() {
@@ -136,6 +154,7 @@ class _LogViewState extends State<LogView> {
     }
     _anchor = math.max(buffer.droppedCount, buffer.totalCount - _kTailWindow);
     _centered = _anchor > buffer.droppedCount;
+    _glued = true;
   }
 
   void _handleBufferChanged() {
@@ -151,6 +170,23 @@ class _LogViewState extends State<LogView> {
       // 绝对行号一致，什么都不会变。
       _anchor = _anchor.clamp(buffer.droppedCount, buffer.totalCount);
     }
+    // 跟随中、手指不在屏幕上、也没有选区：锚点随尾部原地滑动（APP #15）。
+    // 以前锚点不动、新行全接在下方列表末尾，贴底一跳要把跳过的每一行都建出来排一遍版，
+    // 打开运行中的任务时历史一次涌进来几百上千行，就是明显的一顿。
+    // 滑动之后下方列表始终只放最后 _kTailWindow 行，来再多行也只重排屏幕上那几十行；
+    // 代价是平时每批新行都要重排一屏（不做滞回，日志不到一万行时稳态每帧约多一倍）。
+    if (_following && !_userScrolling && !_hasSelection) {
+      final next = math.max(
+        buffer.droppedCount,
+        buffer.totalCount - _kTailWindow,
+      );
+      if (!_glued || (next > buffer.droppedCount) != _centered) {
+        // 锚点没紧贴尾部，或者短日志第一次变长、滚动原点要换：都走「回到底部」重建。
+        _jumpToLatest();
+        return;
+      }
+      _anchor = next;
+    }
     setState(() {});
     if (_following) {
       _stickAfterFrame();
@@ -159,6 +195,14 @@ class _LogViewState extends State<LogView> {
 
   /// 「回到底部」：换锚点、从末尾附近重新布局，并恢复跟随。
   void _jumpToLatest() {
+    if (_hasSelection) {
+      // 重建会把两个列表连同选中的那几行一起回收，选区已经没有意义，顺手清掉。
+      // 不清的话「有选区」的标记会一直挂着（行被回收不会触发选区回调），跟随就恢复不了。
+      // 先改标记再清：清选区会同步回调 _handleSelectionChanged，那时它看到的已是「无选区」。
+      _hasSelection = false;
+      widget.buffer.holdTrim = !_following;
+      _selectionAreaKey.currentState?.selectableRegion.clearSelection();
+    }
     setState(() {
       _resetAnchor();
       _sliverGeneration++;
@@ -189,8 +233,64 @@ class _LogViewState extends State<LogView> {
       return;
     }
     _following = value;
-    widget.buffer.holdTrim = !value;
+    if (!value) {
+      // 不跟随期间锚点不再滑，之后新行都接在下方列表末尾，恢复跟随时得重建。
+      _glued = false;
+    }
+    // 有选区时继续暂缓裁剪，见 _hasSelection。
+    widget.buffer.holdTrim = !value || _hasSelection;
     _rebuildSoon();
+  }
+
+  /// 选区变了（长按选词、拖选、点别处清掉、复制后清掉……）。
+  void _handleSelectionChanged(SelectedContent? content) {
+    // 点一下只会落一个光标（选中内容为空串），不算选区。
+    final hasSelection = content != null && content.plainText.isNotEmpty;
+    // 视图已经拆了就别再碰缓冲区：它归页面所有，dispose 时已经把暂缓裁剪复位。
+    if (!mounted || hasSelection == _hasSelection) {
+      return;
+    }
+    _hasSelection = hasSelection;
+    // 选区保持期间也暂缓裁剪：缓冲区要是裁到锚点之前，下方列表整体错位，选中的字照样会跑。
+    widget.buffer.holdTrim = !_following || hasSelection;
+    if (!hasSelection) {
+      _resumeAfterPause();
+    }
+  }
+
+  /// 手势或选区让跟随暂停过，停下来后接着跟随。
+  ///
+  /// 暂停期间锚点没滑，新来的行都接在了下方列表末尾。只要接过行（下方列表超过尾段窗口），
+  /// 之后就不能原地滑了，标成「不紧贴」交给「回到底部」重建；
+  /// 人还停在底部时先补一次贴底，等下一批新行来了再重建。
+  void _resumeAfterPause() {
+    if (!_following || _userScrolling || _hasSelection) {
+      return;
+    }
+    final buffer = widget.buffer;
+    final anchor = _anchor.clamp(buffer.droppedCount, buffer.totalCount);
+    if (buffer.totalCount - anchor > _kTailWindow) {
+      _glued = false;
+    }
+    // 挪到这一帧之后再动：滚动结束的通知是在滚动位置内部派发的（惯性收尾时还可能正在布局），
+    // 选区回调也可能只是「先清掉、再全选」中间的一步。到时候再看一眼，暂停没真结束就什么都不做。
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !_following ||
+          _userScrolling ||
+          _hasSelection ||
+          !_controller.hasClients) {
+        return;
+      }
+      if (!_glued && !_isAtBottom(_controller.position)) {
+        // 选区保持期间没贴底，下面攒了一截：直接贴底要把攒下的每一行都排一遍版，
+        // 正是 APP #15 要消掉的那一顿，改走重建。
+        _jumpToLatest();
+        return;
+      }
+      _stickToBottom();
+    });
+    SchedulerBinding.instance.ensureVisualUpdate();
   }
 
   /// 滚动通知有可能在布局阶段派发（例如惯性滚动途中内容变高），
@@ -222,8 +322,12 @@ class _LogViewState extends State<LogView> {
 
   void _stickToBottom() {
     // 用户手指还在屏幕上（或惯性还没停）时绝不能跳：jumpTo 会打断当前手势，
-    // 日志刷得快时用户就永远拖不动。
-    if (!mounted || !_following || _userScrolling || !_controller.hasClients) {
+    // 日志刷得快时用户就永远拖不动。有选区时也不跳，否则选中的字会被带走。
+    if (!mounted ||
+        !_following ||
+        _userScrolling ||
+        _hasSelection ||
+        !_controller.hasClients) {
       return;
     }
     final position = _controller.position;
@@ -251,10 +355,8 @@ class _LogViewState extends State<LogView> {
     } else if (notification is ScrollEndNotification && _userScrolling) {
       _userScrolling = false;
       _setFollowing(_isAtBottom(notification.metrics));
-      if (_following) {
-        // 手势期间到的新日志没有贴底，停下来且仍在底部时补一次。
-        _stickAfterFrame();
-      }
+      // 手势期间到的新日志没有贴底、锚点也没滑，停下来且仍在底部时补上。
+      _resumeAfterPause();
     }
     return false;
   }
@@ -385,6 +487,9 @@ class _LogViewState extends State<LogView> {
         children: [
           Positioned.fill(
             child: SelectionArea(
+              key: _selectionAreaKey,
+              // 静态日志不跟随，用不着选区保护。
+              onSelectionChanged: widget.follow ? _handleSelectionChanged : null,
               child: Scrollbar(
                 controller: _controller,
                 child: NotificationListener<ScrollMetricsNotification>(

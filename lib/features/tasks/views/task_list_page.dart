@@ -3053,6 +3053,19 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
   /// 服务端重连一律从头重放整段历史（没有 Last-Event-ID），
   /// 靠它把重放的行抵扣掉，用户才不会看到日志翻倍。
   final _replayBuffer = SseReplayBuffer();
+
+  /// 正文里现在是不是 SSE 送来的内容，而不是 live-logs 的快照（APP #15）。
+  ///
+  /// live-logs 只回实时日志文件的最后 4KB（首行常常是半截），SSE 却从第一行重放整段历史，
+  /// 快照根本不是重放的前缀。以前把快照交给去重，第一行就对不上，
+  /// 快照和整段历史叠成两份（300 行显示成 354 行）。现在快照只负责先给用户看点东西：
+  /// 第一条 SSE 数据来了就整段换掉；之后（含出错后轮询、再连）只拿 SSE 来的内容去重，
+  /// 不再用快照覆盖它。
+  bool _logFromSse = false;
+
+  /// live-logs 最近一次回的任务状态。轮询放弃时用它判断能不能回落到最近一次日志。
+  double? _liveStatus;
+
   bool _loading = true;
   bool _done = false;
   String _statusText = '连接中...';
@@ -3121,9 +3134,14 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
       return;
     }
 
+    _liveStatus = status;
     setState(() {
       _loading = false;
-      _log.replaceAll(logs);
+      // SSE 已经送来过内容（出错后降级轮询）时不能拿快照覆盖：快照只是最后 4KB，
+      // SSE 来的才是面板重放的前缀，再连上时要靠它去重。
+      if (!_logFromSse) {
+        _log.replaceAll(logs);
+      }
       _done = done && !shouldKeepPolling;
       _statusText = shouldKeepPolling
           ? '等待日志...'
@@ -3149,7 +3167,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
       return;
     }
     _pollAttempts = 0;
-    _pollTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+    _pollTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
       _pollAttempts++;
       if (!mounted) {
         _pollTimer?.cancel();
@@ -3160,26 +3178,78 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
         final resp = await DioClient.instance.dio.get(
           ApiEndpoints.taskLiveLogs(widget.taskId),
         );
+        // 这一轮轮询已经停了或换了新的一轮（连上了 SSE、已经放弃、出错后重开）：
+        // 慢过一秒才回来的这一跳作废。否则它会拿空快照盖掉刚回落的正文、再把轮询重新拉起来，
+        // 放弃 → 回落 → 又被盖掉一直循环，每轮都重拉一遍最近一次日志。
+        if (!identical(timer, _pollTimer)) {
+          return;
+        }
         final data = extractData(resp.data);
         if (data is Map<String, dynamic>) {
           _applyLiveSnapshot(data);
         }
       } catch (_) {}
 
-      if (_pollAttempts >= 15 && mounted && _statusText == '等待日志...') {
+      // 只让当前这一轮轮询收口：请求慢过一秒时上一跳的回调可能还没走到这里，
+      // 两跳都放弃的话会把最近一次日志（可能有好几 MB）重复拉两遍。
+      if (_pollAttempts >= 15 &&
+          mounted &&
+          _statusText == '等待日志...' &&
+          identical(timer, _pollTimer)) {
         _pollTimer?.cancel();
         _pollTimer = null;
+        // 不再等了。手里只有快照或什么都没有、任务也不在排队时，回落一次最近一次日志：
+        // 面板任务一结束就删掉实时日志，live-logs 之后只会回空的
+        // （从任务列表点「运行」一个几秒就跑完的任务，进来就是这样）。
+        // 还在排队就不回落：那时拿到的是上一次运行的日志，会被当成这一次的结果。
+        if (!_logFromSse && _liveStatus != kTaskStatusQueued) {
+          await _fallbackToLatestLog();
+          if (!mounted) {
+            return;
+          }
+        }
         setState(() {
-          _done = _log.isNotEmpty;
+          // 正文与 AppBar 要说同一件事：以前 _done 跟着「有没有日志」走，没日志时
+          // AppBar 已经写着「暂无日志」，正文却还挂着「等待日志输出...」和转圈。
+          _done = true;
           _statusText = _log.isEmpty ? '暂无日志' : '已完成';
         });
       }
     });
   }
 
+  /// 回落到这个任务最近一次运行的日志（面板 latest-log，与日志详情页看到的是同一份）。
+  ///
+  /// 只在「运行已经结束、手里只有 live-logs 快照或什么都没有」时用：快照最多 4KB，
+  /// 任务结束后 live-logs 也拿不到内容了。拿不到就保持原样，不报错。
+  Future<void> _fallbackToLatestLog() async {
+    try {
+      final resp = await DioClient.instance.dio.get(
+        ApiEndpoints.taskLatestLog(widget.taskId),
+      );
+      final data = extractData(resp.data);
+      final content = data is Map ? (data['content']?.toString() ?? '') : '';
+      // 等结果的这段时间里 SSE 送来了内容，就以 SSE 的为准。
+      if (!mounted || _logFromSse || content.isEmpty) {
+        return;
+      }
+      final lines = content.replaceAll('\r\n', '\n').split('\n');
+      if (lines.last.isEmpty) {
+        lines.removeLast();
+      }
+      setState(() => _log.replaceAll(lines));
+    } catch (_) {}
+  }
+
   /// 重连前把已显示的行交给去重缓冲。日志太长时前面的行已经从内存里丢掉，
   /// 但服务端仍从第一行开始重放，要让它先按行数跳过那一段（同 LogStreamPage）。
   void _resetReplayBuffer() {
+    if (!_logFromSse) {
+      // 正文还是 live-logs 的快照（或是空的）：它不是重放的前缀，不能拿去去重，
+      // 否则整段历史会接在快照后面（见 _logFromSse）。等第一条数据来了整段换掉。
+      _replayBuffer.clear();
+      return;
+    }
     _replayBuffer.reset(_log.lines, skipLeading: _log.droppedCount);
   }
 
@@ -3204,19 +3274,34 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
             });
             return;
           }
+          // finished-late 是面板「等了一会儿才收口」的结束（面板 v3.2.0 起），对这里同样是跑完了。
+          final finished =
+              event.data == 'finished' || event.data == 'finished-late';
           setState(() {
-            _done = event.data == 'finished';
+            _done = finished;
             _statusText = _statusFromStreamDone(event.data);
           });
+          if (finished && !_logFromSse) {
+            // 这条流一行数据都没送来：live-logs 那会儿任务还在跑，连上 SSE 时已经结束了
+            // （短任务很容易碰上）。快照留着别清空（日志不到 4KB 时它就是全量），
+            // 再回落一次最近一次日志拿完整的。
+            _fallbackToLatestLog();
+          }
           return;
         }
         final newLines = event.data.replaceAll('\r\n', '\n').split('\n');
         newLines.removeWhere((l) => l.isEmpty);
         if (newLines.isEmpty) return;
-        final dedupedLines = _replayBuffer.consume(newLines);
-        if (dedupedLines.isEmpty) return;
         final wasEmpty = _log.isEmpty;
-        _log.append(dedupedLines);
+        if (_logFromSse) {
+          final dedupedLines = _replayBuffer.consume(newLines);
+          if (dedupedLines.isEmpty) return;
+          _log.append(dedupedLines);
+        } else {
+          // 第一条 SSE 数据：面板从第一行开始重放整段历史，快照整段换掉。
+          _logFromSse = true;
+          _log.replaceAll(newLines);
+        }
         // 正文由 LogView 监听缓冲区自己刷新，整页只在「从无到有」或状态变了时重建。
         if (wasEmpty || _done || _statusText != '运行中') {
           setState(() {
@@ -3275,6 +3360,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
   String _statusFromStreamDone(String value) {
     switch (value) {
       case 'finished':
+      case 'finished-late':
         return '已完成';
       case 'timeout':
         return '等待日志...';
