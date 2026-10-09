@@ -45,7 +45,7 @@ include: package:flutter_lints/flutter.yaml
 
 ### `use_build_context_synchronously` 的 5 处在哪、为什么
 
-清单以 `flutter analyze --no-pub` 实跑输出为准（最近一次：2026-08-08，7 issues）。
+清单以 `flutter analyze --no-pub` 实跑输出为准（最近一次：2026-10-09，v1.4.0 开发中，7 issues）。
 **这 5 处分两种成因，修法不同，别当成一类批量改。**
 
 #### 甲类（4 处）：判错了对象
@@ -54,7 +54,7 @@ include: package:flutter_lints/flutter.yaml
 `if (!mounted)` 保证的是 State 还在，保证不了那个对话框的 `ctx` 还挂在树上：
 
 ```dart
-// lib/features/notifications/views/notification_list_page.dart:673-674
+// lib/features/notifications/views/notification_list_page.dart:689-692
 await ref.read(notificationListProvider.notifier).update(channel.id, payload);
 if (!mounted) return;          // 判的是 State
 Navigator.of(ctx).pop();       // 用的是 builder 的 ctx → 仍然告警
@@ -67,21 +67,22 @@ Navigator.of(ctx).pop();       // 用的是 builder 的 ctx → 仍然告警
 | `security_page.dart:872` | `showDialog` 的 `dialogCtx` |
 | `user_list_page.dart:498` | `showDialog` 的 `dialogCtx` |
 
-> 行号会随任何改动漂移（2026-09-02 核过一次）。**逐条比对时以「文件 + 规则名」为准，
+> 行号会随任何改动漂移（2026-10-09 核过）。**逐条比对时以「文件 + 规则名」为准，
 > 行号只当线索**；直接跑 `flutter analyze` 拿当前清单最可靠。
 
-修法：把 `if (!mounted)` 换成 `if (!ctx.mounted)`，或者照下面的样子在 `await`
-之前先把 `Navigator` / `ScaffoldMessenger` 取出来。
+修法：照下面「正确写法」改成 `if (ctx.mounted && ModalRoute.isCurrentOf(ctx) == true) { …pop(); }`，
+页面的 `mounted` 只留给后面用页面 `context` 的提示。**只把 `if (!mounted)` 换成 `if (!ctx.mounted)` 不够**：
+lint 不再报，但弹层 / 对话框退场动画期间 `ctx.mounted` 仍为 true，连点或刚关掉就回包时会再 pop 一次、把本页弹掉。
 
 #### 乙类（1 处）：判对了，但分析器证明不了
 
-`script_list_page.dart:2973`，在 `_ScriptDebugRunSheetState`（类定义 `:2793`）的
-`build(BuildContext context)`（`:2926`）里：
+`script_list_page.dart:3222`，在 `_ScriptDebugRunSheetState`（类定义 `:3042`）的
+`build(BuildContext context)`（`:3175`）里：
 
 ```dart
 await Clipboard.setData(ClipboardData(text: _logs.join('\n')));
 if (!mounted) return;                     // State.mounted
-AppSnack.success(context, '已复制调试日志'); // :2973 — build 的 context 参数
+AppSnack.success(context, '已复制调试日志'); // :3222 — build 的 context 参数
 ```
 
 这里的 `context` **实际上就是** `State.context`，运行期没有问题。但 lint 无法证明
@@ -95,14 +96,19 @@ build 的形参与 `State.context` 同一，所以照样报 `unrelated 'mounted'
 ### `use_build_context_synchronously` 的正确写法
 
 ```dart
-// lib/features/envs/views/env_list_page.dart:1454-1472
-final rootMessenger = ScaffoldMessenger.of(context);   // await 之前先取出
-final navigator = Navigator.of(ctx);
+// lib/features/envs/views/env_list_page.dart 的 _showDetailSheet「保存」（:2031-2067，v1.4.0）
+final navigator = Navigator.of(ctx);                       // await 之前取出（ctx 是弹层 builder 的）
 await ref.read(envListProvider.notifier).update(...);
-if (!mounted) return;                                   // await 之后先判
-navigator.pop();
-rootMessenger.showSnackBar(const SnackBar(content: Text('已保存')));
+if (ctx.mounted && ModalRoute.isCurrentOf(ctx) == true) {  // 弹层：还挂着，而且仍是最上面那层路由
+  navigator.pop();
+}
+if (!mounted) return;                                      // 页面：只守后面用页面 context 的提示 / setState
+AppSnack.success(context, '已保存');                        // 页面自己的 context，不是 ctx
 ```
+
+这里原先的示例是「先存 `navigator` → `await` → 只判页面 `mounted` → `pop`」，正是 v1.4.0 修掉的写法：弹层已被用户关掉
+（或前一次回包关过）时照样 pop，弹掉的是本页。只判 `ctx.mounted` 能让 lint 闭嘴，却挡不住退场动画期间的第二次 pop。
+两半为什么都要、失败分支怎么写回弹层、要补哪两条用例，见 [component-guidelines.md](./component-guidelines.md)「`BuildContext` 跨异步使用」。
 
 ### ⚠️ 这条门禁**完全不覆盖** `android/` 下的 Kotlin
 
@@ -141,14 +147,16 @@ test/
 └── widget_test.dart                     空态 vs 错误态的渲染差异
 ```
 
-> ⚠️ **上面这棵树不是全量**，它停在第 0/1 期的形态。`test/` 下实际有 **40 个 `*_test.dart`**
-> （2026-10-04 glob），树里只画了 7 个。没画进来的包括：`features/system/system_config_schema_test.dart`、
+> ⚠️ **上面这棵树不是全量**，它停在第 0/1 期的形态。`test/` 下实际有 **43 个 `*_test.dart`、619 个用例**
+> （2026-10-09 glob + 实跑，v1.4.0 开发中），树里只画了 7 个。没画进来的包括：`features/system/system_config_schema_test.dart`、
 > `features/notifications/notify_field_schema_test.dart`、`features/tasks/cron_schema_test.dart`、
 > `features/subscriptions/subscription_auth_test.dart`、`features/envs/env_transfer_test.dart`、
 > `features/logs/raw_log_download_test.dart`、`shared/panel_enums_test.dart`、
-> `shared/duration_utils_test.dart`、`shared/utils/api_utils_test.dart`，以及日志视图那三份：
+> `shared/duration_utils_test.dart`、`shared/utils/api_utils_test.dart`，日志视图那三份：
 > `shared/utils/log_line_buffer_test.dart`、`shared/widgets/log_view_test.dart`、
-> `features/tasks/task_live_log_page_test.dart`（写法见下方「日志视图与实时日志页的测试约定」）。
+> `features/tasks/task_live_log_page_test.dart`（写法见下方「日志视图与实时日志页的测试约定」），
+> 以及 v1.4.0 新增的 `features/envs/env_sort_test.dart`、`features/envs/env_important_test.dart`、
+> `features/dashboard/trend_chart_test.dart`（写法见下方「widget 测试的写法约束」）。
 > **判断某条链路有没有测试请直接 glob `test/**/*_test.dart`，不要只看这棵树。**
 
 > `TokenRefresher` 是单例，`setUp` 里必须调 `resetForTest()`：
@@ -208,6 +216,7 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 | 触碰列表 provider | 必须有测试证明请求失败时 `error` 被设置且能被 UI 消费 |
 | 纯 UI 调整 | 不强制 |
 | 触碰日志视图（`LogView` / `LogLineBuffer` / 实时日志页） | 新分支配结构性断言与 `debugPrintLayouts` 计数，**不写计时断言**，见下方「日志视图与实时日志页的测试约定」 |
+| 触碰弹层 / 对话框里 `await` 之后的 `pop` | 「请求在飞时先把弹层关掉」「连点两下」两条 widget 用例（回包后本页仍在），见下方「widget 测试的写法约束」第 3 条 |
 | 新增 `shared/utils/` 函数 | 建议补纯函数单测（这类最容易测，已经有 `api_utils` / `duration_utils` / `sse_replay_buffer` 三份可以照抄） |
 
 **注入点已经齐了**：全库 12 个 `StateNotifier`，碰 dio 的 10 个都带 `{Dio? dio}`（见上），
@@ -271,6 +280,41 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
      「快照恰好从历史第 2 行开始」用 65 行、后 64 行每行连换行正好 64 字节（合计 4096）来造，
      并先断言这个前提成立。
 
+### widget 测试的写法约束（APP #16 起）
+
+现成写法在 `test/features/envs/env_sort_test.dart`（假服务端照抄面板语义、并发与回滚）与
+`test/features/envs/env_important_test.dart`（形状探测、弹层、窄屏与键盘）。照写会挂或测错的几处：
+
+1. **`testWidgets` 里不要直接 `await` notifier 的异步方法。** `testWidgets` 跑在 FakeAsync 里，dio 驱动的 Future 等不到，
+   会一直挂到 10 分钟超时。要写成：
+
+   ```dart
+   final container = ProviderScope.containerOf(tester.element(find.byType(EnvListPage)));
+   await tester.runAsync(() => container.read(envListProvider.notifier).load());
+   await tester.pump();
+   ```
+
+   只经 `tap` / `onReorder` 触发、随后 `pumpAndSettle` 的用例不受影响；纯 notifier 用例（`test(...)`）照常直接 `await`。
+2. **改窗口尺寸必须同时设 `tester.view.devicePixelRatio = 1.0`**，并 `addTearDown(tester.view.reset)`。默认像素比是 3.0，
+   只设 `physicalSize = Size(384, 800)` 实际只有 128×267 逻辑像素，什么都会溢出。模拟键盘弹起：
+   `tester.view.viewInsets = const FakeViewPadding(bottom: 300)` + `addTearDown(tester.view.resetViewInsets)`；
+   不溢出的断言是 `expect(tester.takeException(), isNull)`。窄屏用 384 宽：环境变量页页头在 360 宽、测试字体下
+   本来就向右溢出 22px（v1.3.9 就有，与弹层无关），用 360 的断言在改动前就是红的。
+3. **测「请求在飞时」的用户操作，用 `Completer` 挂住应答。** `FakeHttpAdapter` 的 responder 可以返回 Future：
+   `gate.future.then((_) => jsonResponse({...}))`（`ResponseBody` 的流只能读一次，每个请求现造一个）。
+   - 页面用例：发起操作 → 先断言前提（请求已发出、还没重拉、弹层还开着）→ 做那个操作（`tester.tapAt(const Offset(400, 40))`
+     点遮罩关弹层并 `pumpAndSettle` 等退场走完；或 `tap` → `pump()` → 再 `tap` 连点两下）→ `gate.complete()` →
+     `pumpAndSettle` → 断言。**还要断言回包确实处理过**（重拉次数 +1、成功提示出现），否则用例可能在空转。
+   - notifier 用例：假服务端在请求到达时完成一个 `arrived` Completer，`await arrived.future` 之后再发第二个操作
+     （`env_sort_test.dart` 的 G2 / G4）。
+4. `FakeHttpAdapter` 只记 method / path（和请求体字节数），**不记 query、也不记 `options.data`**：要断言请求体或 query，
+   就在 responder 里自己记 `options.data` / `options.queryParameters`，请求体用相等断言（`{'important': true}`），
+   「不该带某个键」用 `containsKey(...) isFalse`。造「老面板没有这个键」的列表项用空感知元素 `'important': ?important`
+   （值为 null 时整个键都不放）。
+5. 弹层里输入框还聚焦着就点「保存」且成功时，会撞上 component-guidelines.md「`BuildContext` 跨异步使用」末尾记的
+   dispose 时机问题（debug 下报「… was used after being disposed」）。只测请求体的用例先
+   `FocusManager.instance.primaryFocus?.unfocus(); await tester.pump();` 再点。
+
 ---
 
 ## 禁止的写法
@@ -298,7 +342,8 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 
 ## 必须遵守的写法
 
-1. **`await` 之后碰 `context` 先判 `mounted`**，或提前把 `ScaffoldMessenger` / `Navigator` 取出来。
+1. **`await` 之后碰 `context` 先判 `mounted`**，或提前把 `ScaffoldMessenger` / `Navigator` 取出来；
+   弹层 / 对话框关自己之前判 `ctx.mounted && ModalRoute.isCurrentOf(ctx) == true`（见 component-guidelines.md「`BuildContext` 跨异步使用」）。
 2. **模型 `fromJson` 必须防御式解析**（不做裸 `as`），见 [type-safety.md](./type-safety.md)。
 3. **错误文案统一走 `extractErrorMessage(error, fallback)`**，不要直接 `e.toString()`。
 4. **端点常量加到 `ApiEndpoints`**，带参数的写成静态方法。
@@ -315,9 +360,10 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 // lib/features/tasks/providers/task_provider.dart:234
 // 面板批量任务接口使用 task_ids 字段，不能复用环境变量的 ids 字段。
 
-// lib/features/envs/views/env_list_page.dart:161-162
-// The panel backend caps page_size at 100. Requesting a larger value
-// silently falls back to 20, which previously made the app stop after 40 rows.
+// lib/features/envs/views/env_list_page.dart:193-195
+// 一次 `all=1` 拉全（面板 v2.1.7 起认，上限 5000 条），不再按 page_size=100 逐页拉：
+// 逐页拉取不是快照，翻页途中有人排序 / 增删，会重复一行、丢一行（APP #16 已实测），
+// 而拖拽排序正是拿这份列表算锚点的。
 
 // lib/core/auth/auth_provider.dart:207
 // NAS / Nginx Proxy Manager 反代旧面板时，登录接口可能因为 CORS 来源端口不一致返回 403。
@@ -331,7 +377,8 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 > v1.3.8 拖拽排序改走 `PUT /tasks/sort` 后那句注释连同逐条写 `sort_order` 的代码一起删了。
 > 注释写的是「为什么」，前提一变它就成了反话——**改代码时同一处的注释要跟着改或删**。
 
-> 少量注释是英文（`env_list_page.dart:161`），绝大多数是中文。新注释写中文。
+> 少量注释是英文（`app_update_service.dart:106`、`:152`），绝大多数是中文。新注释写中文。
+> 原先这里举的英文例子（`env_list_page.dart` 里「page_size 上限 100」那两行）v1.4.0 改 `all=1` 时换成了上面那段中文注释。
 
 ---
 
@@ -344,7 +391,7 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 - [ ] 新增/修改的请求路径在 `ApiEndpoints` 里
 - [ ] 响应解包走 `api_utils.dart` 而不是手写 `['data']`
 - [ ] 「读取-修改-回写」的地方，未知字段被保留了
-- [ ] `await` 之后没有裸用 `context`
+- [ ] `await` 之后没有裸用 `context`；弹层回调里的 `pop` 判的是 `ctx.mounted && ModalRoute.isCurrentOf(ctx) == true`，弹层不关时失败原因写回了弹层
 - [ ] 请求失败时用户看得见原因，不是「暂无数据」也不是假的「保存成功」
 - [ ] 没有引入新的圆角取值 / 裸颜色 / 影子模型
 - [ ] 如果动了 `dio_client.dart` 的 `validateStatus`，**所有**受影响调用点都逐个确认过

@@ -100,12 +100,139 @@ final taskProvider = StateNotifierProvider<TaskNotifier, TaskListState>((ref) {
      最后在 `finally` 里 `await load()`——成功拿面板整桶重编号后的顺序，失败（跨桶 400 / 老面板 404）
      靠这次重拉把本地顺序弹回服务端顺序。它（以及 `batchSetNotify`）catch `DioException`
      只为把「面板没有这条路由」翻译成 `PanelUpgradeRequiredException`，其余照样 `rethrow`，不违反下一条。
-   - 环境变量：`env_list_page.dart` 的 `reorderLocal`（`:389`）。
+   - 环境变量：`env_list_page.dart` 的 `EnvListNotifier.moveEnv`（v1.4.0 起，取代旧的 `reorderLocal` +
+     点「完成」才提交）。骨架同 `moveTask`（乐观挪位 → 只发一次 `PUT /envs/sort` → `finally` 里 `await load()`），
+     多三条：上一次排序在飞时拒绝下一次、失败时只回滚自己写的那份乐观顺序、松手时核对拖起的那条 id。
+     它的 catch 只为回滚，照样 `rethrow`。契约见下方「环境变量拖拽排序」。
 
 3. **写操作方法本身不 try/catch，异常向上抛给 UI**。
    UI 侧用 `try { await ... } catch (error) { _showActionError(error, '...'); }`
    （`task_list_page.dart:232/253/291/308/322/331/345/1539`）。
    只有 `load()` 这类读操作在 Notifier 内部吞掉异常。
+
+### 环境变量拖拽排序：`moveEnv` 与带代次的 `load()`（APP #16，v1.4.0）
+
+**1. 范围与触发**：`lib/features/envs/views/env_list_page.dart` 里 `EnvListNotifier` 的 `load()` / `moveEnv`、
+`EnvListState.envsUnfiltered`，以及页面的 `onReorderStart` / `onReorder` / `_moveEnv`。请求体、面板语义与新老面板的差异见
+[panel-contract.md](./panel-contract.md)「`PUT /api/envs/sort`」，本节只管状态与并发。
+
+**2. 签名**
+
+```dart
+class EnvListState {
+  final bool envsUnfiltered;   // 默认 true；copyWith 不传就保留，只有 load() 成功时改写
+}
+
+class EnvListNotifier extends StateNotifier<EnvListState> {
+  int _loadSeq = 0;            // load() 的代次：只认最后发出去的那一次
+  bool _sorting = false;       // 有一次排序的 PUT + 重拉还没结束
+  Future<void> load();         // GET /api/envs?all=1[&groups][&keyword]，自己吞异常
+  Future<void> moveEnv(int oldIndex, int newIndex, {int? draggedId});
+  Future<void> setPinned(int id, bool pinned);        // move-top / cancel-top，然后 await load()
+  Future<void> setImportant(int id, bool important);  // PUT /envs/:id {important}，然后 await load()
+}
+
+// 页面 _EnvListPageState
+int? _draggingEnvId;           // onReorderStart 记下拖起那条的 id，_moveEnv 取走并清空
+```
+
+**3. 契约**
+
+`load()`：
+
+1. 开头 `final seq = ++_loadSeq;`，同一刻取 `keyword` / `selectedGroups`：请求参数与「这份列表有没有筛选」同源。
+2. 一次 `{'all': 1}`（加上 `groups` / `keyword`），不带 `page` / `page_size`、不再循环翻页（逐页拉取不是快照，见下方「分页」）。
+3. 两个 `await`（列表、分组）之后、写 state 之前判 `seq != _loadSeq` → 整份丢掉；`catch` 分支同样先判——旧请求的结果和错误都不许盖掉新的。
+4. `envs` 与 `envsUnfiltered` 只在成功分支的**同一次** `copyWith` 里写：`envsUnfiltered = 没筛选 && items.length >= paginated.total`
+   （截断时 `total` 更大；响应里没有 `total` 时 `extractPaginated` 按条数算，不会误判）。失败分支只写 `error`，两者都保留旧值。
+
+> **为什么要写进规约**：这是列表 provider 里第一个带代次的 `load()`，看着像多余防御（删掉它只有专门那 1 条用例会红）。
+> 但搜索框、分组筛选、下拉刷新、每个写操作后的重拉都会各自调 `load()`，本来就会并发；排序拿这份列表算锚点，
+> 先发后到的旧顺序一盖回来，下一次拖动就算错。先例：`task_view_provider.dart` 的 `_groupProbeSeq`、
+> `task_form_page.dart` 的 `_cronParseGeneration`。
+
+`moveEnv`（判断的**先后顺序**也是契约）：
+
+1. 越界（`oldIndex` 不在 `[0, len)`、`newIndex` 不在 `[0, len]`）或 `draggedId != null && envs[oldIndex].id != draggedId`
+   → 抛 `EnvWriteException('列表刚刷新过，请重新拖动')`。`draggedId` 为空 = TalkBack 的「上移 / 下移」（只调 `onReorder`、
+   不调 `onReorderStart`），不核对。
+2. `newIndex > oldIndex` 时先减一（`ReorderableListView` 给的是移除前的下标）；减完等于 `oldIndex` = 原地松手 → 直接返回。
+3. `_sorting` 为真 → 抛 `EnvWriteException('上一次排序还在保存，请稍候再拖')`。**必须排在原地判断之后**：从下方拖回原位时
+   Flutter 照样回调 `onReorder(i, i + 1)`，排在前面会在保存途中对一次原地松手也弹「请稍候」。
+   不排队：排队的锚点算在前一次的乐观顺序上，前一次失败后，后面的全算错。
+4. 算锚点；两侧邻居都不同桶 → 抛 `EnvWriteException('置顶变量和普通变量请分别排序；…')`，不挪位。
+5. 读 `state.envsUnfiltered` → `_sorting = true` → `state = copyWith(envs: items)`（乐观挪位，否则松手瞬间列表先弹回原位）→ PUT。
+6. PUT 抛错：`if (identical(state.envs, items)) state = copyWith(envs: before);` 然后 `rethrow`。只回滚自己写的那份：
+   期间别的 `load()` 已经换掉列表就不动，保证 `envs` 与 `envsUnfiltered` 仍来自同一次 `load()`。
+7. `finally { await load(); _sorting = false; }`：成功拿面板整桶重编号后的顺序，失败按服务端顺序弹回。`load()` 吞异常，
+   不会盖掉 PUT 的异常，`_sorting` 一定复位。
+
+页面：`onReorderStart` 只记 `_draggingEnvId`（不 `setState`）；`_moveEnv` 先取走并清空它再调 `moveEnv`；
+`EnvWriteException` → `AppSnack.warn(error.message)`，其它 → `AppSnack.error(extractErrorMessage(error, '保存排序失败'))`；
+成功不提示。「完成」按钮只切 `_sortMode`，退出时清 `_draggingEnvId`。
+
+**4. 校验与错误矩阵**
+
+| 场景 | 结果 |
+|---|---|
+| 搜索框连打两个字，两个 `load()` 并发、先发的后到 | 只认后发的那次，旧结果、旧错误都丢掉 |
+| 清空搜索词后重拉失败 | `envs` 仍是筛过的那份、`envsUnfiltered` 仍为 false，拖到最后发 `{前一条, after}` |
+| `all=1` 被截断（`total` 5001） | `envsUnfiltered` 为 false，排序按「有筛选」处理 |
+| PUT 在飞时再拖 | 拒绝（「请稍候」），PUT 仍是 1 个；原地松手不算拖 |
+| PUT 失败、紧接着的重拉也失败（断网） | 列表回到拖动前，异常是 PUT 的原话 |
+| PUT 在飞时用户改了搜索词，那次重拉先写入新列表，PUT 随后失败 | 不回滚；`envsUnfiltered` 与新列表同源 |
+| 拖拽途中列表被重拉成同条数、另一种顺序 | 松手时 id 对不上 → 拒绝，0 个 PUT |
+| 慢网下连拖第二下 | 被「请稍候」拦回去（刻意取舍，不排队） |
+
+**5. 用例**
+
+- 正常：`A B C D E` 把 B 下移 1 格 → 请求发出那一刻本地已是 `A C B D E`，1 个 PUT + 1 次 GET 后列表不变。
+- 基础：PUT 卡住时再拖一次 → 「请稍候」；放行后再拖 → 第 2 个 PUT 才发出，两个请求体按先后。
+- 错误：PUT 500 且紧接着的重拉断网 → 列表回到 `A B C D E`；不回滚的话，没保存上的顺序会一直留在屏幕上。
+
+**6. 必须有的测试**（`test/features/envs/env_sort_test.dart`；写法见 [quality-guidelines.md](./quality-guidelines.md)「widget 测试的写法约束」）
+
+- G1：清空搜索后重拉失败，仍发 `{前一条, after}`；`total: 5001` 截断时同样；`total` 等于条数或缺省时 `envsUnfiltered == true`；
+- G2：`putGate` 挂住 PUT、`onPut` 里完成 `arrived` 之后再拖 → 「请稍候」，原地松手不弹；
+  「先发后到的旧 load」：keyword `a` 的 GET 卡在 `Completer` 上、`ab` 立刻回，放行后 `envs` 仍是 `ab` 的结果、`loading == false`；
+- G3：150 条只发 1 次 GET，query 含 `all=1`、不含 `page` / `page_size`、带上 `keyword` / `groups`（在 responder 里记
+  `options.queryParameters`，`FakeHttpAdapter` 不记 query）；GET 失败时 `error` 有原因、`envs` 与 `envsUnfiltered` 不变；
+- G4：双失败回到拖动前；404 原话可取 + 重拉 1 次；「PUT 卡住期间列表已被别的 load 换掉」→ 不回滚、`envsUnfiltered` 同源；
+- G5 / G7：`draggedId: 99` 拒绝、`null`（TalkBack）照常；越界 `(9, 0)` `(0, 9)` `(-1, 2)` 同一句拒绝、0 个 PUT；
+- 页面：松手即 1 个 PUT、点「完成」不再发；拖拽途中重拉成另一种顺序（`onReorderStart!(1)` → 服务端换顺序 →
+  `await tester.runAsync(() => …load())`）→ 松手提示「列表刚刷新过，请重新拖动」、0 个 PUT。
+- 突变（实现时跑过，改回后全绿）：去掉 `_sorting`、把它挪到原地判断之前、去掉代次、去掉回滚、回滚去掉 `identical`、
+  去掉 id 核对、`onReorderStart` 不记 id、去掉越界保护、`envsUnfiltered` 读此刻的搜索词 / 不看 `total`、`load()` 换回分页
+  ——各有对应用例变红。
+
+**7. 错误 vs 正确**
+
+```dart
+// ❌ 不带代次：先发后到的旧响应盖掉新列表，下一次拖动在旧顺序上算锚点
+final response = await dio.get(ApiEndpoints.envs, queryParameters: params);
+state = state.copyWith(envs: parse(response));
+
+// ❌ 失败时无条件回滚：PUT 在飞时别的 load() 已写入新列表，旧快照把它盖回去，
+//    envs 与 envsUnfiltered 从此不是同一次 load() 写的
+} catch (_) { state = state.copyWith(envs: before); rethrow; }
+```
+
+```dart
+// ✅ load()
+final seq = ++_loadSeq;
+final response = await listFuture;
+final groups = await groupsFuture;
+if (seq != _loadSeq) return;              // catch 分支同样先判
+
+// ✅ moveEnv() 的收尾
+} catch (_) {
+  if (identical(state.envs, items)) state = state.copyWith(envs: before);
+  rethrow;
+} finally {
+  await load();
+  _sorting = false;
+}
+```
 
 ---
 
@@ -257,12 +384,16 @@ final msg = extractErrorMessage(error, '加载失败');   // api_utils.dart:44
 
 | 做法 | 例 |
 |---|---|
-| 一次性 `all=1` 全量拉 | `task_provider.dart:74`（**刻意没有 `loadMore`**，见下） |
-| 循环翻页拉完（后端 `page_size` 上限 100） | `env_list_page.dart:69-99`、`log_list_page.dart:135-158` |
-| 真·滚动加载更多 | `log_list_page.dart:98-102` `loadMore()` |
+| 一次性 `all=1` 全量拉 | 任务 `task_provider.dart:109-113`（**刻意没有 `loadMore`**，见下）；环境变量 `env_list_page.dart:184-245` 的 `load()`（v1.4.0 起，面板上限 5000，见上方「环境变量拖拽排序」） |
+| 循环翻页拉完（后端 `page_size` 上限 100） | `log_list_page.dart:165-188`（`deleteAllMatching` 取全部日志 id） |
+| 真·滚动加载更多 | `log_list_page.dart:128-132` `loadMore()` |
 
-> 注释里记录了踩坑原因：「后端 `page_size` 上限 100，请求更大值会静默退回 20，
-> 导致列表只显示 40 行」（`env_list_page.dart:161-162`）。改分页逻辑前先读这条。
+> 后端 `page_size` 超过 100 会**静默退回 20**（不报错）：环境变量列表曾因此只显示 40 行、订阅列表第 21 条起看不见
+> （`subscription_list_page.dart:78-81` 的注释；面板侧见 [panel-contract.md](./panel-contract.md)「分页」）。改分页逻辑前先读这条。
+
+> ⚠️ **逐页拉取不是快照**：翻页之间列表一变（排序、增删），拼出来的结果会重复一行、丢一行，条数还可能正好等于 `total`，
+> 循环照常结束（APP #16 实测）。环境变量页 v1.4.0 起改 `all=1` 就是因为这个——排序拿这份列表算锚点
+> （`env_list_page.dart:193-197` 的注释）。要「整张表」语义（算锚点、全选、计数）的地方不要用循环翻页。
 
 > **任务列表不要改成增量分页**（issue #107 已裁决）。分组下拉项、全选
 > 都建立在「全部任务都在内存里」这个前提上：分页会让分组项残缺、全选退化成

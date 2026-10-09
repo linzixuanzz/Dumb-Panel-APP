@@ -311,6 +311,22 @@ Future<void> _showActionError(dynamic error, String fallback) async {
 String _extractTaskError(dynamic error, String fallback) => extractErrorMessage(error, fallback);
 ```
 
+### ⚠️ 弹层会盖住页面的 SnackBar：弹层不关时，失败原因必须写回弹层
+
+`showModalBottomSheet(useRootNavigator: true)` 的弹层是根 Navigator 上的一条路由，`AppSnack` 挂在页面的
+`ScaffoldMessenger` 上——SnackBar 整块落在弹层**下面**，一个字都露不出来（v1.3.5 widget 测试量过几何：
+snack (0,528)-(800,600) 完全落在 sheet (0,244)-(800,600) 之内）。所以：
+
+- 失败时弹层**不关**（免得用户重填）的入口，原因必须写回弹层内：新建弹层写变量名输入框的 `nameError`（`errorText`），
+  详情弹层写头部下方的 `sheetError`（`AppNotice(color: AppColors.danger, icon: Icons.error_outline, text: sheetError!, accentText: true)`）。
+- **一个弹层一个错误槽**：详情弹层的「置顶」「标为重要」「启用 / 禁用」「保存」失败都写进同一个 `sheetError`。
+  不要同一个弹层里有的写回、有的只发 SnackBar（v1.3.5 遗留的正是这种不一致，v1.4.0 收口）。
+- `AppSnack.error(context, message)` 照旧发：用户把弹层关掉之后才露出来，与本页其它失败提示一致。
+- 写回前判 `ctx.mounted`（弹层自己的 context，不是 `State.mounted`）：请求没回来之前用户可以把弹层划走，
+  再 `setSheetState` 就是对已卸载的 Element 调 `setState`。
+
+成功分支怎么关弹层，见下文「`BuildContext` 跨异步使用」。
+
 ---
 
 ## 空状态 vs 错误态：全部列表已区分（v1.3.1 补齐）
@@ -561,20 +577,96 @@ widget.buffer.holdTrim = !_following || hasSelection;   // _handleSelectionChang
 
 ## `BuildContext` 跨异步使用
 
-约定是 **`await` 之后先判 `mounted`**：
+约定是 **`await` 之后，用哪个 context 就判哪个 context 还在**；弹层 / 对话框关自己之前，还要判它**仍是最上面那层路由**。
+
+### 契约：弹层回调里 `await` 之后的 `pop`（v1.4.0，APP #16）
+
+**1. 范围与触发**：`showModalBottomSheet` / `showDialog` 的 builder 里，`await` 一个请求之后要 `pop` 关掉弹层、
+`setSheetState` 写弹层内状态、或用页面 `context` 弹提示的地方。
+
+**2. 签名**：`ctx` 是弹层 builder（或其中 `StatefulBuilder`）给的 context，`mounted` / `context` 是页面 State 的。
+`ModalRoute.isCurrentOf(ctx)` 返回 `bool?`（`ctx` 不在任何 `ModalRoute` 里时是 null），所以写 `== true`。
+
+**3. 契约**
+
+1. `pop` 前判 `ctx.mounted && ModalRoute.isCurrentOf(ctx) == true`，两半都要：
+   - 只判页面的 `mounted`：弹层早被关掉（用户划走 / 点遮罩 / 前一次回包已经关过）时照样 pop，弹掉的是根 Navigator 上的
+     下一层——通常就是本页；
+   - 只判 `ctx.mounted`：弹层一关，它的路由**立刻**不再是 current，但退场动画期间（Material 底部弹层 200ms）弹层仍挂在
+     树上、`ctx.mounted` 仍为 true，挡不住连点与「刚划走就回包」。Flutter 自己的下拉关弹层（`bottom_sheet.dart` 的
+     `onClosing`）也是先判 `route.isCurrent` 再 pop。
+2. `Navigator.of(ctx)` 仍在 `await` 之前取出。
+3. 页面的 `mounted` 只守后面**用页面 context** 的提示 / `setState`：`if (!mounted) return; AppSnack.success(context, …)`。
+   提示传页面自己的 `context`，不传 `ctx`（弹层 pop 之后 `ctx` 不再挂在树上，提示会被静默丢弃）。
+4. 失败分支：弹层不关，`if (ctx.mounted) setSheetState(() => sheetError = message);`，再 `AppSnack.error(context, message)`
+   （见上文「弹层会盖住页面的 SnackBar」）。
+
+**4. 校验与错误矩阵**
+
+| 场景 | `ctx.mounted` | `isCurrentOf(ctx)` | 应有行为 |
+|---|---|---|---|
+| 请求回来时弹层还开着 | true | true | pop + 成功提示 |
+| 请求在飞时用户点遮罩 / 下拉关掉了弹层，退场动画已走完 | false | （短路） | 不 pop；页面还在 → 成功提示照弹 |
+| 连点两下：第一次回包关了弹层，第二次回包时它还在退场动画里 | true | false | 不 pop（只判 `ctx.mounted` 会把本页弹掉） |
+| 请求失败、弹层还开着 | true | true | 不 pop；原因写回弹层 + `AppSnack.error` |
+| 请求失败、弹层已被关掉 | false | — | 不 `setSheetState`；页面还在就只发 `AppSnack.error` |
+
+**5. 用例**
+
+- 正常：详情弹层点「标为重要」→ 回包 → 弹层关闭、出现「已将 X 标为重要」。
+- 基础：点了之后不等回包，点遮罩把弹层关掉 → 回包后变量页还在，提示照弹。
+- 错误：连点两下「标为重要」→ 两个回包一起到 → 第二个回包时只判 `ctx.mounted` 会再 pop 一次，变量页被弹掉。
+
+**6. 必须有的测试**（`test/features/envs/env_important_test.dart`；`Completer` 挂住应答的写法见
+quality-guidelines.md「widget 测试的写法约束」第 3 条）
+
+- 「请求在飞时先把弹层关掉」：应答挂在 `Completer` 上 → 点「标为重要」→ `tapAt(const Offset(400, 40))` 点遮罩、`pumpAndSettle`
+  等退场走完 → `gate.complete()` → `find.byType(EnvListPage)` 仍 `findsOneWidget`、`GET /api/envs` +1、成功提示出现。
+  钉的是「只判页面 `mounted`」的旧写法（这时 `ctx` 已卸载，只判 `ctx.mounted` 也能过）。
+- 「连点两下」：`tap` → `pump()` → `tap` → `pumpAndSettle`（2 个 PUT 都挂着）→ 一起放行 → 变量页仍在、`GET` +2、弹层已关。
+  钉的是 `isCurrentOf` 那半句。
+- 「标为重要」「禁用」「保存」失败各一条：弹层不关，`find.descendant(of: find.byType(BottomSheet), matching: find.text(原话))` 找得到。
+
+**7. 错误 vs 正确**
 
 ```dart
-// lib/features/envs/views/env_list_page.dart:1454-1472
-final rootMessenger = ScaffoldMessenger.of(context);   // 先取出，避免 await 后用 context
+// ❌ v1.3.9 及以前（本节原来的「正确示例」）：await 之后判的是页面
 final navigator = Navigator.of(ctx);
 await ref.read(envListProvider.notifier).update(...);
 if (!mounted) return;
-navigator.pop();
-rootMessenger.showSnackBar(const SnackBar(content: Text('已保存')));
+navigator.pop();          // 弹层已被关掉 / 正在退场时，弹掉的是本页
 ```
+
+```dart
+// ✅ lib/features/envs/views/env_list_page.dart 的 _showDetailSheet「保存」（:2031-2067）
+final navigator = Navigator.of(ctx);
+try {
+  await ref.read(envListProvider.notifier).update(...);
+  if (ctx.mounted && ModalRoute.isCurrentOf(ctx) == true) {
+    navigator.pop();
+  }
+  if (!mounted) return;
+  AppSnack.success(context, '已保存');
+} catch (error) {
+  final message = extractErrorMessage(error, '保存环境变量失败');
+  if (ctx.mounted) setSheetState(() => sheetError = message);
+  if (!mounted) return;
+  AppSnack.error(context, message);
+}
+```
+
+**现状**：v1.4.0 只改了环境变量页的 5 处（详情弹层的「置顶」「标为重要」「启用 / 禁用」「保存」，新建弹层的「创建」）。
+`user_list_page` / `subscription_list_page` / `open_api_page` / `script_list_page` 等页的弹层与对话框仍是上面 ❌ 的写法
+（已知未改），改到那里时照本节修，并补上面两条用例。
+
+> ⚠️ **已知未修（v1.3.9 就有）**：环境变量页两个弹层都在 `showModalBottomSheet(...).then(...)` 里 dispose 控制器 /
+> `FocusNode`。这个 Future 在 `pop()` 一调用就完成，弹层却还在退场动画里：输入框聚焦着时成功关弹层，失焦重建会在 debug 下
+> 撞「… was used after being disposed」（详情弹层是 `TextEditingController`，新建弹层是 `FocusNode`；release 包里该断言
+> 被编译掉）。新代码不要照抄这个 dispose 时机——等退场动画结束再释放，或让弹层自己（`StatefulWidget`）持有、在 `dispose()` 里释放。
 
 这个约定**执行得不彻底**：`flutter analyze` 仍有 **5 处** `use_build_context_synchronously`
 （清单见 quality-guidelines.md「告警基线」）。新代码必须遵守，不得让这个计数上升。
+注意 lint 只管「判没判」、不管「判得对不对」：只判 `ctx.mounted` 就能让它不再报，却挡不住上面矩阵的第 3 行。
 
 > 这里原本写的是 4 处，与 quality-guidelines.md 的 5 对不上 —— 两份文档记同一个基线时必然会漂，
 > **以 quality-guidelines.md 为准**，本文只引用不复制。

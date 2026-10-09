@@ -26,6 +26,20 @@ APP 里任何「复制了面板定义」的东西 —— 枚举表、字段表�
 | 图标 | 可以下发语义名（`"telegram"`），但 `名字 → IconData` 的映射必须编译进 APP（Flutter 图标是编译期常量）。所以收益≈0，顺手带上即可，别算进收益 |
 | 纯客户端的东西 | `app_lock` / `secure_storage` / 主题 / 本地缓存 |
 
+### 实例：面板新增一项系统配置，APP 不用发版（面板 v3.3.6 的 `cleanup_leftover_processes`）
+
+面板 v3.3.6 在 `tasks` 组新增布尔配置 `cleanup_leftover_processes`（标题「任务结束后清理残留进程」，默认 `"true"`，#159）。
+APP 系统设置页按 `GET /api/configs` 的 schema 渲染（`parseSystemConfigGroups` 只收 `registered == true` 的项），
+所以连上 v3.3.6 的面板时，这个开关**自动出现**在「任务运行」组里、能保存，APP 一行代码都不用改：
+
+- 标题取下发的 `label`、说明取 `description`，`value_type: bool` 渲染成开关；保存时写回 `"true"` / `"false"` 字符串，
+  只回写改动过的键（见下文「读取-修改-回写」）；
+- 连老面板时这一项不存在，什么都不显示，不需要任何判断。
+
+**面板侧的约束**：`description` 两端都会原样显示，不能写「仅网页端生效」这类只对一端成立的措辞
+（面板 `server/model/system_config_registry.go` 在这一行旁边写了同样的提醒）。面板新增 `registered` 配置时，
+要按「它也会出现在 APP 设置页里」来写标题和说明。
+
 ---
 
 ## 版本协商：形状探测，永远不要看版本号
@@ -191,6 +205,11 @@ schema 驱动依赖服务端下发某些键。这些键**是哪个版本引入�
 | `/api/auth/preferences` 路由 | **v3.2.4**（`09d32c1`） | 更老的面板 404（纯文本或 `{"error":"route not found"}`），读偏好当「面板不支持」 |
 | 上面那条响应里的 `list` 组 | **v3.3.1**（`05b5c4e`） | 形状探测的依据：GET 响应里 `list` 不是对象 → 不给开关、**绝不 PUT**（见下方坑 1） |
 | `list.log_open_at_bottom`（#147） | **v3.3.3** | 稀疏 JSON bool，没设过时整键省略。v3.3.1 / v3.3.2 在 GET 上和「没设过」分不出，只能看 PUT 回显（见下方坑 2）。实现在 `features/logs/utils/log_open_preference.dart` |
+| `PUT /api/envs/sort` 的空 `target_id`（不带键或 `null`） | **v1.9.0**（`efc939b`） | = 把 source 移到它所在桶（置顶区 / 普通区）的**末尾**，此时不看 `position`。APP v1.4.0 没筛选时拖到可见末尾就发它，APP 支持的所有面板都对。面板 `TestEnvSortWithoutTargetMovesSourceToEndOfItsBucket` 钉住 |
+| `PUT /api/envs/sort` 的 `position:"after"` | **v3.2.8**（`4e5b08b`） | 更老的面板请求结构里没有这个字段（全仓没有 `DisallowUnknownFields`），静默忽略、按 before 处理：落到 target **前面**一格。APP v1.4.0 永远带 `position`，但只有「有筛选 + 拖到可见末尾」才真依赖 after，见下方「`PUT /api/envs/sort`」 |
+| `GET /api/envs` 的 `all=1` | **v2.1.7**（`7fb932b`） | 一次返回全部、硬上限 **5000** 条；`total` 在截断之前数好，截断时 `total > len(data)`。比 APP 关心的最老面板 v2.2.2 早，APP v1.4.0 起环境变量页只用它 |
+| `GET /api/envs` 列表项的 `important` | **v3.3.6** | 形状探测的依据：键不在 = 面板不支持，一切「重要」界面不出现、一个 `important` 都不发（见下方「列表项的 `important`」） |
+| `PUT /api/envs/:id/move-top`、`/cancel-top` | **v1.5.0**（`c9a5081`） | 都有，但 move-top 的落点 v3.2.8 改过（见下方「置顶 / 取消置顶」）。APP v1.4.0 起在变量详情里用，也是排序跨区被拦下时的出路 |
 
 > **为什么这条值得写下来**：`parseSystemConfigGroups` 会跳过 `registered != true` 的项，
 > 一条都收不到就显示「面板没有返回任何可编辑的系统配置」。而改造前那 10 个硬编码键
@@ -234,6 +253,13 @@ APP 曾经三处写 200，其中订阅列表导致**第 21 条起看不见**。
 
 例外：`/api/deps` 的 `List` 压根不读 `page_size`，全量返回。
 
+`/api/envs` 认 `all=1`（v2.1.7 起，上限 5000，见上方兼容表）：APP v1.4.0 起环境变量页一次拉全，不再按 100 条循环翻页。
+被截断时（条数 < `total`）这份列表就不是整表，下游要按「有筛选」处理（见下方「`PUT /api/envs/sort`」契约第 4 条）。
+
+> ⚠️ **逐页拉取不是快照。** 翻页之间有人排序 / 增删，拼出来的列表会重复一行、丢一行，而且条数可能正好等于 `total`，
+> 循环照常结束、没有任何报错（APP #16 实测：106 个变量，拉完第 1 页后插一次排序再拉第 2 页，拼出 106 条，
+> `ENV_A` 出现两次、`ENV_N095` 丢了）。要拿列表算排序锚点、做全选、数「有几个重要变量」的地方，不能用逐页拼出来的列表。
+
 ---
 
 ## 权限：接口挂了什么中间件，UI 要能区分
@@ -260,6 +286,168 @@ APP 曾经三处写 200，其中订阅列表导致**第 21 条起看不见**。
 - 面板将来新增、这一版 APP 不认识的键不会被清空
 - 只读键即使被改也不回写
 - **被条件隐藏的字段不算「被清空」** —— 切换 `msg_type` 不该删掉已存的 `news_articles`
+
+---
+
+## 环境变量：拖拽排序、「重要」标记与置顶（APP #16）
+
+> 面板 v3.3.6 / APP v1.4.0 读码（2026-10-09）；版本差异用 `git show <tag>:server/handler/env.go` 逐个核过。
+> 实测数字来自 APP #16 调研（面板仓库 `.trellis/tasks/10-09-next-issue-158-159-app-16/research/app-16-env-sort.md`，只在本机）。
+> APP 侧的状态与并发约束（`moveEnv`、带代次的 `load()`）见 [hook-guidelines.md](./hook-guidelines.md)「环境变量拖拽排序」。
+
+### `PUT /api/envs/sort`：一次松手一个请求
+
+**1. 范围与触发**：改 `EnvListNotifier.moveEnv` 的锚点 / 请求体、`EnvListState.envsUnfiltered` 的算法、环境变量页的
+`onReorderStart` / `onReorder`；或面板 `server/handler/env.go` 的 `Sort` / `reorderEnvWithinSortBucket`。
+
+**2. 签名**
+
+| 面板（`Sort` → `reorderEnvWithinSortBucket`） | 行为 |
+|---|---|
+| 请求体 `{source_id, target_id: int \| null, position: "before" \| "after"}` | 桶 = `sort_order`（1 置顶区 / 0 普通区）；只在 source 所在的桶里挪，挪完整桶重编号（1000、2000…） |
+| `target_id` 非空 | 插到 target **前面**；`position` 是 `"after"`（不分大小写）时插到后面（v3.2.8 起）；空串、拼错、不带都按前面 |
+| `target_id` 为空（不带键或 `null`） | 移到 source 所在桶的末尾，不看 `position`（v1.9.0 起） |
+| target 与 source 不同桶 | 400「置顶项和普通项请分别排序，需要跨区移动时请使用置顶按钮」 |
+| source / target 不存在 | 404「源环境变量不存在」/「目标环境变量不存在」 |
+
+**3. 契约（APP v1.4.0）**
+
+1. 一次松手：要么**本地拦下**（不发请求、不乐观挪位、列表原样），要么恰好 1 个 `PUT /envs/sort` + 1 次重拉
+   （`GET /api/envs`，`load()` 顺带一次 `/envs/groups`）；原地松手什么都不发、也不提示。
+2. 锚点取**挪完之后看得见的邻居**（口径同网页 `envs/index.vue` 的 `onEnd`）：
+   - 后一条同桶 → `{target_id: 后一条, position: "before"}`（拖到第一位也走这一支，不再发空 target）；
+   - 否则前一条同桶 → 没筛选 `{target_id: null, position: "after"}`（= 本桶末尾）；有筛选 `{target_id: 前一条, position: "after"}`；
+   - 两侧都不同桶 = 拖进了另一个区 → 本地拦下，`AppSnack.warn('置顶变量和普通变量请分别排序；要换区，请点「完成」后在变量详情里置顶或取消置顶')`。
+3. **永远带 `position`**，空 target 配 `"after"`：target 为空时面板不看它，老面板请求结构里没有这个字段、直接忽略。
+   将来面板若要按客户端区分排序语义，凭「有没有 `position` 键」就能认出新版 APP，不用解析版本号。
+4. 「有没有筛选」只看 `EnvListState.envsUnfiltered`：**这份列表加载时**没有搜索词、没有分组筛选，**并且**没被 `all=1`
+   的 5000 条截断（条数 ≥ `total`）。不读此刻输入框里的搜索词——清空搜索后重拉还没回来（或失败）时，屏幕上仍是筛过的
+   列表；后面还有看不见的行时发空 target，会把变量甩过那些行。
+5. 成功不提示（列表本身就是反馈）；本地拦下走 `AppSnack.warn`；面板拒绝走
+   `AppSnack.error(extractErrorMessage(error, '保存排序失败'))`，列表按服务端顺序弹回。
+6. 「完成」只退出排序模式，不提交任何东西；排序模式的提示条是「长按拖拽调整顺序，松手即保存」。
+
+**4. 校验与错误矩阵**
+
+| 情况 | 面板 v3.2.8+ | 面板 v1.9.0 ~ v3.2.7（APP 关心的最老是 v2.2.2） |
+|---|---|---|
+| 后一条同桶（含拖到第一位） | 对 | 对 |
+| 没筛选、拖到可见末尾（空 target） | 对 | 对 |
+| 有筛选或被截断、拖到可见末尾（`{前一条, after}`） | 对 | **差 1 格**：落到前一条前面，重拉后如实显示 |
+| 跨区 | 本地拦下，0 个请求 | 同左 |
+| source / target 刚被别处删掉 | 404 原话 + 重拉弹回 | 同左 |
+| 别处刚改过置顶，面板上已不同桶 | 400 原话 + 重拉弹回 | 同左 |
+
+实测（调研期，锚点规则与 v1.4.0 相同的原型）：
+
+- 进程内回放面板 handler，4 张表穷举 58 种单次拖法 + 4 组连拖：v3.3.5 **62/62**，v3.2.7 **57/62**，错的 5 个全是
+  「有筛选 + `{前一条, after}`」；对照「没筛选也发 `{前一条, after}`」：v3.2.7 降到 48/62；
+- 编出真二进制走 HTTP，20 种拖法（含 4 次跨区拦截、1 组连拖）：v3.3.5 **20/20**，v3.2.7 **16/20**，错的同样全是这一类；
+- 改前的 APP（v1.2.2 ~ v1.3.9）录下真实请求体在真实例上回放，20 种拖法 **0/20**，新老面板落库结果逐个相同——是 APP 的 bug，不是面板回归。
+
+**5. 用例**
+
+- 正常：`A B C D E` 把 B 下移 1 格 → 恰 1 个 `{B, D, "before"}`，请求发出那一刻本地已是 `A C B D E`，随后重拉 1 次。
+- 基础：没筛选把 B 拖到最后 → `{B, null, "after"}`；`P1 P2 | A B C` 把 P1 拖到置顶区最后 → `{P1, null, "after"}`，P1 仍是置顶。
+- 错误：整表 `A B C D E F`、筛选后只见 `B D`，把 B 拖到可见末尾 → 必须发 `{B, D, "after"}`（整表变成 `A C D B E F`）；
+  发空 target 会落成 `A C D E F B`，越过了看不见的 E、F。
+
+**6. 必须有的测试**
+
+- APP（`test/features/envs/env_sort_test.dart`，假服务端 `_FakePanel` 照抄 `reorderEnvWithinSortBucket`，
+  `honorsAfter: false` 模拟 ≤ v3.2.7）：
+  - 请求形状：下移 1 格、拖到第一位、没筛选拖到最后（普通区 / 置顶区各一）、有筛选拖到可见末尾、原地松手 0 请求；
+    请求体用相等断言（含 `position` 键）；
+  - 穷举回放（新面板）× 4 张表：桶内拖动 → 恰 1 个 PUT + 1 次 GET、回放后的可见顺序 == 松手时的顺序；跨区（独立判据：
+    挪完后「置顶全在前」不再成立）→ `EnvWriteException`、0 个 PUT、0 次 GET、列表原样；(拖法数, 拦下数) 钉成
+    甲 (20, 0) / 乙 (20, 12) / 丙 (6, 0) / 丁 (12, 8)；
+  - 穷举回放（老面板）× 4 张表：落错位 ⇔ 请求是 `{非空 target, after}`；这种请求在没筛选的甲、乙里是 0 个，
+    有筛选的丙、丁各 2 个——钉住「没筛选从不依赖 after」；
+  - 连拖 × 4 组：逐次 await，PUT 数 == 拖动数，最终可见顺序 == 意图。
+- 面板（已有）：`server/handler/env_sort_regression_test.go` 的 `TestEnvSortWithoutTargetMovesSourceToEndOfItsBucket`
+  （5 步：不带键、显式 `null`、置顶源 `null`、普通源 `null` + after、置顶源 `null` + after）、`TestEnvSortSupportsPositionAfter`。
+- 突变（实现时跑过，改回后全绿）：锚点换回「上一行 + 不带 position + 第一位发空」→ 20 条红；没筛选也发 `{前一条, after}`
+  → 老面板甲 / 乙与「没筛选拖到最后」红；跨区不在本地拦 → 穷举乙 / 丁与页面跨区红。
+
+**7. 错误 vs 正确**
+
+```dart
+// ❌ v1.2.2 ~ v1.3.9：锚点取「落点上一行」却不带 position，只在点「完成」时发最后一次拖动
+targetId = current[targetSourceIndex].id;   // 面板是「插到 target 前面」：下移 1 格原地不动、下移 N 格只动 N-1 格
+// 拖到第一位时没有上一行 → target 为空 → 面板当成「移到本桶末尾」
+await sortEnvs(_lastMovedSourceId!, _lastMovedTargetId);   // {source_id, target_id}，没有 position
+
+// ❌ 没筛选也发 {前一条, after}：v3.2.8+ 对，≤ v3.2.7 不认 after，没筛选拖到最后也差 1 格
+// ❌ 有筛选也发空 target：变量被甩到整桶末尾，越过所有看不见的行
+```
+
+```dart
+// ✅ v1.4.0（EnvListNotifier.moveEnv）
+'target_id': nextSameBucket ? next.id : (unfiltered ? null : prev!.id),
+'position': nextSameBucket ? 'before' : 'after',   // 永远带
+```
+
+### 列表项的 `important`：形状探测，保护只在客户端
+
+**签名**
+
+| 面板（v3.3.6 起） | APP（v1.4.0 起） |
+|---|---|
+| `EnvVar.ToDict` **永远**下发 `"important": bool`，不加 omitempty（面板用例：列表项必须永远带 important 键） | `EnvVar.important` 是 `bool?`：`json['important'] is bool ? json['important'] as bool : null`；`isImportant => important == true` |
+| `PUT /api/envs/:id` 的 `important` 是 `*bool`：不传不动、`false` 是合法修改；不是布尔 → 整单 400「请求参数错误」、什么都不写；值没变 → 200「未检测到字段变更」 | `setImportant(id, important)` 的请求体**恰好**是 `{"important": true \| false}`，随后 `await load()` |
+| 删除接口不看 `important`：脚本、开放 API、MCP、ddp、老 APP 照常能删 | 保护全在客户端：单删专门确认、批删剔除 |
+| `export-all` 带 `important`；`POST /envs/import` merge **只升不降**（文件里 JSON `true` 才写 true，`false` / 没这个键都不动）、replace 按文件原样恢复 | 不单独认这个键：`env_transfer.dart` 把它放进 `extras` 原样带回，保持 JSON 布尔 |
+
+**契约（APP）**
+
+1. `important == null`（老面板 ≤ v3.3.5，或下发的不是布尔，如 `1`、`"true"`）：不显示「重要」标记、详情弹层没有
+   「标为重要」、单删 / 批删 / 替换导入的确认文案与 v1.3.9 逐字相同、**一个 `important` 都不发**。「面板支不支持」
+   就是 `important != null`，不另设 `supportsImportant` 一类的字段。
+2. 编辑「保存」的请求体（`update()`，内联字面量）**不带** `important`：面板是指针字段，不传不动；带上会用弹层打开时的旧值
+   冲掉别处（网页、弹层里的「标为重要」）刚改的标记。
+3. 单删：`isImportant` 时标题「删除重要变量」、正文「「X」已标为重要变量，常用来存脚本依赖的配置。确定仍要删除吗？删除后无法恢复。」、
+   红色按钮「仍要删除」。左滑「删除」按钮对重要变量保持可点（`_SwipeActionButton` 置灰后 `onTap` 为 null，点了毫无反应）。
+4. 批删：发请求前按当前 `envs` 里的 `isImportant` 剔除，发出去的 `ids` 不含任何重要变量。跳过 K 个时确认框
+   「选中的 N 个环境变量里有 K 个是重要变量，将跳过它们，只删除其余 M 个。」、按钮「删除 M 个」、成功提示
+   「已删除 M 个环境变量，跳过 K 个重要变量」；全是重要变量时不弹确认、不发请求、保留多选，
+   `AppSnack.warn('选中的 N 个都是重要变量，没有可删除的；确需删除请逐个左滑删除')`。
+5. 替换导入的确认框按顺序决定末尾追加哪句：列表里没有一条 `important != null` → 不追加；`envsUnfiltered`（整表，数是全的）→
+   K > 0 时「其中包括 K 个重要变量，它们也会被清空。」、K == 0 不追加；否则（有筛选或被截断，数不全）→
+   「面板上标为「重要」的变量（如果有）也会一并清空。」。合并导入不提示（面板只升不降，不会取消任何标记）。
+
+**错误 vs 正确**
+
+```dart
+// ❌ 把「没下发」当 false：老面板上照样出现「标为重要」，点了发 {important: true}——
+//    ≤ v3.3.5 不认这个键，回 200「未检测到字段变更」，APP 提示「已将 X 标为重要」，重拉后什么都没变
+important: json['important'] == true,
+// ✅ 键不在 / 不是布尔 → null；所有入口看 important != null
+important: json['important'] is bool ? json['important'] as bool : null,
+```
+
+```dart
+// ❌ 编辑保存顺手带上：弹层打开后别处改过的标记被旧值冲掉
+data: {'name': name, 'value': value, ..., 'important': env.important},
+// ✅ 只有「标为重要 / 取消重要」发它，请求体只有这一个键
+data: {'important': important},
+```
+
+**测试**：APP `test/features/envs/env_important_test.dart`（形状探测：没键 / `true` / `false` / `1` / `"true"`；老面板整页没有任何
+「重要」、删除 / 批删 / 替换确认原文案，有筛选时也不提；请求体用 `options.data` 相等断言；编辑保存的请求体
+`containsKey('important') == false`；单删、批删混合、批删全重要；替换导入两种提示）与 `env_transfer_test.dart`
+（往返后 `jsonEncode` 里是 JSON 布尔、不是字符串）；面板 `TestEnvImportantFlagCreateUpdateAndList`（列表项永远带键、
+指针语义、非布尔整单 400）。
+
+### 置顶 / 取消置顶
+
+| 端点 | ≤ v3.2.7 | v3.2.8 起 |
+|---|---|---|
+| `PUT /api/envs/:id/move-top` | 放到置顶区**最前**；对已置顶的再调一次也会挪到最前 | 追加到置顶区**末尾**；已置顶时原样返回（幂等） |
+| `PUT /api/envs/:id/cancel-top` | 挪到普通区末尾——对**没置顶**的变量也照挪 | 同左 |
+
+APP（`setPinned(id, pinned)`）只按 `EnvVar.isPinned` 选其一：没置顶才发 move-top、已置顶才发 cancel-top——两个端点都不能当
+「设成目标状态」的开关乱发（cancel-top 对没置顶的也照挪，老面板的 move-top 对已置顶的也照挪）；成功后 `await load()`。入口在变量详情弹层（「置顶 / 取消置顶」），也是排序跨区被拦下时提示里说的那条出路。
+列表卡与排序卡在名字后显示图钉（`Icons.push_pin`，琥珀色，`semanticLabel: '已置顶'`），排序时看得出哪条在置顶区。
 
 ---
 

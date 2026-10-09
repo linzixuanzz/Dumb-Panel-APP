@@ -16,7 +16,7 @@
 | `validateStatus: status < 500` 会让 401 变成「成功」 | 70 行 token 续期逻辑**一次都没执行过**，用户看到的是空白页而不是「请重新登录」 | `lib/core/network/dio_client.dart:16`、`lib/core/auth/auth_interceptor.dart:46-114` |
 | 编辑表单用空 map 重建 config 会**覆盖**未知字段 | 用户在 Web 配的 telegram proxy / wecom 参数，经 APP 保存即丢失 | `notification_list_page.dart:735-757` |
 | 主题文件不生效 | 圆角改成 0，界面 96% 的卡片纹丝不动 | 手写 `BoxDecoration` 134 处 vs `Card` 6 处 |
-| 后端 `page_size` 上限 100，超限会**静默退回 20** | 环境变量列表只显示 40 行 | `env_list_page.dart:67-69` 注释 |
+| 后端 `page_size` 上限 100，超限会**静默退回 20** | 环境变量列表只显示 40 行（订阅列表第 21 条起看不见是同一个坑） | `subscription_list_page.dart:78-81` 注释、[panel-contract.md](../frontend/panel-contract.md)「分页」；环境变量页 v1.4.0 起改用 `all=1` 一次拉全，不再翻页（`env_list_page.dart:193-197` 注释） |
 
 这些都不是「写错了」，是「没往那儿想」。
 
@@ -41,6 +41,7 @@
 - [ ] 你在做「读取 → 修改 → 回写」（这是本仓库丢过数据的地方）
 - [ ] 你要动 `dio_client.dart` 的 `validateStatus`（会波及**所有**调用点）
 - [ ] 同一份内容要从两个接口拼起来（快照 + 流、详情 + 流），或要拿已显示的内容给重连重放去重
+- [ ] 你要拿一份列表算排序锚点、做全选或计数，而它可能是逐页拼的、被筛选过或被上限截断的
 
 → 读 [跨层思考清单](./cross-layer-thinking-guide.md)
 
