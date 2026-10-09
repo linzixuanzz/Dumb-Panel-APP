@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:daidai_app/core/network/api_endpoints.dart';
 import 'package:daidai_app/core/theme/app_theme.dart';
 import 'package:daidai_app/features/envs/views/env_list_page.dart';
@@ -38,7 +40,7 @@ class _Call {
   final Object? data;
 }
 
-/// 假面板：列表 GET 恒回 [rows]，写操作一律回 200（不落库）；可以按请求让它失败。
+/// 假面板：列表 GET 恒回 [rows]，写操作一律回 200（不落库）；可以按请求让它失败、或挂住不回。
 class _FakePanel {
   _FakePanel(this.rows);
 
@@ -48,13 +50,21 @@ class _FakePanel {
   /// 设了就先问它：返回非 null 就用它应答（模拟面板拒绝）。
   ResponseBody? Function(RequestOptions options)? reject;
 
+  /// 设了就最先问它：返回非 null 就挂到这个 Future 完成、拿它的结果应答（模拟请求在飞、
+  /// 迟迟不回）。ResponseBody 的流只能读一次，每个请求都要现造一个。
+  Future<ResponseBody>? Function(RequestOptions options)? hold;
+
   List<_Call> callsOf(String method, String path) => [
     for (final call in calls)
       if (call.method == method && call.path == path) call,
   ];
 
-  ResponseBody handle(RequestOptions options) {
+  FutureOr<ResponseBody> handle(RequestOptions options) {
     calls.add(_Call(options.method, options.path, options.data));
+    final held = hold?.call(options);
+    if (held != null) {
+      return held;
+    }
     final rejected = reject?.call(options);
     if (rejected != null) {
       return rejected;
@@ -130,7 +140,8 @@ Future<void> _openReplaceConfirm(WidgetTester tester) async {
 /// 2. 列表卡与排序卡显示「重要」与置顶图钉；
 /// 3. 详情弹层：「标为重要」的请求体恰好是 `{important: bool}`、编辑保存不带它、置顶走 move-top / cancel-top、
 ///    失败原因写回弹层（弹层会盖住页面的 SnackBar）；窄屏与键盘弹起时不溢出；
-/// 4. 单删重要变量专门确认；批量删除剔除重要项并写明跳过数；替换导入点名重要变量。
+///    回包时弹层已被关掉（划走 / 连点后已关过）就不再 pop，免得把变量页弹掉；
+/// 4.单删重要变量专门确认；批量删除剔除重要项并写明跳过数；替换导入点名重要变量。
 void main() {
   group('形状探测（模型）', () {
     test('没有 important 键 → null，isImportant 为 false', () {
@@ -485,6 +496,82 @@ void main() {
         isFalse,
         reason: '带上弹层打开时的旧值，会冲掉别处刚改过的标记',
       );
+    });
+
+    testWidgets('请求在飞时先把弹层关掉：回包后只弹提示，不许再 pop 把变量页弹掉', (tester) async {
+      final gate = Completer<void>();
+      final panel = _FakePanel([_env(2, 'PLAIN_B', important: false)])
+        ..hold = (options) =>
+            options.method == 'PUT' && options.path == ApiEndpoints.envById(2)
+            ? gate.future.then((_) => jsonResponse({'message': '操作成功'}))
+            : null;
+      await _openPage(tester, panel);
+      await tester.tap(find.text('PLAIN_B'));
+      await tester.pumpAndSettle();
+      final getsBefore = panel.callsOf('GET', ApiEndpoints.envs).length;
+
+      await tester.tap(find.text('标为重要'));
+      await tester.pumpAndSettle();
+      // 前提：PUT 已经发出、挂着没回（还没重拉），弹层还开着。
+      expect(panel.callsOf('PUT', ApiEndpoints.envById(2)), hasLength(1));
+      expect(panel.callsOf('GET', ApiEndpoints.envs), hasLength(getsBefore));
+      expect(find.byType(BottomSheet), findsOneWidget);
+
+      // 用户等不及，点弹层上方的遮罩把它关掉，并等退场动画走完。
+      await tester.tapAt(const Offset(400, 40));
+      await tester.pumpAndSettle();
+      expect(find.byType(BottomSheet), findsNothing);
+
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byType(EnvListPage),
+        findsOneWidget,
+        reason: '弹层已经关了，这时再 pop 弹掉的就是变量页自己',
+      );
+      // 回包确实处理完了（重拉过、成功提示照旧弹出），这条用例才不是空转。
+      expect(
+        panel.callsOf('GET', ApiEndpoints.envs),
+        hasLength(getsBefore + 1),
+      );
+      expect(find.text('已将 PLAIN_B 标为重要'), findsOneWidget);
+    });
+
+    testWidgets('连点两下「标为重要」：第二次回包时弹层正在退场，同样不许再 pop', (tester) async {
+      final gate = Completer<void>();
+      final panel = _FakePanel([_env(2, 'PLAIN_B', important: false)])
+        ..hold = (options) =>
+            options.method == 'PUT' && options.path == ApiEndpoints.envById(2)
+            ? gate.future.then((_) => jsonResponse({'message': '操作成功'}))
+            : null;
+      await _openPage(tester, panel);
+      await tester.tap(find.text('PLAIN_B'));
+      await tester.pumpAndSettle();
+      final getsBefore = panel.callsOf('GET', ApiEndpoints.envs).length;
+
+      await tester.tap(find.text('标为重要'));
+      await tester.pump();
+      await tester.tap(find.text('标为重要'));
+      await tester.pumpAndSettle();
+      expect(panel.callsOf('PUT', ApiEndpoints.envById(2)), hasLength(2));
+
+      // 两个回包一起放行：第一个关掉弹层；第二个到时弹层还在退场动画里、仍挂在树上，
+      // 只判 ctx.mounted 就会再 pop 一次，把变量页弹掉。
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byType(EnvListPage),
+        findsOneWidget,
+        reason: '弹层只能关一次，第二次 pop 弹掉的就是变量页',
+      );
+      // 两个回包都处理完了（各重拉一次），弹层确实被第一个关掉了。
+      expect(
+        panel.callsOf('GET', ApiEndpoints.envs),
+        hasLength(getsBefore + 2),
+      );
+      expect(find.byType(BottomSheet), findsNothing);
     });
   });
 

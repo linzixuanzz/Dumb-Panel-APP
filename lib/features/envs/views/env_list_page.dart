@@ -1778,10 +1778,19 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                 await ref
                                     .read(envListProvider.notifier)
                                     .setPinned(env.id, !env.isPinned);
+                                // 关弹层只看弹层自己，弹提示只看页面（mounted），同下面 catch 的写法。
+                                // 请求在飞时用户可能已把弹层划走 / 点遮罩关掉，或者连点了两下、
+                                // 前一次回包已经关过它；这时再 pop，弹掉的是根 Navigator 上的
+                                // 下一层（通常就是本页）。退场动画期间（约 200ms）弹层仍挂在树上，
+                                // 光判 ctx.mounted 不够，还要看它是不是最上面那层
+                                // （Flutter 自己下拉关弹层时也是这么判的）。
+                                if (ctx.mounted &&
+                                    ModalRoute.isCurrentOf(ctx) == true) {
+                                  navigator.pop();
+                                }
                                 if (!mounted) {
                                   return;
                                 }
-                                navigator.pop();
                                 AppSnack.success(
                                   context,
                                   env.isPinned
@@ -1828,10 +1837,14 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                   await ref
                                       .read(envListProvider.notifier)
                                       .setImportant(env.id, !env.isImportant);
+                                  // 只在弹层还开着时关它，理由见上面「置顶」按钮。
+                                  if (ctx.mounted &&
+                                      ModalRoute.isCurrentOf(ctx) == true) {
+                                    navigator.pop();
+                                  }
                                   if (!mounted) {
                                     return;
                                   }
-                                  navigator.pop();
                                   AppSnack.success(
                                     context,
                                     env.isImportant
@@ -1874,10 +1887,14 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                 await ref
                                     .read(envListProvider.notifier)
                                     .toggle(env.id, !env.enabled);
+                                // 只在弹层还开着时关它，理由见上面「置顶」按钮。
+                                if (ctx.mounted &&
+                                    ModalRoute.isCurrentOf(ctx) == true) {
+                                  navigator.pop();
+                                }
                                 if (!mounted) {
                                   return;
                                 }
-                                navigator.pop();
                                 // 传页面自己的 context 而不是弹层的 ctx：提示挂在根
                                 // ScaffoldMessenger 上，弹层已经 pop 掉了，用 ctx 只会
                                 // 因为它不再挂在树上而被静默丢弃。
@@ -2023,10 +2040,14 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                   remarks: remarksC.text.trim(),
                                   groups: _normalizeGroups([groupC.text]),
                                 );
+                            // 只在弹层还开着时关它，理由见上面「置顶」按钮。
+                            if (ctx.mounted &&
+                                ModalRoute.isCurrentOf(ctx) == true) {
+                              navigator.pop();
+                            }
                             if (!mounted) {
                               return;
                             }
-                            navigator.pop();
                             // 同上：弹层已 pop，只有页面自己的 context 还能弹提示。
                             AppSnack.success(context, '已保存');
                           } catch (error) {
@@ -2192,10 +2213,13 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                             remarks: remarksC.text.trim(),
                             groups: _normalizeGroups([groupC.text]),
                           );
+                      // 只在弹层还开着时关它，理由见 _showDetailSheet 里「置顶」按钮。
+                      if (ctx.mounted && ModalRoute.isCurrentOf(ctx) == true) {
+                        navigator.pop();
+                      }
                       if (!mounted) {
                         return;
                       }
-                      navigator.pop();
                       // 同上：弹层已 pop，只有页面自己的 context 还能弹提示。
                       AppSnack.success(context, '环境变量已创建');
                     } catch (error) {
