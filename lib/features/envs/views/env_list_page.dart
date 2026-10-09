@@ -30,11 +30,16 @@ const _selectedGroupUnset = Object();
 
 enum _EnvBatchAction { enable, disable, delete }
 
-/// 写操作被面板拒绝了。
+/// 写操作被面板拒绝了，或者在本地就被拦下、根本没发出去。
 ///
 /// 存在的理由：面板 `POST /envs` **不是**用 4xx 表达「这条没建成」的（见
 /// [envCreateFailureMessage]），dio 只看到 200/201，写操作必须自己把这种
 /// 「HTTP 成功但业务失败」翻译成异常，UI 的 catch 才有东西可提示。
+///
+/// 拖拽排序（[EnvListNotifier.moveEnv]，APP #16 ①）在本地拦下时也抛它：
+/// 跨区（置顶区 / 普通区互拖）、松手时列表刚刷新过、上一次排序还在保存。
+/// 这几种都没发请求，页面按「提醒」（`AppSnack.warn`）提示，不报红。
+/// 不为排序另开异常类：页面只需要区分「本地拦下」与「面板拒绝（DioException）」。
 ///
 /// 字段名叫 message 不是随手起的：`extractErrorMessage`（api_utils.dart）
 /// 取不到 `response.data['error']` 时会退回读 `error.message`，
@@ -105,6 +110,15 @@ class EnvListState {
   /// 「面板里真的一个变量都没有」和「压根没拿到数据」。
   final String? error;
 
+  /// 当前 [envs] 是不是整表（APP #16 ① 的 G1）：加载时没有搜索词、没有分组筛选，
+  /// **并且**没被 `all=1` 的 5000 条上限截断（条数 ≥ 响应里的 total）。
+  ///
+  /// 只在 `load()` 成功写入 envs 时一起写，所以它描述的是「这份列表加载时」的条件，
+  /// 不是此刻输入框里的搜索词：清空搜索后重拉还没回来（或失败）时，屏幕上仍是筛过的列表。
+  /// 拖拽排序拖到可见末尾时靠它决定发空 target（= 本桶末尾）还是 `{前一条, after}`——
+  /// 有看不见的行时发空 target，会把变量甩过那些行。
+  final bool envsUnfiltered;
+
   const EnvListState({
     this.envs = const [],
     this.total = 0,
@@ -113,6 +127,7 @@ class EnvListState {
     this.selectedGroups = const [],
     this.keyword = '',
     this.error,
+    this.envsUnfiltered = true,
   });
 
   EnvListState copyWith({
@@ -123,6 +138,7 @@ class EnvListState {
     Object? selectedGroups = _selectedGroupUnset,
     String? keyword,
     String? error,
+    bool? envsUnfiltered,
   }) {
     return EnvListState(
       envs: envs ?? this.envs,
@@ -133,6 +149,8 @@ class EnvListState {
           ? this.selectedGroups
           : selectedGroups as List<String>,
       keyword: keyword ?? this.keyword,
+      // 与 envs 同进同出：不传就保留，只有 load() 成功时才改写。
+      envsUnfiltered: envsUnfiltered ?? this.envsUnfiltered,
       // ⚠️ 这里**故意不写** `error ?? this.error`。
       // 语义选的是 TaskListState（task_provider.dart:43）那一套：
       // 任何不显式传 error 的 copyWith 都会清空错误，于是每次新请求
@@ -154,22 +172,38 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
 
   Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 
+  /// `load()` 的代次（APP #16 ① 的 G2 / G5）。搜索框、分组筛选、下拉刷新、每个写操作后的
+  /// 重拉都会各自调 `load()`，它们本来就可能并发；只认最后发出去的那一次，
+  /// 先发后到的旧响应不许盖掉新列表——排序拿这份列表算锚点，旧顺序回来就会算错。
+  /// 先例：task_view_provider 的 group 能力探测序号、task_form_page 的 `_cronParseGeneration`。
+  int _loadSeq = 0;
+
+  /// 有一次拖拽排序的 PUT + 重拉还没结束（G2）。在飞时拒绝下一次拖动，见 [moveEnv]。
+  bool _sorting = false;
+
   Future<void> load() async {
+    final seq = ++_loadSeq;
+    // G1：「这份列表有没有筛选」与请求参数同源，都取发请求这一刻的条件。
+    final keyword = state.keyword;
+    final selectedGroups = state.selectedGroups;
+    final unfiltered = keyword.isEmpty && selectedGroups.isEmpty;
     state = state.copyWith(loading: true, error: null);
     try {
       final dio = _dio;
-      // The panel backend caps page_size at 100. Requesting a larger value
-      // silently falls back to 20, which previously made the app stop after 40 rows.
-      const pageSize = 100;
-      final params = <String, dynamic>{'page': 1, 'page_size': pageSize};
-      if (state.selectedGroups.isNotEmpty) {
-        params['groups'] = state.selectedGroups.join(',');
+      // 一次 `all=1` 拉全（面板 v2.1.7 起认，上限 5000 条），不再按 page_size=100 逐页拉：
+      // 逐页拉取不是快照，翻页途中有人排序 / 增删，会重复一行、丢一行（APP #16 已实测），
+      // 而拖拽排序正是拿这份列表算锚点的。
+      // （面板的 page_size 超过 100 会静默退回 20，所以以前才写死 100 循环翻页；
+      // 现在不传 page_size，这个坑不再相关。）
+      final params = <String, dynamic>{'all': 1};
+      if (selectedGroups.isNotEmpty) {
+        params['groups'] = selectedGroups.join(',');
       }
-      if (state.keyword.isNotEmpty) {
-        params['keyword'] = state.keyword;
+      if (keyword.isNotEmpty) {
+        params['keyword'] = keyword;
       }
 
-      final firstPageFuture = dio.get(
+      final listFuture = dio.get(
         ApiEndpoints.envs,
         queryParameters: params,
       );
@@ -177,33 +211,30 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
       // 会让 Future.wait 整体失败，把已经取到的变量列表一起打成「加载失败」。
       // 两个请求仍然并发发出，但分组失败只降级成空分组。
       final groupsFuture = _fetchGroups();
-      final firstPageResponse = await firstPageFuture;
+      final response = await listFuture;
       final groups = await groupsFuture;
-
-      final paginated = extractPaginated(firstPageResponse.data);
-      final allItems = <Map<String, dynamic>>[...paginated.items];
-      var page = 2;
-      while (allItems.length < paginated.total) {
-        final nextResponse = await dio.get(
-          ApiEndpoints.envs,
-          queryParameters: {...params, 'page': page},
-        );
-        final nextPage = extractPaginated(nextResponse.data);
-        if (nextPage.items.isEmpty) {
-          break;
-        }
-        allItems.addAll(nextPage.items);
-        page++;
+      // 期间又发起过新的 load()：这次的结果已经过期，整份丢掉。
+      if (seq != _loadSeq) {
+        return;
       }
 
-      final items = allItems.map((e) => EnvVar.fromJson(e)).toList();
+      final paginated = extractPaginated(response.data);
+      final items = paginated.items.map((e) => EnvVar.fromJson(e)).toList();
       state = state.copyWith(
         envs: items,
         total: paginated.total > items.length ? paginated.total : items.length,
         loading: false,
         groups: groups,
+        // 超过 5000 条时 all=1 会被截断（total 在截断之前就数好了），
+        // 这时列表并不是整表，排序要按「有筛选」处理。
+        // 响应里取不到 total 时 extractPaginated 按条数算，不会误判成截断。
+        envsUnfiltered: unfiltered && items.length >= paginated.total,
       );
     } catch (e) {
+      // 过期的那次失败同样不算数：不能拿旧请求的错误盖掉新请求的结果。
+      if (seq != _loadSeq) {
+        return;
+      }
       // 原来这里只写 copyWith(loading: false)，错误被完全吞掉，
       // 页面退化成「暂无环境变量」，用户分不清是没数据还是拿不到数据。
       state = state.copyWith(
@@ -252,6 +283,34 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
     } else {
       await dio.put(ApiEndpoints.envDisable(id));
     }
+    await load();
+  }
+
+  /// 置顶 / 取消置顶（面板 v1.5.0 起的 `PUT /envs/:id/move-top`、`/cancel-top`）。
+  ///
+  /// 详情弹层的入口，也是排序跨区被拦下时给用户的出路（APP #16）。
+  /// 调用方只按 [EnvVar.isPinned] 选其一：cancel-top 对没置顶的变量也会把它挪到普通区末尾，
+  /// 不是「幂等的取消」。
+  Future<void> setPinned(int id, bool pinned) async {
+    final dio = _dio;
+    if (pinned) {
+      await dio.put(ApiEndpoints.envMoveTop(id));
+    } else {
+      await dio.put(ApiEndpoints.envCancelTop(id));
+    }
+    await load();
+  }
+
+  /// 标为重要 / 取消重要（面板 v3.3.6 起，APP #16 ②）。
+  ///
+  /// 请求体**只有** `important` 一个键：面板 `PUT /envs/:id` 的这个字段是指针，只带它时
+  /// 只改这一列。带上 name / value 会拿弹层打开时的旧值冲掉别处刚改过的内容。
+  /// 页面只在列表项带 `important` 键（形状探测）时才会调到这里，老面板绝不发。
+  Future<void> setImportant(int id, bool important) async {
+    await _dio.put(
+      ApiEndpoints.envById(id),
+      data: {'important': important},
+    );
     await load();
   }
 
@@ -328,6 +387,8 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
   }) async {
     await _dio.put(
       ApiEndpoints.envById(id),
+      // ⚠️ 故意不带 `important`：面板那边是指针字段，不传就不动。带上的话，
+      // 会用弹层打开时的旧值冲掉别处（网页 / 弹层里的「标为重要」）刚改过的标记。
       data: {
         'name': name,
         'value': value,
@@ -339,12 +400,94 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
     await load();
   }
 
-  Future<void> sortEnvs(int sourceId, int? targetId) async {
-    await _dio.put(
-      ApiEndpoints.envsSort,
-      data: {'source_id': sourceId, 'target_id': targetId},
-    );
-    await load();
+  /// 拖拽排序：松手即保存，一次松手恰好一个 `PUT /envs/sort` + 一次重拉（APP #16 ①）。
+  ///
+  /// 面板语义（server/handler/env.go 的 `reorderEnvWithinSortBucket`）：把 source 插到
+  /// target **前面**；`position:"after"` 插到后面（v3.2.8 起，更老的面板不认、按前面处理）；
+  /// target 为空 = 移到 source 所在桶的末尾（v1.9.0 起），这时不看 position。
+  /// 桶 = sort_order（1 置顶区 / 0 普通区），只许桶内互拖，跨桶回 400。
+  ///
+  /// 以前锚点取「落点上一行」却不带 position、拖到第一位发空 target、只在点「完成」时
+  /// 发最后一次拖动，三处叠在一起，20 种拖法 0 种对。现在锚点照网页取看得见的邻居。
+  ///
+  /// [draggedId] 是 `onReorderStart` 时记下的那条（G5）；为空 = TalkBack 的「上移 / 下移」
+  /// 语义动作（只调 onReorder、不调 onReorderStart），不核对。
+  /// 本地拦下时抛 [EnvWriteException]（不发请求、不挪位）；面板拒绝时照原样抛 DioException。
+  Future<void> moveEnv(int oldIndex, int newIndex, {int? draggedId}) async {
+    final before = state.envs;
+    // G7 越界 / G5 拖拽途中列表被重拉打断：拖起的那条已经不在这个下标上了。
+    if (oldIndex < 0 ||
+        oldIndex >= before.length ||
+        newIndex < 0 ||
+        newIndex > before.length ||
+        (draggedId != null && before[oldIndex].id != draggedId)) {
+      throw const EnvWriteException('列表刚刷新过，请重新拖动');
+    }
+    // ReorderableListView 给的 newIndex 是「移除前」的下标，往下拖要先减一。
+    if (newIndex > oldIndex) {
+      newIndex--;
+    }
+    // 原地松手：不发请求，也不提示。
+    if (newIndex == oldIndex) {
+      return;
+    }
+    // G2：上一次的 PUT + 重拉没结束前不接下一次，锚点一律在服务端确认过的顺序上算，
+    // 请求天然串行。不排队：排队的锚点算在「前一次的乐观顺序」上，前一次失败后就全算错了。
+    // 这句必须排在原地判断之后：从下方拖回原位时 Flutter 照样回调 onReorder(i, i+1)，
+    // 排在前面会在保存途中对一次原地松手也弹「请稍候」。
+    if (_sorting) {
+      throw const EnvWriteException('上一次排序还在保存，请稍候再拖');
+    }
+    final items = List<EnvVar>.from(before);
+    final source = items.removeAt(oldIndex);
+    items.insert(newIndex, source);
+    // 锚点取看得见的邻居（口径同网页 envs/index.vue 的 onEnd）。
+    final next = newIndex + 1 < items.length ? items[newIndex + 1] : null;
+    final prev = newIndex > 0 ? items[newIndex - 1] : null;
+    final nextSameBucket = next != null && next.sortOrder == source.sortOrder;
+    final prevSameBucket = prev != null && prev.sortOrder == source.sortOrder;
+    if (!nextSameBucket && !prevSameBucket) {
+      // G6：两侧都不同桶 = 真拖进了另一个区。本地拦下（不发请求、不挪位，列表原样弹回），
+      // 并告诉用户能照着做的出路。
+      throw const EnvWriteException(
+        '置顶变量和普通变量请分别排序；要换区，请点「完成」后在变量详情里置顶或取消置顶',
+      );
+    }
+    // G1：用这份列表加载时的条件，不读此刻的搜索词。
+    final unfiltered = state.envsUnfiltered;
+    _sorting = true;
+    // 先在本地挪到位（乐观更新），否则松手瞬间列表会先弹回原位、等请求回来再跳一次。
+    state = state.copyWith(envs: items);
+    try {
+      await _dio.put(
+        ApiEndpoints.envsSort,
+        data: {
+          'source_id': source.id,
+          // 后一条同桶 → 插到它前面。否则前一条必然同桶：
+          // - 没筛选：插到本桶末尾（空 target）。v1.9.0 起所有面板都认，不依赖 after；
+          // - 有筛选：后面可能还有看不见的行，只能发「插到前一条后面」。after 要 v3.2.8+，
+          //   更老的面板会落到它前面一格，重拉后如实显示（已知差 1 格）。
+          'target_id': nextSameBucket
+              ? next.id
+              : (unfiltered ? null : prev!.id),
+          // 永远带上 position：target 为空时面板不看它，老面板请求结构里没有这个字段、直接忽略。
+          'position': nextSameBucket ? 'before' : 'after',
+        },
+      );
+    } catch (_) {
+      // G4：先回滚到拖动前的顺序再重拉——PUT 与重拉都失败（断网）时，
+      // 屏幕上不能留着一份没保存上的顺序。只回滚自己写的那份乐观顺序：
+      // 期间别的 load() 已经换掉了列表，就不拿旧快照盖回去。
+      if (identical(state.envs, items)) {
+        state = state.copyWith(envs: before);
+      }
+      rethrow;
+    } finally {
+      // 成功要拿面板整桶重编号后的顺序；失败（跨区 400、变量刚被删 404）更要拉一次，
+      // 按服务端顺序弹回去。load() 自己吞异常，不会盖掉上面 rethrow 的 PUT 异常。
+      await load();
+      _sorting = false;
+    }
   }
 
   /// 导出。走面板 `GET /envs/export-all` —— 与 Web 端「导出 JSON」同一条接口。
@@ -385,14 +528,6 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
     await load();
     return EnvImportOutcome.fromResponse(response.data);
   }
-
-  void reorderLocal(int oldIndex, int newIndex) {
-    final items = List<EnvVar>.from(state.envs);
-    if (newIndex > oldIndex) newIndex--;
-    final item = items.removeAt(oldIndex);
-    items.insert(newIndex, item);
-    state = state.copyWith(envs: items);
-  }
 }
 
 class EnvListPage extends ConsumerStatefulWidget {
@@ -409,8 +544,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
 
   bool _selectionMode = false;
   bool _sortMode = false;
-  int? _lastMovedSourceId;
-  int? _lastMovedTargetId;
+
+  /// 排序模式里拖起的那条变量的 id（`onReorderStart` 记下，松手时 [_moveEnv] 取走）。
+  /// 拖拽途中列表被重拉成另一种顺序时，松手给的下标就对不上了，靠它核对（APP #16 ① 的 G5）。
+  int? _draggingEnvId;
 
   Widget _buildGroupAutocomplete({
     required TextEditingController controller,
@@ -554,12 +691,20 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     });
   }
 
-  Future<bool> _confirmBatchDelete(int count) async {
+  /// [count] 是真正要删的条数；[skipped] 是选中了、但因为是重要变量被剔掉的条数（APP #16 ②）。
+  Future<bool> _confirmBatchDelete(int count, {int skipped = 0}) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogCtx) => AlertDialog(
         title: const Text('批量删除'),
-        content: Text('确定删除选中的 $count 个环境变量吗？'),
+        // 有被跳过的重要变量时把账算清楚：选了几个、跳过几个、实际删几个。
+        // 没有时文案与改动前逐字相同（老面板永远走这一支）。
+        content: Text(
+          skipped > 0
+              ? '选中的 ${count + skipped} 个环境变量里有 $skipped 个是重要变量，'
+                    '将跳过它们，只删除其余 $count 个。'
+              : '确定删除选中的 $count 个环境变量吗？',
+        ),
         actions: [
           Row(
             children: [
@@ -581,7 +726,8 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                     style: FilledButton.styleFrom(
                       backgroundColor: AppColors.red500,
                     ),
-                    child: const Text('删除'),
+                    // 按钮上写明实际删几个，免得用户以为选中的全删了。
+                    child: Text(skipped > 0 ? '删除 $count 个' : '删除'),
                   ),
                 ),
               ),
@@ -595,11 +741,19 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
   }
 
   Future<bool> _confirmDelete(EnvVar env) async {
+    // 重要变量（APP #16 ②）单独一套措辞：点名它是重要变量、按钮写「仍要删除」。
+    // 服务端不拦删除（只做客户端保护），这个确认框就是 APP 上唯一的一道防线。
+    // 老面板没有 important 键，isImportant 恒为 false，文案与改动前逐字相同。
+    final important = env.isImportant;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogCtx) => AlertDialog(
-        title: const Text('删除环境变量'),
-        content: Text('确定删除「${env.name}」吗？删除后无法恢复。'),
+        title: Text(important ? '删除重要变量' : '删除环境变量'),
+        content: Text(
+          important
+              ? '「${env.name}」已标为重要变量，常用来存脚本依赖的配置。确定仍要删除吗？删除后无法恢复。'
+              : '确定删除「${env.name}」吗？删除后无法恢复。',
+        ),
         actions: [
           Row(
             children: [
@@ -621,7 +775,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                     style: FilledButton.styleFrom(
                       backgroundColor: AppColors.red500,
                     ),
-                    child: const Text('删除'),
+                    child: Text(important ? '仍要删除' : '删除'),
                   ),
                 ),
               ),
@@ -677,13 +831,34 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
   }
 
   Future<void> _performBatchAction(_EnvBatchAction action) async {
-    final ids = _selectedIds.toList()..sort();
+    var ids = _selectedIds.toList()..sort();
     if (ids.isEmpty) {
       return;
     }
 
+    // 选中了、但因为是重要变量而跳过的条数（只有批量删除会跳过）。
+    var skipped = 0;
     if (action == _EnvBatchAction.delete) {
-      final confirmed = await _confirmBatchDelete(ids.length);
+      // 批量删除默认跳过重要变量（APP #16 ②）：服务端不拦，只能在发请求前剔掉。
+      // 按当前列表里的标记判断；老面板没有 important 键，什么都不剔，流程与改动前相同。
+      final importantIds = ref
+          .read(envListProvider)
+          .envs
+          .where((env) => env.isImportant)
+          .map((env) => env.id)
+          .toSet();
+      final selectedCount = ids.length;
+      ids = ids.where((id) => !importantIds.contains(id)).toList();
+      skipped = selectedCount - ids.length;
+      if (ids.isEmpty) {
+        // 全是重要变量：不弹确认、不发请求，也不退出多选，让用户自己决定要不要逐个删。
+        AppSnack.warn(
+          context,
+          '选中的 $selectedCount 个都是重要变量，没有可删除的；确需删除请逐个左滑删除',
+        );
+        return;
+      }
+      final confirmed = await _confirmBatchDelete(ids.length, skipped: skipped);
       if (!confirmed) {
         return;
       }
@@ -711,7 +886,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
       final message = switch (action) {
         _EnvBatchAction.enable => '已批量启用 ${ids.length} 个环境变量',
         _EnvBatchAction.disable => '已批量禁用 ${ids.length} 个环境变量',
-        _EnvBatchAction.delete => '已批量删除 ${ids.length} 个环境变量',
+        _EnvBatchAction.delete =>
+          skipped > 0
+              ? '已删除 ${ids.length} 个环境变量，跳过 $skipped 个重要变量'
+              : '已批量删除 ${ids.length} 个环境变量',
       };
       AppSnack.success(context, message);
     } catch (error) {
@@ -863,25 +1041,27 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     await _performBatchGroup(result);
   }
 
-  /// 保存排序结果。
+  /// 松手即保存：一次松手只发一次 `PUT /envs/sort`（见 [EnvListNotifier.moveEnv]）。
   ///
-  /// 从「完成」按钮的 onTap 里提出来，是因为提示要用页面自己的 context：
-  /// build 的 context 形参在分析器眼里和 State.mounted 不是一回事，
-  /// 写在 build 里就会多两条 use_build_context_synchronously 告警。
+  /// 写成 State 方法而不是 onReorder 里的闭包，是因为提示要用页面自己的 context：
+  /// build 的 context 形参在分析器眼里和 State.mounted 不是一回事。
   ///
-  /// 异常在这里就地消化，不往外抛：调用方在它之后还要 setState 退出排序模式，
-  /// 让异常冒出去会把界面卡在排序态。
-  Future<void> _saveSortOrder() async {
+  /// 成功不弹提示：列表本身就是反馈（同任务页）。本地拦下（跨区 / 列表刚刷新 / 上一次还在保存）
+  /// 是提醒不是失败，走 warn；面板拒绝才走 error。失败时 notifier 已按服务端顺序把列表弹回去，
+  /// 这里只负责把原因说出来。
+  Future<void> _moveEnv(int oldIndex, int newIndex) async {
+    // 取走拖起时记下的 id：这次松手用完就清，下一次拖起会重新记。
+    final draggedId = _draggingEnvId;
+    _draggingEnvId = null;
     try {
-      if (_lastMovedSourceId != null) {
-        await ref
-            .read(envListProvider.notifier)
-            .sortEnvs(_lastMovedSourceId!, _lastMovedTargetId);
-      }
+      await ref
+          .read(envListProvider.notifier)
+          .moveEnv(oldIndex, newIndex, draggedId: draggedId);
+    } on EnvWriteException catch (error) {
       if (!mounted) {
         return;
       }
-      AppSnack.success(context, '排序已保存');
+      AppSnack.warn(context, error.message);
     } catch (error) {
       if (!mounted) {
         return;
@@ -978,9 +1158,8 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     // 搜索词 / 分组筛过。最坏情况只是少给一条提醒，不影响面板的实际行为；
     // 真正会造成数据损坏的那一条（文件内同名同备注重复）只看导入文件本身，
     // 与这份列表无关 —— 见 analyzeEnvImport 的注释。
-    final existing = ref
-        .read(envListProvider)
-        .envs
+    final listState = ref.read(envListProvider);
+    final existing = listState.envs
         .map(
           (env) => EnvTransferItem(
             name: env.name,
@@ -992,6 +1171,24 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
         )
         .toList();
 
+    // 替换导入会连「重要」变量一起清空（APP #16 ②），确认框要点名。按顺序判断：
+    // 1. 列表里没有任何一条带 important 键（老面板，或筛选结果为空）→ 不提示；
+    // 2. 整表（没筛选、没被截断），数是全的 → 有几个报几个，一个都没有就不提示；
+    // 3. 有筛选或被 5000 条截断，数不全 → 只给一句笼统的提醒，不报一个错的数字。
+    String? importantNotice;
+    if (listState.envs.any((env) => env.important != null)) {
+      if (listState.envsUnfiltered) {
+        final importantCount = listState.envs
+            .where((env) => env.isImportant)
+            .length;
+        if (importantCount > 0) {
+          importantNotice = '其中包括 $importantCount 个重要变量，它们也会被清空。';
+        }
+      } else {
+        importantNotice = '面板上标为「重要」的变量（如果有）也会一并清空。';
+      }
+    }
+
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -999,6 +1196,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
       useRootNavigator: true,
       builder: (_) => _EnvImportSheet(
         existing: existing,
+        importantNotice: importantNotice,
         submit: (items, mode) => ref
             .read(envListProvider.notifier)
             .importEnvs(items: items, mode: mode),
@@ -1041,18 +1239,14 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         AppChipButton(
                           label: _sortMode ? '完成' : '排序',
                           icon: _sortMode ? Icons.check : Icons.swap_vert,
-                          onTap: () async {
-                            if (_sortMode) {
-                              await _saveSortOrder();
+                          // 每次松手已经各自保存过了（见 _moveEnv），
+                          // 「完成」只是退出排序模式，不再攒到这里统一提交。
+                          onTap: () => setState(() {
+                            _sortMode = !_sortMode;
+                            if (!_sortMode) {
+                              _draggingEnvId = null;
                             }
-                            setState(() {
-                              _sortMode = !_sortMode;
-                              if (!_sortMode) {
-                                _lastMovedSourceId = null;
-                                _lastMovedTargetId = null;
-                              }
-                            });
-                          },
+                          }),
                         ),
                       ],
                       if (!_sortMode) ...[
@@ -1311,7 +1505,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                 child: AppNotice(
                   color: AppColors.primary,
                   icon: Icons.swap_vert,
-                  text: '长按拖拽调整顺序，点击「完成」保存',
+                  text: '长按拖拽调整顺序，松手即保存',
                   accentText: true,
                 ),
               ),
@@ -1352,35 +1546,15 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                     ? ReorderableListView.builder(
                         padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
                         itemCount: state.envs.length,
-                        onReorder: (oldIndex, newIndex) {
-                          final current = List<EnvVar>.from(state.envs);
-                          if (current.isEmpty || oldIndex >= current.length) {
-                            return;
-                          }
-                          final sourceEnv = current[oldIndex];
-                          final adjustedNewIndex = newIndex > oldIndex
-                              ? newIndex - 1
-                              : newIndex;
-                          int? targetId;
-                          if (adjustedNewIndex > 0 &&
-                              adjustedNewIndex - 1 < current.length) {
-                            final targetSourceIndex =
-                                adjustedNewIndex > oldIndex
-                                ? adjustedNewIndex
-                                : adjustedNewIndex - 1;
-                            if (targetSourceIndex >= 0 &&
-                                targetSourceIndex < current.length) {
-                              targetId = current[targetSourceIndex].id;
-                            }
-                          }
-                          ref
-                              .read(envListProvider.notifier)
-                              .reorderLocal(oldIndex, newIndex);
-                          setState(() {
-                            _lastMovedSourceId = sourceEnv.id;
-                            _lastMovedTargetId = targetId;
-                          });
+                        // 拖起时记下是哪一条：拖拽途中列表可能被重拉成同条数、另一种顺序，
+                        // 松手时 _moveEnv 拿它核对下标（G5）。只是记一下，不影响界面，不用 setState。
+                        onReorderStart: (index) {
+                          final envs = ref.read(envListProvider).envs;
+                          _draggingEnvId = index < envs.length
+                              ? envs[index].id
+                              : null;
                         },
+                        onReorder: _moveEnv,
                         itemBuilder: (_, i) {
                           final env = state.envs[i];
                           // ⚠️ key 必须挂在 ReorderableListView 的直接子 widget
@@ -1407,12 +1581,36 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
-                                      Text(
-                                        env.name,
-                                        style: const TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                        ),
+                                      // 排序时更要看得出哪条是置顶：置顶区和普通区不能互拖，
+                                      // 看不出来就只能撞上「请分别排序」的提示才知道（APP #16）。
+                                      // 名字放 Flexible：名字长时名字先省略，标记不被挤掉。
+                                      Row(
+                                        children: [
+                                          Flexible(
+                                            child: Text(
+                                              env.name,
+                                              style: const TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          if (env.isPinned) ...[
+                                            const SizedBox(width: 4),
+                                            const Icon(
+                                              Icons.push_pin,
+                                              size: 14,
+                                              color: AppColors.amber500,
+                                              semanticLabel: '已置顶',
+                                            ),
+                                          ],
+                                          if (env.isImportant) ...[
+                                            const SizedBox(width: 4),
+                                            const _EnvImportantBadge(),
+                                          ],
+                                        ],
                                       ),
                                       if (env.remarks.isNotEmpty)
                                         Text(
@@ -1493,6 +1691,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     final groupC = TextEditingController(text: env.groups.join(', '));
     final groups = [...ref.read(envListProvider).groups];
     var valueEditorOpen = false;
+    // 弹层内的失败原因（APP #16）。弹层是根 Navigator 上的路由，页面的 SnackBar 被它整块盖住
+    // （v1.3.5 实测过几何），弹层不关时原因必须写回弹层里；SnackBar 照旧发，弹层关掉后才露出来。
+    // 新建弹层的 nameError 是同一个道理。
+    String? sheetError;
 
     showModalBottomSheet(
       context: context,
@@ -1510,7 +1712,16 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
               onDone: () => setSheetState(() => valueEditorOpen = false),
             );
           }
-          return Padding(
+          // 置顶按钮走任务页图钉的琥珀色。按钮文字和描边直接压在弹层白底上，
+          // 浅色模式要加深（tintFg），理由同下面的「启用」按钮。
+          final pinColor = AppSurfaces.of(ctx).tintFg(AppColors.amber500);
+          // 「重要」按钮与列表卡上的「重要」标记同一套紫：浅色 purple600、深色 purple500。
+          final importantColor = AppSurfaces.of(ctx).isLight
+              ? AppColors.purple600
+              : AppColors.purple500;
+          // 内容最后包一层 SingleChildScrollView（见本 builder 末尾）：新面板下头部三个按钮
+          // 在手机宽度会折成两行，键盘弹起时（「保存」失败多半就在这时）内容会顶出弹层底部。
+          final sheetContent = Padding(
             padding: EdgeInsets.fromLTRB(
               20,
               0,
@@ -1551,61 +1762,188 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         ),
                       ),
                     ),
-                    const Spacer(),
-                    OutlinedButton.icon(
-                      onPressed: () async {
-                        // 收紧 validateStatus 后 4xx 会抛异常，这里必须自己兜，
-                        // 否则失败时既不提示也不关闭弹层，只在控制台留一个未捕获异常。
-                        try {
-                          await ref
-                              .read(envListProvider.notifier)
-                              .toggle(env.id, !env.enabled);
-                          if (!mounted) {
-                            return;
-                          }
-                          navigator.pop();
-                          // 传页面自己的 context 而不是弹层的 ctx：提示挂在根
-                          // ScaffoldMessenger 上，弹层已经 pop 掉了，用 ctx 只会
-                          // 因为它不再挂在树上而被静默丢弃。
-                          AppSnack.success(
-                            context,
-                            env.enabled ? '已禁用 ${env.name}' : '已启用 ${env.name}',
-                          );
-                        } catch (error) {
-                          if (!mounted) {
-                            return;
-                          }
-                          AppSnack.error(
-                            context,
-                            extractErrorMessage(error, '修改环境变量状态失败'),
-                          );
-                        }
-                      },
-                      icon: Icon(
-                        env.enabled
-                            ? Icons.pause_circle_outline
-                            : Icons.play_arrow,
-                        size: 16,
-                      ),
-                      label: Text(env.enabled ? '禁用' : '启用'),
-                      // 「启用」动作走 success 绿。这里用 tintFg 而不是满强度
-                      // success：按钮文字和描边直接压在弹层白底上，满强度 success
-                      // 只有 2.13:1，比换掉的 primary（2.78:1）还差 —— 换语义不能
-                      // 顺带把可读性换没了。tintFg 浅色下正好等于 successDark，
-                      // 与上方徽章同一族绿；深色下原样返回。
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: env.enabled
-                            ? AppColors.slate600
-                            : AppSurfaces.of(ctx).tintFg(AppColors.success),
-                        side: BorderSide(
-                          color: env.enabled
-                              ? AppColors.slate300
-                              : AppSurfaces.of(ctx).tintFg(AppColors.success),
-                        ),
+                    const SizedBox(width: 8),
+                    // 三个状态动作放进 Wrap：窄屏自动折成两行，不溢出，也不挤掉左边的状态徽章。
+                    // 三个按钮同一种交互：点了立即生效、成功关弹层；失败时弹层不关、原因写回弹层。
+                    Expanded(
+                      child: Wrap(
+                        alignment: WrapAlignment.end,
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          // 置顶 / 取消置顶（APP #16）：也是排序跨区被拦下时提示里说的那条出路。
+                          OutlinedButton.icon(
+                            onPressed: () async {
+                              try {
+                                await ref
+                                    .read(envListProvider.notifier)
+                                    .setPinned(env.id, !env.isPinned);
+                                if (!mounted) {
+                                  return;
+                                }
+                                navigator.pop();
+                                AppSnack.success(
+                                  context,
+                                  env.isPinned
+                                      ? '已取消置顶 ${env.name}'
+                                      : '已置顶 ${env.name}',
+                                );
+                              } catch (error) {
+                                final message = extractErrorMessage(
+                                  error,
+                                  '修改置顶状态失败',
+                                );
+                                // 判的是 ctx 而不是 State.mounted：请求没回来之前用户可以
+                                // 把弹层划走，再 setSheetState 就是对已卸载的弹层 setState。
+                                if (ctx.mounted) {
+                                  setSheetState(() => sheetError = message);
+                                }
+                                if (!mounted) {
+                                  return;
+                                }
+                                AppSnack.error(context, message);
+                              }
+                            },
+                            // 图标同任务页左滑：已置顶给空心图钉（取消），没置顶给实心图钉。
+                            icon: Icon(
+                              env.isPinned
+                                  ? Icons.push_pin_outlined
+                                  : Icons.push_pin,
+                              size: 16,
+                            ),
+                            label: Text(env.isPinned ? '取消置顶' : '置顶'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: pinColor,
+                              side: BorderSide(color: pinColor),
+                            ),
+                          ),
+                          // 标为重要 / 取消重要（APP #16 ②）。形状探测：列表项带 important 键
+                          // （面板 v3.3.6+）才出现，老面板上这个按钮不存在，也就绝不会发这个键。
+                          // 做成按钮而不是开关：弹层里的 env 是打开时捕获的、不随列表刷新，
+                          // 开关不关弹层就得另养一份本地状态；按钮与同排两个动作保持一种交互。
+                          if (env.important != null)
+                            OutlinedButton.icon(
+                              onPressed: () async {
+                                try {
+                                  await ref
+                                      .read(envListProvider.notifier)
+                                      .setImportant(env.id, !env.isImportant);
+                                  if (!mounted) {
+                                    return;
+                                  }
+                                  navigator.pop();
+                                  AppSnack.success(
+                                    context,
+                                    env.isImportant
+                                        ? '已取消 ${env.name} 的重要标记'
+                                        : '已将 ${env.name} 标为重要',
+                                  );
+                                } catch (error) {
+                                  final message = extractErrorMessage(
+                                    error,
+                                    '修改重要标记失败',
+                                  );
+                                  if (ctx.mounted) {
+                                    setSheetState(() => sheetError = message);
+                                  }
+                                  if (!mounted) {
+                                    return;
+                                  }
+                                  AppSnack.error(context, message);
+                                }
+                              },
+                              icon: Icon(
+                                env.isImportant
+                                    ? Icons.lock_open
+                                    : Icons.lock_outline,
+                                size: 16,
+                              ),
+                              label: Text(
+                                env.isImportant ? '取消重要' : '标为重要',
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: importantColor,
+                                side: BorderSide(color: importantColor),
+                              ),
+                            ),
+                          OutlinedButton.icon(
+                            onPressed: () async {
+                              // 收紧 validateStatus 后 4xx 会抛异常，这里必须自己兜，
+                              // 否则失败时既不提示也不关闭弹层，只在控制台留一个未捕获异常。
+                              try {
+                                await ref
+                                    .read(envListProvider.notifier)
+                                    .toggle(env.id, !env.enabled);
+                                if (!mounted) {
+                                  return;
+                                }
+                                navigator.pop();
+                                // 传页面自己的 context 而不是弹层的 ctx：提示挂在根
+                                // ScaffoldMessenger 上，弹层已经 pop 掉了，用 ctx 只会
+                                // 因为它不再挂在树上而被静默丢弃。
+                                AppSnack.success(
+                                  context,
+                                  env.enabled
+                                      ? '已禁用 ${env.name}'
+                                      : '已启用 ${env.name}',
+                                );
+                              } catch (error) {
+                                final message = extractErrorMessage(
+                                  error,
+                                  '修改环境变量状态失败',
+                                );
+                                // 弹层不关，SnackBar 又被弹层盖住：原因写回弹层（v1.3.5 遗留项，
+                                // 本次加新按钮时一并收口，免得同一个弹层里两种失败提示）。
+                                if (ctx.mounted) {
+                                  setSheetState(() => sheetError = message);
+                                }
+                                if (!mounted) {
+                                  return;
+                                }
+                                AppSnack.error(context, message);
+                              }
+                            },
+                            icon: Icon(
+                              env.enabled
+                                  ? Icons.pause_circle_outline
+                                  : Icons.play_arrow,
+                              size: 16,
+                            ),
+                            label: Text(env.enabled ? '禁用' : '启用'),
+                            // 「启用」动作走 success 绿。这里用 tintFg 而不是满强度
+                            // success：按钮文字和描边直接压在弹层白底上，满强度 success
+                            // 只有 2.13:1，比换掉的 primary（2.78:1）还差 —— 换语义不能
+                            // 顺带把可读性换没了。tintFg 浅色下正好等于 successDark，
+                            // 与上方徽章同一族绿；深色下原样返回。
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: env.enabled
+                                  ? AppColors.slate600
+                                  : AppSurfaces.of(
+                                      ctx,
+                                    ).tintFg(AppColors.success),
+                              side: BorderSide(
+                                color: env.enabled
+                                    ? AppColors.slate300
+                                    : AppSurfaces.of(
+                                        ctx,
+                                      ).tintFg(AppColors.success),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
                 ),
+                if (sheetError != null) ...[
+                  const SizedBox(height: 12),
+                  AppNotice(
+                    color: AppColors.danger,
+                    icon: Icons.error_outline,
+                    text: sheetError!,
+                    accentText: true,
+                  ),
+                ],
                 const SizedBox(height: 12),
                 Text(
                   env.name,
@@ -1692,13 +2030,18 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                             // 同上：弹层已 pop，只有页面自己的 context 还能弹提示。
                             AppSnack.success(context, '已保存');
                           } catch (error) {
+                            final message = extractErrorMessage(
+                              error,
+                              '保存环境变量失败',
+                            );
+                            // 保存失败时弹层不关（免得重填），原因写回弹层，理由同上面的按钮。
+                            if (ctx.mounted) {
+                              setSheetState(() => sheetError = message);
+                            }
                             if (!mounted) {
                               return;
                             }
-                            AppSnack.error(
-                              context,
-                              extractErrorMessage(error, '保存环境变量失败'),
-                            );
+                            AppSnack.error(context, message);
                           }
                         },
                         icon: const Icon(Icons.save, size: 16),
@@ -1713,6 +2056,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
               ],
             ),
           );
+          // 内容整体可滚动。实测（411×891 加 300px 键盘）不包这层时底部溢出 17px，
+          // 再加一条失败提示溢出 69px。内容放得下时 Scrollable 不接拖动，下拉关弹层照旧；
+          // 放不下（键盘弹起）时内容区改为滚动，拖柄仍可关弹层。
+          return SingleChildScrollView(child: sheetContent);
         },
       ),
     ).then((_) {
@@ -2325,7 +2672,15 @@ class _EnvImportSheet extends StatefulWidget {
   )
   submit;
 
-  const _EnvImportSheet({required this.existing, required this.submit});
+  /// 替换导入确认框末尾追加的一句「重要变量也会被清空」（APP #16 ②）；
+  /// null = 不追加（老面板 / 面板上没有重要变量）。怎么算的见 `_showImportSheet`。
+  final String? importantNotice;
+
+  const _EnvImportSheet({
+    required this.existing,
+    required this.submit,
+    this.importantNotice,
+  });
 
   @override
   State<_EnvImportSheet> createState() => _EnvImportSheetState();
@@ -2424,13 +2779,17 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
   }
 
   Future<bool> _confirmReplace(int total) async {
+    final importantNotice = widget.importantNotice;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogCtx) => AlertDialog(
         title: const Text('替换导入'),
+        // 重要变量也在「全部」里，替换照样会清空它们（服务端不拦）——点名提醒一句。
+        // 合并导入不加：面板对 important 只升不降，合并不会取消任何标记。
         content: Text(
           '替换会先删除面板上的全部环境变量，再写入这 $total 条。\n'
-          '面板上有、而这份内容里没有的变量将无法找回。',
+          '面板上有、而这份内容里没有的变量将无法找回。'
+          '${importantNotice == null ? '' : '\n$importantNotice'}',
         ),
         actions: [
           Row(
@@ -2978,17 +3337,40 @@ class _EnvCardState extends State<_EnvCard> {
                         ),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: Text(
-                            widget.env.name,
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: widget.isLight
-                                  ? AppColors.blue600
-                                  : AppColors.blue500,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                          // 置顶图钉与「重要」标记紧跟名字（APP #16）。名字放 Flexible：
+                          // 名字长时名字先省略，标记不会被挤掉。
+                          child: Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  widget.env.name,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: widget.isLight
+                                        ? AppColors.blue600
+                                        : AppColors.blue500,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              // 同任务卡的置顶图钉。不学网页加左缘色条：
+                              // 这张卡的边框已经用来表示「多选选中」。
+                              if (widget.env.isPinned) ...[
+                                const SizedBox(width: 4),
+                                const Icon(
+                                  Icons.push_pin,
+                                  size: 14,
+                                  color: AppColors.amber500,
+                                  semanticLabel: '已置顶',
+                                ),
+                              ],
+                              if (widget.env.isImportant) ...[
+                                const SizedBox(width: 4),
+                                const _EnvImportantBadge(),
+                              ],
+                            ],
                           ),
                         ),
                         if (!widget.selectionMode) ...[
@@ -3049,6 +3431,45 @@ class _EnvCardState extends State<_EnvCard> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 「重要」标记（APP #16 ②），列表卡与排序卡共用。
+///
+/// 紫色是环境变量页还没用过的颜色（红 = 删除 / 禁用圆点，琥珀 = 置顶，蓝 = 变量名），
+/// 与仪表盘磁盘卡同一套紫（dashboard_page 的 _StatCard）。颜色之外还有锁图标和「重要」二字，
+/// 不只靠颜色区分。
+class _EnvImportantBadge extends StatelessWidget {
+  const _EnvImportantBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final isLight = AppSurfaces.of(context).isLight;
+    final foreground = isLight ? AppColors.purple600 : AppColors.purple500;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: isLight
+            ? AppColors.purple100
+            : AppColors.purple500.withAlpha(25),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.lock_outline, size: 11, color: foreground),
+          const SizedBox(width: 2),
+          Text(
+            '重要',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: foreground,
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -10,6 +10,16 @@ class EnvVar {
   final DateTime createdAt;
   final DateTime updatedAt;
 
+  /// 「重要」标记（APP #16 ②）。三种取值的含义不一样，**null 不等于 false**：
+  ///
+  /// - null：面板没下发这个键（≤ v3.3.5 的老面板）。这时一切「重要」入口都不出现、
+  ///   删除流程与改动前逐字相同，也**绝不**往面板发 `important`。
+  ///   「面板支持不支持」就看它是不是 null（形状探测，不看版本号），不另设字段。
+  /// - true / false：面板 v3.3.6 起 `ToDict` 永远下发这个布尔。
+  ///
+  /// 下发的不是布尔（`1`、`"true"` 之类）一律当没下发：未知值诚实对待，不猜。
+  final bool? important;
+
   const EnvVar({
     required this.id,
     required this.name,
@@ -21,9 +31,11 @@ class EnvVar {
     this.group = '',
     required this.createdAt,
     required this.updatedAt,
+    this.important,
   });
 
   bool get isPinned => sortOrder == 1;
+  bool get isImportant => important == true;
   List<String> get groups => _splitEnvGroups(group);
 
   factory EnvVar.fromJson(Map<String, dynamic> json) {
@@ -40,6 +52,8 @@ class EnvVar {
       group: json['group']?.toString() ?? '',
       createdAt: _date(json['created_at']) ?? DateTime.now(),
       updatedAt: _date(json['updated_at']) ?? DateTime.now(),
+      // 没有这个键 / 不是布尔 → null（形状探测，见字段注释）
+      important: json['important'] is bool ? json['important'] as bool : null,
     );
   }
 

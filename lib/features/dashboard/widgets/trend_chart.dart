@@ -117,7 +117,12 @@ class TrendChart extends StatelessWidget {
                         return Padding(
                           padding: const EdgeInsets.only(top: 6),
                           child: Text(
-                            date.length >= 5 ? date.substring(5) : date,
+                            // 面板 daily_stats[].date 一直是 5 位的 `MM-DD`
+                            // （server/handler/system.go 的 Format("01-02")，v1.0.0 起），
+                            // 原样显示。以前这里对它 substring(5) 得到空串，
+                            // 横轴对真实面板从来没画出过字。
+                            // 10 位的 `YYYY-MM-DD` 只取月日；其它形状原样显示，不猜。
+                            date.length == 10 ? date.substring(5) : date,
                             style: TextStyle(
                               fontSize: 10,
                               color: isLight

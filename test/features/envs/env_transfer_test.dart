@@ -141,6 +141,31 @@ void main() {
 
       expect(twice, once);
     });
+
+    test('important 往返：JSON 布尔原样带回导入请求，再编码逐字节不变（APP #16 ②）', () {
+      // 面板 v3.3.6 起 export-all 带 important。APP 不单独认这个键，靠 extras 原样带回：
+      // merge 导入时面板只升不降（文件里 true 才写 true），replace 按文件原样恢复。
+      // 变成字符串 "true" 的话面板认不出，标记会静默丢失。
+      const exported = '''
+[{"name":"IMPORTANT_CFG","value":"v","remarks":"","group":"","groups":[],"enabled":true,"important":true},
+ {"name":"JD_COOKIE","value":"c","remarks":"a1","group":"","groups":[],"enabled":true,"important":false}]
+''';
+
+      final parsed = parseEnvTransferJson(exported);
+      expect(parsed.ok, isTrue);
+
+      final wire = jsonEncode(
+        buildEnvImportRequest(items: parsed.items, mode: EnvImportMode.merge),
+      );
+      expect(wire, contains('"important":true'));
+      expect(wire, contains('"important":false'));
+      expect(wire, isNot(contains('"important":"true"')));
+      expect(wire, isNot(contains('"important":"false"')));
+
+      final once = encodeEnvTransferJson(parsed.items);
+      final twice = encodeEnvTransferJson(parseEnvTransferJson(once).items);
+      expect(twice, once);
+    });
   });
 
   group('与面板 import 的字段约定', () {
