@@ -9,6 +9,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # 系统菜单（复制/粘贴/全选等）中文化
+  flutter_localizations:
+    sdk: flutter
 
   cupertino_icons: ^1.0.8
 
@@ -32,7 +35,7 @@ dependencies:
   fl_chart: ^0.70.2
 
   # 工具
-  intl: ^0.19.0
+  intl: ^0.20.2
   logger: ^2.5.0
   device_info_plus: ^11.2.2
   file_picker: ^8.1.7
