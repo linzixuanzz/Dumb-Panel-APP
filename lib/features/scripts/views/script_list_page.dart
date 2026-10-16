@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui';
 
 import 'package:dio/dio.dart';
@@ -53,6 +54,27 @@ enum _ScriptEntryAction {
 enum _ScriptViewerAction { format, versions, addToTask, debug }
 
 const _stateUnset = Object();
+
+// 能在 App 里直接预览的图片扩展名（与网页端一致，SVG 仍按文本打开）。
+const _imageExtensions = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico'};
+
+// 非图片二进制（或图片解码失败）时的提示。
+class _BinaryFileHint extends StatelessWidget {
+  const _BinaryFileHint();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 28),
+        child: Text(
+          '当前文件为二进制内容，App 暂不支持预览和编辑。',
+          textAlign: TextAlign.center,
+        ),
+      ),
+    );
+  }
+}
 
 class ScriptFile {
   final String name;
@@ -132,6 +154,10 @@ class ScriptState {
   final String? selectedPath;
   final String content;
   final bool isBinary;
+
+  /// 图片文件解码后的字节，仅用于预览。⚠️ 不能放进 [content]（保存时会写回文件）。
+  /// 走 [_stateUnset] 哨兵（不传即保持），由 loadContent 显式写入或清空。
+  final Uint8List? imageBytes;
   final bool loadingContent;
   final bool saving;
 
@@ -157,6 +183,7 @@ class ScriptState {
     this.selectedPath,
     this.content = '',
     this.isBinary = false,
+    this.imageBytes,
     this.loadingContent = false,
     this.saving = false,
     this.contentError,
@@ -170,6 +197,7 @@ class ScriptState {
     Object? selectedPath = _stateUnset,
     String? content,
     bool? isBinary,
+    Object? imageBytes = _stateUnset,
     bool? loadingContent,
     bool? saving,
     Object? contentError = _stateUnset,
@@ -187,6 +215,9 @@ class ScriptState {
           : selectedPath as String?,
       content: content ?? this.content,
       isBinary: isBinary ?? this.isBinary,
+      imageBytes: identical(imageBytes, _stateUnset)
+          ? this.imageBytes
+          : imageBytes as Uint8List?,
       loadingContent: loadingContent ?? this.loadingContent,
       saving: saving ?? this.saving,
       contentError: identical(contentError, _stateUnset)
@@ -252,10 +283,24 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
       final data = extractData(resp.data);
       if (data is Map) {
         final isBinary = data['binary'] == true || data['is_binary'] == true;
+        // 图片文件：后端返回 base64，解码后单独存 imageBytes，content 仍为空、保存仍被拦截。
+        final ext = path.contains('.')
+            ? path.split('.').last.toLowerCase()
+            : '';
+        Uint8List? imageBytes;
+        if (isBinary && _imageExtensions.contains(ext)) {
+          // base64 坏了就当普通二进制处理，回落到二进制提示，不进「加载失败」错误页。
+          try {
+            imageBytes = base64Decode(data['content']?.toString() ?? '');
+          } on FormatException {
+            imageBytes = null;
+          }
+        }
         state = state.copyWith(
           selectedPath: path,
           content: isBinary ? '' : (data['content']?.toString() ?? ''),
           isBinary: isBinary,
+          imageBytes: imageBytes,
           loadingContent: false,
           error: state.error,
         );
@@ -265,6 +310,7 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
         selectedPath: path,
         content: data?.toString() ?? '',
         isBinary: false,
+        imageBytes: null,
         loadingContent: false,
         error: state.error,
       );
@@ -276,6 +322,7 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
         selectedPath: path,
         content: '',
         isBinary: false,
+        imageBytes: null,
         loadingContent: false,
         contentError: extractListErrorMessage(e, '脚本内容加载失败'),
         error: state.error,
@@ -431,7 +478,12 @@ class ScriptNotifier extends StateNotifier<ScriptState> {
     final selected = state.selectedPath;
     if (selected == path ||
         (isDirectory && (selected?.startsWith('$path/') ?? false))) {
-      state = state.copyWith(selectedPath: null, content: '', isBinary: false);
+      state = state.copyWith(
+        selectedPath: null,
+        content: '',
+        isBinary: false,
+        imageBytes: null,
+      );
     }
   }
 
@@ -2546,16 +2598,20 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                 onRetry: _reloadContent,
               ),
             )
-          : isBinary
-          ? const Center(
-              child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 28),
-                child: Text(
-                  '当前文件为二进制内容，App 暂不支持预览和编辑。',
-                  textAlign: TextAlign.center,
+          : isBinary && state.imageBytes != null
+          // 图片：双指缩放查看；不设 fit 时只缩小不放大，解码失败回落到二进制提示。
+          ? InteractiveViewer(
+              maxScale: 8,
+              child: Center(
+                child: Image.memory(
+                  state.imageBytes!,
+                  errorBuilder: (context, error, stackTrace) =>
+                      const _BinaryFileHint(),
                 ),
               ),
             )
+          : isBinary
+          ? const _BinaryFileHint()
           : Column(
               children: [
                 Container(
