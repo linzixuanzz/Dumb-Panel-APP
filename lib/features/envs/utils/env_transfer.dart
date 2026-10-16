@@ -267,7 +267,8 @@ EnvTransferParseResult parseEnvTransferJson(String raw) {
   return EnvTransferParseResult(items: items, skipped: skipped);
 }
 
-/// 面板 `POST /envs/import` 支持的两种模式，**没有第三种**。
+/// APP 提供的 `POST /envs/import` 导入模式（两种）。
+/// 面板 v3.3.7 起另有 `merge_value`（名称 + 值相同才合并），APP 暂未提供。
 ///
 /// 刻意不自己拼一个「追加」模式（用 `POST /envs` 的数组纯 insert 也做得到）：
 /// 那会变成一种只有 APP 有、Web 上找不到的行为，而且 `POST /envs` 不收 `enabled`，

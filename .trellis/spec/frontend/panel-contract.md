@@ -672,6 +672,14 @@ setState(() => _logs.add(event.data));
 if (_pollAttempts >= 15 && mounted && _statusText == '等待日志...' && identical(timer, _pollTimer)) { … }
 ```
 
+### 面板 v3.3.7 的接口变化（APP v1.4.1 同期）
+
+- `POST /envs/import`：面板新增 `mode: "merge_value"`（名称 + 值认同一条），空 mode 仍默认 `merge`（名称 + 备注）。APP 目前只发 `merge` / `replace`，不受影响；
+  若要加 `merge_value`，必须按面板版本隐藏——老面板不认识它，会把每一条都当新增。返回新增整数 `created`、`updated`，`message` 前缀不变、有更新时追加计数，APP 原样转发即可。
+- `GET /scripts/tree`：文件与目录节点都带 `mtime`，面板能拿到创建时间时带 `btime`（拿不到不带这个键）。APP 暂未用来排序。
+- 脚本看图片：`/scripts/content` 对 png / jpg / jpeg / gif / webp / bmp / ico 返回 base64 + `binary: true`。🔴 图片字节存在
+  `ScriptState.imageBytes`，**不能放进 `content`**——`content` 是保存时写回文件的内容；`isBinary` 仍为 true，保存照样被拦截；base64 坏了回落二进制提示。
+
 ---
 
 ## 已知仍然存在的漂移源
