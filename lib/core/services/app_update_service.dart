@@ -5,7 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../shared/widgets/app_snack.dart';
 import '../network/app_user_agent.dart';
 import '../theme/app_theme.dart';
 
@@ -15,6 +17,10 @@ const _kGitHubReleaseHost = 'objects.githubusercontent.com';
 const _kGitHubAssetHost = 'githubusercontent.com';
 const _kGitHubMirrorHost = 'gh.301.ee';
 const _kGitHubMirrorPrefix = 'https://$_kGitHubMirrorHost/';
+
+// 自动更新提醒的两个本地偏好（issue #19）：应用级、不分面板，所以直接放 SharedPreferences
+const _kAutoRemindKey = 'app_update_auto_remind';
+const _kIgnoredVersionKey = 'app_update_ignored_version';
 
 bool _isTrustedDownloadUrl(String rawUrl) {
   final uri = Uri.tryParse(rawUrl);
@@ -102,6 +108,48 @@ class AppUpdateService {
   ));
 
   static const _platform = MethodChannel('com.daidai.panel/app_install');
+
+  /// 本次启动是否已经做过自动检查。进程级标记：首页重建、切回首页都不会再弹（issue #19）。
+  static bool _autoCheckedThisLaunch = false;
+
+  @visibleForTesting
+  static void resetAutoCheckForTest() => _autoCheckedThisLaunch = false;
+
+  /// 「自动提醒更新」开关，没设过时默认开着。
+  static Future<bool> getAutoRemindEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_kAutoRemindKey) ?? true;
+  }
+
+  static Future<void> setAutoRemindEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kAutoRemindKey, enabled);
+  }
+
+  /// 首页的静默检查：每次启动最多弹一次，且尊重「忽略此版本」「不再自动提醒」。
+  /// 手动「检查更新」不走这里，不受这两项影响。
+  ///
+  /// [check] 只给测试替换网络请求用，正常调用不传。
+  static Future<void> autoCheckAndPrompt(
+    BuildContext context, {
+    Future<AppUpdateInfo?> Function()? check,
+  }) async {
+    // 一进来就打标记：哪怕这次没网检查失败，本次启动也不再反复请求 GitHub
+    if (_autoCheckedThisLaunch) return;
+    _autoCheckedThisLaunch = true;
+    try {
+      if (!await getAutoRemindEnabled()) return;
+      final info = await (check ?? checkUpdate)();
+      if (info == null || !info.hasUpdate) return;
+      final prefs = await SharedPreferences.getInstance();
+      // 只有和被忽略的版本号完全相同才跳过，出了更新的版本照常提示
+      if (prefs.getString(_kIgnoredVersionKey) == info.latestVersion) return;
+      if (!context.mounted) return;
+      await showUpdateDialog(context, info, fromAutoCheck: true);
+    } catch (_) {
+      // 静默检查失败不打扰用户
+    }
+  }
 
   /// Check GitHub Releases for new version.
   static Future<AppUpdateInfo?> checkUpdate() async {
@@ -292,10 +340,13 @@ class AppUpdateService {
   }
 
   /// Show update dialog.
+  ///
+  /// [fromAutoCheck] 为真时（首页自动弹出）才多给「忽略此版本」「不再自动提醒」两个选项。
   static Future<void> showUpdateDialog(
     BuildContext context,
-    AppUpdateInfo info,
-  ) async {
+    AppUpdateInfo info, {
+    bool fromAutoCheck = false,
+  }) async {
     if (!context.mounted) return;
     final isLight = Theme.of(context).brightness == Brightness.light;
 
@@ -305,6 +356,7 @@ class AppUpdateService {
       builder: (dialogCtx) => _UpdateDialog(
         info: info,
         isLight: isLight,
+        fromAutoCheck: fromAutoCheck,
       ),
     );
   }
@@ -313,7 +365,12 @@ class AppUpdateService {
 class _UpdateDialog extends StatefulWidget {
   final AppUpdateInfo info;
   final bool isLight;
-  const _UpdateDialog({required this.info, required this.isLight});
+  final bool fromAutoCheck;
+  const _UpdateDialog({
+    required this.info,
+    required this.isLight,
+    this.fromAutoCheck = false,
+  });
 
   @override
   State<_UpdateDialog> createState() => _UpdateDialogState();
@@ -391,6 +448,23 @@ class _UpdateDialogState extends State<_UpdateDialog> {
     setState(() {
       _error = '打不开系统设置页，请手动到「设置 → 应用 → 特殊权限 → 安装未知应用」里允许呆呆面板。';
     });
+  }
+
+  Future<void> _ignoreThisVersion() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kIgnoredVersionKey, widget.info.latestVersion);
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _disableAutoRemind() async {
+    await AppUpdateService.setAutoRemindEnabled(false);
+    if (!mounted) return;
+    // 弹窗关掉前先拿到外层页面，告诉用户去哪儿重新打开
+    final messengerContext = Navigator.of(context).context;
+    Navigator.of(context).pop();
+    if (messengerContext.mounted) {
+      AppSnack.show(messengerContext, '已关闭自动提醒，可在「设置 → 自动提醒更新」重新打开');
+    }
   }
 
   Future<void> _copyErrorDetail() async {
@@ -555,6 +629,27 @@ class _UpdateDialogState extends State<_UpdateDialog> {
                   ],
                 ],
               ),
+              // 只有自动弹出时才有：两个都做成小号文字按钮放一行，小屏也放得下
+              if (widget.fromAutoCheck)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    TextButton(
+                      onPressed: _ignoreThisVersion,
+                      child: const Text(
+                        '忽略此版本',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _disableAutoRemind,
+                      child: const Text(
+                        '不再自动提醒',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
             ],
     );
   }

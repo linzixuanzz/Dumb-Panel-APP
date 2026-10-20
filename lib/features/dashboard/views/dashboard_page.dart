@@ -47,14 +47,9 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
   }
 
   Future<void> _silentUpdateCheck() async {
-    try {
-      final info = await AppUpdateService.checkUpdate();
-      if (info != null && info.hasUpdate && mounted) {
-        AppUpdateService.showUpdateDialog(context, info);
-      }
-    } catch (_) {
-      // Silent — do not disturb user on failure
-    }
+    if (!mounted) return;
+    // 每次启动最多弹一次、尊重「忽略此版本」「不再自动提醒」，都在服务里判（issue #19）
+    await AppUpdateService.autoCheckAndPrompt(context);
   }
 
   Widget _buildDashboardAvatar(AuthState auth, bool isLight, double size) {

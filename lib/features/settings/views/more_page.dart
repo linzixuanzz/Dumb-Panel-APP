@@ -23,11 +23,21 @@ class _MorePageState extends ConsumerState<MorePage> {
   AppUpdateInfo? _updateInfo;
   bool _checking = false;
   String? _serverUrl;
+  // 「自动提醒更新」开关，读到本地偏好前先按默认值（开）显示
+  bool _autoRemind = true;
 
   @override
   void initState() {
     super.initState();
     _loadServerUrl();
+    AppUpdateService.getAutoRemindEnabled().then((v) {
+      if (mounted) setState(() => _autoRemind = v);
+    });
+  }
+
+  Future<void> _toggleAutoRemind(bool value) async {
+    setState(() => _autoRemind = value);
+    await AppUpdateService.setAutoRemindEnabled(value);
   }
 
   Future<void> _loadServerUrl() async {
@@ -286,6 +296,20 @@ class _MorePageState extends ConsumerState<MorePage> {
                       : null),
             onTap: () => _checkUpdate(),
           ),
+          // 首页自动弹更新的总开关；在弹窗里点过「不再自动提醒」后从这里重新打开（issue #19）
+          _SettingsItem(
+            icon: Icons.notifications_active_outlined,
+            title: '自动提醒更新',
+            isLight: isLight,
+            showChevron: false,
+            trailing: Switch.adaptive(
+              value: _autoRemind,
+              onChanged: _toggleAutoRemind,
+              // 收紧点击区，免得这一行比其它设置项高一截
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onTap: () => _toggleAutoRemind(!_autoRemind),
+          ),
           _SettingsItem(
             icon: Icons.info_outline,
             title: '关于',
@@ -440,6 +464,8 @@ class _SettingsItem extends StatelessWidget {
   final bool isLight;
   final VoidCallback onTap;
   final Widget? trailing;
+  // 开关类条目不需要右侧箭头
+  final bool showChevron;
 
   const _SettingsItem({
     required this.icon,
@@ -447,6 +473,7 @@ class _SettingsItem extends StatelessWidget {
     required this.isLight,
     required this.onTap,
     this.trailing,
+    this.showChevron = true,
   });
 
   @override
@@ -469,12 +496,16 @@ class _SettingsItem extends StatelessWidget {
               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
             ),
           ),
-          if (trailing != null) ...[trailing!, const SizedBox(width: 8)],
-          Icon(
-            Icons.chevron_right,
-            size: 18,
-            color: isLight ? AppColors.slate400 : AppColors.slate600,
-          ),
+          if (trailing != null) ...[
+            trailing!,
+            if (showChevron) const SizedBox(width: 8),
+          ],
+          if (showChevron)
+            Icon(
+              Icons.chevron_right,
+              size: 18,
+              color: isLight ? AppColors.slate400 : AppColors.slate600,
+            ),
         ],
       ),
     );
