@@ -1320,6 +1320,13 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                     color: AppColors.slate400,
                                   ),
                                   onPressed: () {
+                                    // APP issue #18：必须先掐掉还没触发的搜索防抖。
+                                    // 打完字 300ms 内点清空的话，那次防抖会在清空之后
+                                    // 把旧关键词写回筛选状态 —— 输入框是空的、清空按钮也没了，
+                                    // 列表却停在旧结果上，下拉刷新也沿用旧词；
+                                    // provider 是全局的，切页回来照旧，只能杀后台。
+                                    _debounce?.cancel();
+                                    _debounce = null;
                                     _searchController.clear();
                                     if (_selectionMode) {
                                       _setSelectionMode(false);

@@ -1957,18 +1957,6 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
   /// 两边一旦写岔，行号会整体错位。
   static const _editorContentPadding = EdgeInsets.all(14);
 
-  /// TextField 在排版**之前**额外扣掉的光标余量。
-  ///
-  /// = `RenderEditable._kCaretGap`(1.0) + `TextField.cursorWidth` 默认值 2.0，
-  /// 即 SDK `rendering/editable.dart` 里的 `RenderEditable._caretMargin`；
-  /// 多行输入框走 `_adjustConstraints`，实际断行宽度是 `maxWidth - _caretMargin`。
-  ///
-  /// ⚠️ 别把这一项「简化」掉：行号栏那份 TextPainter 拿不到这层扣减，某一行的宽度
-  /// 恰好落在这 3px 带里时，TextField 把它折成 2 条视觉行、行号栏却认为只占 1 条，
-  /// 从那一行往下所有行号整体错开一个行高；同一份几何还喂给 `_scrollToMatch`，
-  /// 「下一个」也会跟着跳偏一整行。
-  static const double _editorCaretMargin = 3.0;
-
   late final ScriptHighlightController _contentController;
   late final FocusNode _contentFocusNode;
   final ScrollController _contentScrollController = ScrollController();
@@ -1992,8 +1980,10 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
   /// 命中数是否被 [kScriptSearchMatchLimit] 截断过（决定计数显示成 `500` 还是 `500+`）。
   bool _matchTruncated = false;
 
-  /// 编辑器文本几何缓存。行号栏与搜索滚动共用**同一份** TextPainter 度量。
-  ScriptEditorTextMetrics? _editorMetrics;
+  /// 挂在编辑器 TextField 上。行号栏与搜索滚动都靠它找到 TextField 自己的
+  /// `RenderEditable` 问几何 —— 不再另排一遍全文（APP issue #18：3000+ 行脚本
+  /// 每敲一个字符都多一次整篇 layout，打字明显卡）。
+  final GlobalKey _editorKey = GlobalKey();
 
   /// `_contentController` 上一次的文本。
   ///
@@ -2022,7 +2012,6 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
 
   @override
   void dispose() {
-    _editorMetrics?.dispose();
     _contentScrollController.dispose();
     _contentController.removeListener(_handleContentChanged);
     _contentController.dispose();
@@ -2203,6 +2192,10 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
   /// 行号栏那份 TextPainter 同样拿不到它。开着粗体文字时 TextField 按 bold 排版
   /// （字宽变大、断行提前）、行号栏还按 w400 算，长行脚本从第一处软换行起就整体错位，
   /// 越往下差得越多。这里提前把同一层 merge 做掉，strut 也由它派生，两边才对得齐。
+  ///
+  /// 注：APP issue #18 之后行号栏改问 TextField 自己的 `RenderEditable`，断行不会
+  /// 再分叉；但行号文字仍用这份 style / strut 画，钉死它才能让行号与代码同一行高、
+  /// 同一基线，所以这些字段继续保留。
   static TextStyle _editorTextStyle(BuildContext context, Color color) {
     const base = TextStyle(
       fontSize: 13,
@@ -2226,54 +2219,22 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
   static StrutStyle _editorStrutStyle(TextStyle style) =>
       StrutStyle.fromTextStyle(style, forceStrutHeight: true);
 
-  /// 取（必要时重建）编辑器文本几何。
-  ///
-  /// 只在 (文本, 样式, strut, 字体缩放, 可用宽度) 之一变化时重排，别每帧 layout。
-  ScriptEditorTextMetrics _ensureEditorMetrics({
-    required String text,
-    required TextStyle style,
-    required StrutStyle strutStyle,
-    required TextScaler textScaler,
-    required double maxWidth,
-  }) {
-    final cached = _editorMetrics;
-    if (cached != null &&
-        cached.matchesInput(
-          text: text,
-          style: style,
-          strutStyle: strutStyle,
-          textScaler: textScaler,
-          maxWidth: maxWidth,
-        )) {
-      return cached;
-    }
-    cached?.dispose();
-    final created = ScriptEditorTextMetrics.compute(
-      text: text,
-      style: style,
-      strutStyle: strutStyle,
-      textScaler: textScaler,
-      maxWidth: maxWidth,
-    );
-    _editorMetrics = created;
-    return created;
-  }
-
   /// 把命中滚进视口。
   ///
   /// 行高不再硬编码：改造前写死 `13 * 1.5` 又只数 `\n`，软换行、contentPadding、
-  /// 系统字体缩放一个都没算，长行脚本上系统性跳偏。现在直接问行号栏那份**实测**
-  /// 几何要真实 y —— 同一份 TextPainter 同时供行号和滚动定位使用。
+  /// 系统字体缩放一个都没算，长行脚本上系统性跳偏。现在直接问 TextField 自己的
+  /// `RenderEditable` 要真实 y —— 与行号栏问的是同一份排版。
   void _scrollToMatch(int offset) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_contentScrollController.hasClients) {
         return;
       }
-      // 在回调里现取：这一帧重建可能已经换过一份几何，拿旧的会滚错位置。
-      final top = _editorMetrics?.topForOffset(offset);
-      if (top == null) {
+      // 在回调里现取：这一帧刚排完版，拿到的就是当前文本的几何。
+      final editable = findScriptRenderEditable(_editorKey.currentContext);
+      if (editable == null || !editable.hasSize) {
         return;
       }
+      final top = scriptContentTopForOffset(editable, offset);
       final position = _contentScrollController.position;
       // 让命中落在视口上三分之一处，命中的前后都还留得下上下文。
       final target = (top - position.viewportDimension / 3).clamp(
@@ -2653,98 +2614,75 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
                           editorForeground,
                         );
                         final strutStyle = _editorStrutStyle(textStyle);
-                        // 监听 controller 而不是整页 setState：编辑模式下每敲一个
-                        // 字符都要重排行号，只让编辑器这一块重建，别牵动整页。
-                        return ValueListenableBuilder<TextEditingValue>(
-                          valueListenable: _contentController,
-                          builder: (context, value, _) {
-                            final text = value.text;
-                            final gutterWidth = scriptGutterWidth(
-                              lineCount: lineNumberForOffset(text, text.length),
-                              style: textStyle,
-                              textScaler: textScaler,
-                            );
-                            // 行号栏、contentPadding、光标余量一起从卡片宽里扣掉，
-                            // 剩下的才是 TextField 真正用来断行的宽度。
-                            final available =
-                                (constraints.maxWidth -
-                                        gutterWidth -
-                                        _editorContentPadding.horizontal -
-                                        _editorCaretMargin)
-                                    .clamp(0.0, double.infinity);
-                            final metrics = _ensureEditorMetrics(
-                              text: text,
-                              style: textStyle,
+                        // 这里**不再**套 ValueListenableBuilder 监听 controller：
+                        // 那样光标 / 选区一动整块就重建一次。行号栏自己监听，
+                        // 只在文本真的变了时重扫行首；TextField 本来就自己听 controller。
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            ScriptLineNumberGutter(
+                              controller: _contentController,
+                              editorKey: _editorKey,
+                              editorWidth: constraints.maxWidth,
+                              scrollController: _contentScrollController,
+                              textStyle: textStyle,
                               strutStyle: strutStyle,
                               textScaler: textScaler,
-                              maxWidth: available,
-                            );
-                            return Row(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                ScriptLineNumberGutter(
-                                  width: gutterWidth,
-                                  metrics: metrics,
-                                  scrollController: _contentScrollController,
-                                  textStyle: textStyle,
-                                  strutStyle: strutStyle,
-                                  textScaler: textScaler,
-                                  // 跟编辑器底色的明暗走，而不是跟 App 主题走 ——
-                                  // 编辑器底色是用户在面板里自定义的。
-                                  color: onDarkEditor
-                                      ? AppColors.editorGutterOnDark
-                                      : AppColors.editorGutterOnLight,
-                                  verticalPadding: _editorContentPadding.top,
-                                ),
-                                Expanded(
-                                  child: TextSelectionTheme(
-                                    data: TextSelectionThemeData(
-                                      selectionColor: AppColors.primary
-                                          .withAlpha(60),
-                                    ),
-                                    child: TextField(
-                                      controller: _contentController,
-                                      focusNode: _contentFocusNode,
-                                      scrollController:
-                                          _contentScrollController,
-                                      readOnly: !_editing,
-                                      expands: true,
-                                      maxLines: null,
-                                      style: textStyle,
-                                      // 与行号栏同一份 strut：行高只由它决定，
-                                      // 中文注释才不会把后面的行号整体推下去。
-                                      strutStyle: strutStyle,
-                                      cursorColor: editorForeground,
-                                      selectionHeightStyle: BoxHeightStyle.max,
-                                      decoration: const InputDecoration(
-                                        // ⚠️ 只写 border 挡不住：applyDefaults 会把主题的
-                                        // enabledBorder / focusedBorder 填进来，而
-                                        // _InputDecoratorState 取的是它们**优先**，
-                                        // border 只在两者都为 null 时才回落。本仓主题恰好两个都给了
-                                        // OutlineInputBorder，所以必须三个一起关掉 —— 否则行号栏
-                                        // 拆到 TextField 外面之后，那圈描边只框住右半边代码区，
-                                        // 聚焦时还会冒出一个只圈代码区的主色圆角框。
-                                        border: InputBorder.none,
-                                        enabledBorder: InputBorder.none,
-                                        focusedBorder: InputBorder.none,
-                                        contentPadding: _editorContentPadding,
-                                        // 不写 filled 会继承主题 inputDecorationTheme
-                                        // 的 filled:true + fillColor:cardColor，而
-                                        // InputBorder.none 的 outer path 就是整个矩形，
-                                        // 这层 fill 会把 AppCard 的 editorBackground 整块盖掉。
-                                        // 改造前 TextField 铺满整张卡片所以看不出来（顺带说明：
-                                        // 面板的 editor_background_color 设置项一直是无效的）；
-                                        // 行号栏挪到 TextField 外面之后，露出来的就是
-                                        // 「左边行号条 editorBackground + 右边代码区 cardColor」
-                                        // 的一条竖直色缝。写死 false，那个设置项也第一次真正生效。
-                                        filled: false,
-                                      ),
-                                    ),
+                              // 跟编辑器底色的明暗走，而不是跟 App 主题走 ——
+                              // 编辑器底色是用户在面板里自定义的。
+                              color: onDarkEditor
+                                  ? AppColors.editorGutterOnDark
+                                  : AppColors.editorGutterOnLight,
+                              verticalPadding: _editorContentPadding.top,
+                            ),
+                            Expanded(
+                              child: TextSelectionTheme(
+                                data: TextSelectionThemeData(
+                                  selectionColor: AppColors.primary.withAlpha(
+                                    60,
                                   ),
                                 ),
-                              ],
-                            );
-                          },
+                                child: TextField(
+                                  key: _editorKey,
+                                  controller: _contentController,
+                                  focusNode: _contentFocusNode,
+                                  scrollController: _contentScrollController,
+                                  readOnly: !_editing,
+                                  expands: true,
+                                  maxLines: null,
+                                  style: textStyle,
+                                  // 与行号栏同一份 strut：行高只由它决定，
+                                  // 中文注释才不会把后面的行号整体推下去。
+                                  strutStyle: strutStyle,
+                                  cursorColor: editorForeground,
+                                  selectionHeightStyle: BoxHeightStyle.max,
+                                  decoration: const InputDecoration(
+                                    // ⚠️ 只写 border 挡不住：applyDefaults 会把主题的
+                                    // enabledBorder / focusedBorder 填进来，而
+                                    // _InputDecoratorState 取的是它们**优先**，
+                                    // border 只在两者都为 null 时才回落。本仓主题恰好两个都给了
+                                    // OutlineInputBorder，所以必须三个一起关掉 —— 否则行号栏
+                                    // 拆到 TextField 外面之后，那圈描边只框住右半边代码区，
+                                    // 聚焦时还会冒出一个只圈代码区的主色圆角框。
+                                    border: InputBorder.none,
+                                    enabledBorder: InputBorder.none,
+                                    focusedBorder: InputBorder.none,
+                                    contentPadding: _editorContentPadding,
+                                    // 不写 filled 会继承主题 inputDecorationTheme
+                                    // 的 filled:true + fillColor:cardColor，而
+                                    // InputBorder.none 的 outer path 就是整个矩形，
+                                    // 这层 fill 会把 AppCard 的 editorBackground 整块盖掉。
+                                    // 改造前 TextField 铺满整张卡片所以看不出来（顺带说明：
+                                    // 面板的 editor_background_color 设置项一直是无效的）；
+                                    // 行号栏挪到 TextField 外面之后，露出来的就是
+                                    // 「左边行号条 editorBackground + 右边代码区 cardColor」
+                                    // 的一条竖直色缝。写死 false，那个设置项也第一次真正生效。
+                                    filled: false,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         );
                       },
                     ),
