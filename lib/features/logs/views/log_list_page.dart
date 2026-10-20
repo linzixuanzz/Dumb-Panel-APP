@@ -210,7 +210,12 @@ class LogListNotifier extends StateNotifier<LogListState> {
 }
 
 class LogListPage extends ConsumerStatefulWidget {
-  const LogListPage({super.key});
+  /// 传了 [taskId] 就是任务详情页「日志历史」进来的单任务日志列表（issue #20）：
+  /// 路由那边会给它一份独立的 [logListProvider]，不影响底部「日志」标签页的筛选。
+  final int? taskId;
+  final String? taskName;
+
+  const LogListPage({super.key, this.taskId, this.taskName});
 
   @override
   ConsumerState<LogListPage> createState() => _LogListPageState();
@@ -227,9 +232,15 @@ class _LogListPageState extends ConsumerState<LogListPage> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(
-      () => ref.read(logListProvider.notifier).load(refresh: true),
-    );
+    Future.microtask(() {
+      final taskId = widget.taskId;
+      if (taskId != null) {
+        // setTaskIdFilter 自己会带着筛选条件加载第一页
+        ref.read(logListProvider.notifier).setTaskIdFilter('$taskId');
+      } else {
+        ref.read(logListProvider.notifier).load(refresh: true);
+      }
+    });
     _scrollController.addListener(() {
       if (_scrollController.position.pixels >=
           _scrollController.position.maxScrollExtent - 200) {
@@ -471,6 +482,9 @@ class _LogListPageState extends ConsumerState<LogListPage> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
+                  // 单任务日志页是压栈打开的，要有返回键；标签页没有
+                  if (widget.taskId != null && !_selectionMode)
+                    const BackButton(),
                   Expanded(
                     child: _selectionMode
                         ? Text(
@@ -480,10 +494,14 @@ class _LogListPageState extends ConsumerState<LogListPage> {
                               fontWeight: FontWeight.w700,
                             ),
                           )
-                        : const Text(
-                            '运行日志',
+                        : Text(
+                            widget.taskId != null
+                                ? '${widget.taskName ?? '任务 #${widget.taskId}'} 的日志'
+                                : '运行日志',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              fontSize: 24,
+                              fontSize: widget.taskId != null ? 18 : 24,
                               fontWeight: FontWeight.w700,
                             ),
                           ),
@@ -515,7 +533,8 @@ class _LogListPageState extends ConsumerState<LogListPage> {
                       onPressed: _exitSelectionMode,
                       tooltip: '取消',
                     ),
-                  ] else ...[
+                  ] else if (widget.taskId == null) ...[
+                    // 「清理日志」按天数清的是全部任务的日志，单任务页里不给，免得误会
                     IconButton(
                       icon: const Icon(
                         Icons.cleaning_services_outlined,

@@ -8,6 +8,7 @@ import '../../features/server_config/views/server_config_page.dart';
 import '../../features/dashboard/views/dashboard_page.dart';
 import '../../features/tasks/views/task_list_page.dart';
 import '../../features/tasks/views/task_form_page.dart';
+import '../../features/tasks/views/task_detail_page.dart';
 import '../../features/logs/views/log_list_page.dart';
 import '../../features/logs/views/log_stream_page.dart';
 import '../../features/envs/views/env_list_page.dart';
@@ -141,6 +142,28 @@ final routerProvider = Provider<GoRouter>((ref) {
           final task = state.extra as Task?;
           return TaskFormPage(task: task);
         },
+      ),
+      // 任务详情（issue #20）：extra 传列表里那条 Task，先渲染再跟着列表 provider 刷新
+      GoRoute(
+        path: '/tasks/:id/detail',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, state) => TaskDetailPage(
+          taskId: int.parse(state.pathParameters['id']!),
+          initialTask: state.extra is Task ? state.extra as Task : null,
+        ),
+      ),
+      // 详情页「日志历史」：单任务日志列表。给它一份独立的 logListProvider，
+      // 免得把底部「日志」标签页的筛选条件改成只看这一个任务
+      GoRoute(
+        path: '/tasks/:id/logs',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, state) => ProviderScope(
+          overrides: [logListProvider.overrideWith((ref) => LogListNotifier())],
+          child: LogListPage(
+            taskId: int.parse(state.pathParameters['id']!),
+            taskName: state.extra as String?,
+          ),
+        ),
       ),
       GoRoute(
         path: '/tasks/:id/live-logs',

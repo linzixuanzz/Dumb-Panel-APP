@@ -18,7 +18,6 @@ import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/task.dart';
 import '../../../shared/models/task_view.dart';
 import '../../../shared/utils/api_utils.dart';
-import '../../../shared/utils/duration_utils.dart';
 import '../../../shared/utils/panel_enums.dart';
 import '../../../shared/utils/sse_replay_buffer.dart';
 import '../../../shared/utils/task_command.dart';
@@ -32,7 +31,6 @@ import '../../../shared/widgets/app_notice.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
 import '../../../shared/widgets/log_view.dart';
-import '../../../shared/widgets/task_cron_list.dart';
 import '../providers/task_provider.dart';
 import '../providers/task_view_provider.dart';
 import '../utils/task_list_rows.dart';
@@ -509,28 +507,6 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
         },
       ),
     );
-  }
-
-  Future<void> _openLatestLog(Task task) async {
-    if (task.isRunning) {
-      _openLiveLog(task);
-      return;
-    }
-    try {
-      final latestLog = await ref
-          .read(taskProvider.notifier)
-          .fetchLatestLog(task.id);
-      if (!mounted) {
-        return;
-      }
-      if (latestLog == null) {
-        _showMessage('当前任务暂无日志');
-        return;
-      }
-      context.push('/logs/${latestLog.id}/stream');
-    } catch (_) {
-      _showError('打开日志失败');
-    }
   }
 
   void _openLiveLog(Task task) {
@@ -1925,9 +1901,10 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
       isLight: isLight,
       selectionMode: _selectionMode,
       selected: _selectedTaskIds.contains(task.id),
+      // 非多选模式下点卡片进任务详情页（issue #20）；原来的「点卡片看最新日志」挪到详情页的「最新日志」行
       onTap: () => _selectionMode
           ? _toggleTaskSelection(task.id)
-          : _openLatestLog(task),
+          : context.push('/tasks/${task.id}/detail', extra: task),
       onLongPress: () {
         HapticFeedback.mediumImpact();
         _toggleTaskSelection(task.id);
@@ -1944,89 +1921,106 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   }
 
   Future<void> _confirmDelete(Task task) async {
-    final scriptPath = extractScriptPathFromCommand(task.command);
-    var deleteScript = false;
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('删除任务'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('确定要删除「${task.name}」吗？'),
-              if (scriptPath != null) ...[
-                const SizedBox(height: 14),
-                CheckboxListTile(
-                  value: deleteScript,
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  title: const Text('同时删除关联脚本'),
-                  subtitle: Text(scriptPath),
-                  onChanged: (value) {
-                    setDialogState(() => deleteScript = value ?? false);
-                  },
-                ),
-              ],
+    await confirmAndDeleteTask(context, ref, task);
+  }
+}
+
+/// 删除任务：确认弹窗（可勾选同时删除关联脚本）→ 删除 → 提示。
+/// 列表侧滑和任务详情页（issue #20）共用这一份；返回是否真的删掉了任务，详情页据此返回列表。
+Future<bool> confirmAndDeleteTask(
+  BuildContext context,
+  WidgetRef ref,
+  Task task,
+) async {
+  final scriptPath = extractScriptPathFromCommand(task.command);
+  var deleteScript = false;
+  final confirm = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => StatefulBuilder(
+      builder: (context, setDialogState) => AlertDialog(
+        title: const Text('删除任务'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('确定要删除「${task.name}」吗？'),
+            if (scriptPath != null) ...[
+              const SizedBox(height: 14),
+              CheckboxListTile(
+                value: deleteScript,
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('同时删除关联脚本'),
+                subtitle: Text(scriptPath),
+                onChanged: (value) {
+                  setDialogState(() => deleteScript = value ?? false);
+                },
+              ),
             ],
-          ),
-          actions: [
-            Row(
-              children: [
-                Expanded(
-                  child: SizedBox(
-                    height: 44,
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(dialogContext, false),
-                      child: const Text('取消'),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: SizedBox(
-                    height: 44,
-                    child: FilledButton(
-                      onPressed: () => Navigator.pop(dialogContext, true),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.red500,
-                      ),
-                      child: const Text('删除'),
-                    ),
-                  ),
-                ),
-              ],
-            ),
           ],
         ),
+        actions: [
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 44,
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(dialogContext, false),
+                    child: const Text('取消'),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SizedBox(
+                  height: 44,
+                  child: FilledButton(
+                    onPressed: () => Navigator.pop(dialogContext, true),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.red500,
+                    ),
+                    child: const Text('删除'),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
-    );
-    if (confirm != true) {
-      return;
-    }
-    try {
-      await ref.read(taskProvider.notifier).deleteTask(task.id);
-      if (deleteScript && scriptPath != null) {
-        try {
-          await DioClient.instance.dio.delete(
-            ApiEndpoints.scripts,
-            queryParameters: {'path': scriptPath, 'type': 'file'},
-          );
-          _showSuccess('任务和关联脚本已删除');
-        } catch (error) {
-          // 部分成功：任务删掉了、脚本没删掉。既不能报绿也不能报红。
-          _showWarning(
+    ),
+  );
+  if (confirm != true || !context.mounted) {
+    return false;
+  }
+  try {
+    await ref.read(taskProvider.notifier).deleteTask(task.id);
+    if (deleteScript && scriptPath != null) {
+      try {
+        await DioClient.instance.dio.delete(
+          ApiEndpoints.scripts,
+          queryParameters: {'path': scriptPath, 'type': 'file'},
+        );
+        if (context.mounted) AppSnack.success(context, '任务和关联脚本已删除');
+      } catch (error) {
+        // 部分成功：任务删掉了、脚本没删掉。既不能报绿也不能报红。
+        if (context.mounted) {
+          AppSnack.warn(
+            context,
             '任务已删除，但脚本删除失败：${extractErrorMessage(error, '请稍后手动删除脚本')}',
           );
         }
-        return;
       }
-      _showSuccess('任务已删除');
-    } catch (error) {
-      await _showActionError(error, '删除任务失败');
+      return true;
     }
+    if (context.mounted) AppSnack.success(context, '任务已删除');
+    return true;
+  } catch (error) {
+    if (context.mounted) {
+      AppSnack.error(context, _extractTaskError(error, '删除任务失败'));
+    }
+    return false;
   }
 }
 
@@ -2842,206 +2836,6 @@ class TaskLiveLogPage extends ConsumerStatefulWidget {
 
   @override
   ConsumerState<TaskLiveLogPage> createState() => _TaskLiveLogPageState();
-}
-
-class TaskDetailSheet extends StatelessWidget {
-  final Task task;
-
-  const TaskDetailSheet({super.key, required this.task});
-
-  /// 上次运行结果的文字色。失败=红、已终止=琥珀、其余不着色。
-  /// 「已终止」不能用红：它是用户自己按的停止，标红等于报一个不存在的故障。
-  Color? _lastRunResultColor(int? lastRunStatus) {
-    switch (taskRunResultTone(lastRunStatus)) {
-      case PanelStatusTone.danger:
-        return AppColors.red500;
-      case PanelStatusTone.warning:
-        return AppColors.warning;
-      case PanelStatusTone.success:
-      case PanelStatusTone.running:
-      case PanelStatusTone.neutral:
-        return null;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
-    final labels = task.labelsForDisplay;
-    final scheduleExpressions = task.cronExpressions.isNotEmpty
-        ? task.cronExpressions
-        : (task.cronExpression.trim().isNotEmpty
-              ? [task.cronExpression.trim()]
-              : const <String>[]);
-
-    Widget infoTile(String label, Widget child, {bool expand = false}) {
-      return Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          border: Border(
-            bottom: BorderSide(
-              color: isLight ? AppColors.slate100 : AppColors.slate800,
-            ),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 8),
-            if (expand) child else DefaultTextStyle.merge(child: child),
-          ],
-        ),
-      );
-    }
-
-    return SafeArea(
-      child: SizedBox(
-        height: MediaQuery.of(context).size.height * 0.78,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '任务详情',
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                task.name,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 14),
-              Expanded(
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      infoTile(
-                        '状态',
-                        _MetaChip(
-                          label: task.statusText,
-                          // 不认识的状态一律按「非活跃」渲染：把它高亮成活跃态
-                          // 等于替面板下结论，而我们并不知道那个新状态是什么。
-                          active: task.hasKnownStatus && !task.isDisabled,
-                        ),
-                      ),
-                      infoTile(
-                        '任务类型',
-                        Text(
-                          task.taskTypeText,
-                          style: const TextStyle(fontSize: 13),
-                        ),
-                      ),
-                      infoTile(
-                        '定时规则',
-                        task.taskType == 'cron'
-                            ? TaskCronList(expressions: scheduleExpressions)
-                            : Text(
-                                '不使用 Cron',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                        expand: true,
-                      ),
-                      infoTile(
-                        '执行命令',
-                        SelectableText(
-                          task.command,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            height: 1.5,
-                            fontFamily: 'monospace',
-                          ),
-                        ),
-                        expand: true,
-                      ),
-                      infoTile(
-                        '标签',
-                        labels.isEmpty
-                            ? Text(
-                                '无',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                              )
-                            : Wrap(
-                                spacing: 6,
-                                runSpacing: 6,
-                                children: labels
-                                    .map((label) => _MetaChip(label: label))
-                                    .toList(),
-                              ),
-                        expand: true,
-                      ),
-                      infoTile(
-                        '上次运行',
-                        Text(
-                          task.lastRunAt == null
-                              ? '-'
-                              : formatTimeCn(task.lastRunAt),
-                          style: const TextStyle(fontSize: 13),
-                        ),
-                      ),
-                      infoTile(
-                        '下次运行',
-                        Text(
-                          task.nextRunAt == null
-                              ? '-'
-                              : formatTimeCn(task.nextRunAt),
-                          style: const TextStyle(fontSize: 13),
-                        ),
-                      ),
-                      infoTile(
-                        // 原写法是 `== 0 ? 成功 : 失败`，把 last_run_status == 2
-                        // （面板 RunAborted = 已终止）显示成「失败」。这不是
-                        // 「面板将来加值」的隐患，是当前版本就在说的谎：
-                        // 用户自己按了停止，APP 报失败，Web 报已终止。
-                        '上次结果',
-                        Text(
-                          task.lastRunResultText,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: _lastRunResultColor(task.lastRunStatus),
-                          ),
-                        ),
-                      ),
-                      infoTile(
-                        // 原写法是裸秒 `3600.00s`，两小时的任务写成 7200.00s，
-                        // 用户得自己除。改成与日志列表、面板同一套分档。
-                        '最近耗时',
-                        Text(
-                          formatDurationSeconds(task.lastRunningTime),
-                          style: const TextStyle(fontSize: 13),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
