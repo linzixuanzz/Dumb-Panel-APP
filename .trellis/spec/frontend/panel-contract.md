@@ -680,6 +680,11 @@ if (_pollAttempts >= 15 && mounted && _statusText == '等待日志...' && identi
 - 脚本看图片：`/scripts/content` 对 png / jpg / jpeg / gif / webp / bmp / ico 返回 base64 + `binary: true`。🔴 图片字节存在
   `ScriptState.imageBytes`，**不能放进 `content`**——`content` 是保存时写回文件的内容；`isBinary` 仍为 true，保存照样被拦截；base64 坏了回落二进制提示。
 
+### 面板 v3.3.8 的接口变化（APP v1.4.2 同期）
+
+- `GET /subscriptions`：每项新增 `next_pull_at`，只在「启用 + 定时非空 + 整串能解析」时下发（与订阅调度器同口径、不按行拆分），其余不带这个键。APP 订阅列表暂未显示它。
+- 面板没有 `GET /tasks/:id`：APP 任务详情页（`/tasks/:id/detail`）的数据跟着任务列表 provider 刷新，列表里找不到这条时才用路由 extra 传进来的那份。
+
 ---
 
 ## 已知仍然存在的漂移源

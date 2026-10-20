@@ -680,3 +680,12 @@ try {
 | 编辑表单时用空 map 重建 config 再整串覆盖 | 面板支持但 APP 字段表里没有的键**保存即丢失** | `notification_list_page.dart:735-757`（对照正确做法 `open_api_page.dart:671` 保留未知 scope） |
 | 后端默认值写死在表单里 | 面板改了默认 Python 版本，APP 不跟随 | 已修：`task_form_page.dart:223-266` 现在读 `default_version` |
 | 请求 URL 直接拼字符串 | 绕过 `ApiEndpoints`，改路径时漏改 | **已修，全库零命中**。历史反例是 `system_settings_page` 里三处 `'${ApiEndpoints.baseApi}/system/...'`，现已收成 `ApiEndpoints.systemUpdateStatus` / `systemUpdate` / `systemRestart`（`api_endpoints.dart:23-27` 留了注释） |
+
+## 脚本编辑器行号栏、自动检查更新、按任务看日志（APP v1.4.2 起）
+
+| 约定 | 内容 | 位置 |
+|---|---|---|
+| 行号几何只问 TextField | 行号的 y 直接取 TextField 自己的 `RenderEditable`（`scriptContentTopForOffset`：两次取光标位置相减，滚动偏移互相抵消）。**别再起第二个 `TextPainter` 对全文排版**：3000+ 行时每敲一个字都整篇重排，就是 APP #18 的卡顿来源。`ScriptEditorTextMetrics` 只留给测试当对齐基准，页面不再用它 | `lib/features/scripts/widgets/script_line_number_gutter.dart` |
+| 行号栏何时重建、何时重画 | 只在文本真的变了时重扫行首（`scriptLineStarts`，只扫 `\n` 不排版）；滚动只重画不重建，可见行先二分再只数一屏；外层 `RepaintBoundary` 不能省，没有它移动光标会连带重画行号栏 | 同上 |
+| 自动检查更新 | 每次启动最多一次（进程级标记，开始检查就打上，失败也不重试）。`app_update_auto_remind`（没设过当作开）与 `app_update_ignored_version`（版本号完全相同才跳过）只管自动弹窗；手动「检查更新」不受影响，弹窗里也不显示「忽略此版本」「不再自动提醒」 | `lib/core/services/app_update_service.dart` 的 `autoCheckAndPrompt` |
+| 按任务看日志 | `/tasks/:id/logs` 用嵌套 `ProviderScope` 单独给一份 `logListProvider`，不能直接改根作用域那份的 `taskIdFilter`，否则底部「日志」标签页也会变成只看这一个任务 | `lib/core/router/app_router.dart` |
