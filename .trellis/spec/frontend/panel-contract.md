@@ -685,6 +685,16 @@ if (_pollAttempts >= 15 && mounted && _statusText == '等待日志...' && identi
 - `GET /subscriptions`：每项新增 `next_pull_at`，只在「启用 + 定时非空 + 整串能解析」时下发（与订阅调度器同口径、不按行拆分），其余不带这个键。APP 订阅列表暂未显示它。
 - 面板没有 `GET /tasks/:id`：APP 任务详情页（`/tasks/:id/detail`）的数据跟着任务列表 provider 刷新，列表里找不到这条时才用路由 extra 传进来的那份。
 
+### 面板 v3.3.9 的接口变化（APP v1.4.3 同期）
+
+- 配置文件（APP #22，接口面板早就有，不依赖 v3.3.9）：`GET /api/system/config-script` → `{content, path}`（文件不存在时 `content` 为空串）；
+  `PUT /api/system/config-script` body `{content}` → `{message}`。两条都是 `RequireRole("admin")`，入口只给管理员看。
+  面板 `response.Success` 直接回对象、没有 `data` 外壳，`extractData` 两种形状都认。
+- `GET/PUT /deps/mirrors`（#165）：面板 v3.3.9 起官方源（pypi.org、registry.npmjs.org）原样保存、原样回显；**老面板会把官方源换成默认加速源**，
+  APP 的「PyPI 官方」「npm 官方」选项在老面板上保存后会显示成腾讯云 / npmmirror——这是面板行为，APP 不按版本隐藏。
+- `POST /deps`（#166）：面板 v3.3.9 起，已装 `httpx` 再提交 `httpx[http2]` 会原地升级同一条记录（`data` 里是那条已有记录、状态 installing），
+  不再「已存在跳过」。APP 提交后照旧整表重拉，不受影响。依赖名切分（`splitDependencyNames`）：换行一律切，方括号里的逗号不切、空格去掉。
+
 ---
 
 ## 已知仍然存在的漂移源

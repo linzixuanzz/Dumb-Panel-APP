@@ -387,6 +387,20 @@ ConstrainedBox(
 |---|---|---|
 | `AppBackButton` | 页面头部返回 | `GestureDetector(onTap: context.pop, child: Icon(arrow_back_ios, size: 20))` |
 | `AppCircleAddButton` | 头部右上角圆形「新建」 | 32dp 的 `Container` + `BoxDecoration(circle)` + `Icon(add)` |
+| `AppChipButton(compact: true)` | 页头放不下时的「只显示图标」胶囊（文字进 `Tooltip`，44dp 命中区） | 窄屏下硬塞带字胶囊 |
+
+### 360dp 窄屏的三条规矩（APP #21 / #23，v1.4.3）
+
+44dp 命中区（见上一节）让每个按钮都变宽了，一排按钮在 360dp 上很容易放不下；超出父级的那一截**看得见却点不中**。
+
+- **列表页页头**：标题 `Flexible` + 单行省略；按钮区用 `LayoutBuilder` 按当前 `textScaler` 算带字形态要多宽
+  （`AppChipButton.fullWidth` / `measureTextWidth`），放不下就整排切 `compact`。不要用 `Row(spaceBetween)` 把标题和一排按钮硬塞在一行。
+  环境变量页、任务页已按此修；其余页头标题本来就是 `Expanded`，由 `page_header_narrow_test.dart` 守着。
+- **卡片底部「文字 + 一排图标按钮」**：文字必须 `Expanded` + 单行省略，**不能用 `Spacer` 顶**（订阅卡片「上次拉取」曾把删除按钮推出卡片 171px）。
+- **左滑按钮**：宽度按卡片实际宽度均分（宽屏 52dp、最小 44dp），拖动上限与吸附阈值用同一个总宽；加按钮前先算 360dp 下放不放得下。
+  已知：卡片宽 < 约 302dp（屏宽 < 320dp）时 6 个按钮仍会溢出，未处理。
+- **随列表滚走的头部**（依赖页的计数卡 / 运行时面板 / 筛选条）放进列表第 0 项，加载 / 出错 / 空态 / 有数据四种状态都带上，下拉刷新才不断；
+  但**操作按钮不能跟着滚走**——「批量卸载 (N)」固定在标题行下方，否则往下滑勾选时按钮已经不在屏幕上。
 
 ### 几个具体的坑
 

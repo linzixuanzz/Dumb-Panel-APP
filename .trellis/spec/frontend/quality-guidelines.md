@@ -298,8 +298,10 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 2. **改窗口尺寸必须同时设 `tester.view.devicePixelRatio = 1.0`**，并 `addTearDown(tester.view.reset)`。默认像素比是 3.0，
    只设 `physicalSize = Size(384, 800)` 实际只有 128×267 逻辑像素，什么都会溢出。模拟键盘弹起：
    `tester.view.viewInsets = const FakeViewPadding(bottom: 300)` + `addTearDown(tester.view.resetViewInsets)`；
-   不溢出的断言是 `expect(tester.takeException(), isNull)`。窄屏用 384 宽：环境变量页页头在 360 宽、测试字体下
-   本来就向右溢出 22px（v1.3.9 就有，与弹层无关），用 360 的断言在改动前就是红的。
+   不溢出的断言是 `expect(tester.takeException(), isNull)`。🔴 **窄屏一律用 360 宽，并加一条 textScale 1.3**（APP #21，v1.4.3）：
+   360dp 是最常见的安卓宽度（#21 报告人的手机就是）。以前这里写「环境变量页页头在 360 宽本来就溢出 22px，所以改用 384」，
+   等于把真 bug 绕过去了——用户的「+」被挤出屏幕点不中，测试却一直是绿的。页头已修，**不要再为了让断言变绿而放宽宽度**；
+   360 下红了就是要修的布局问题。页头回归测试见 `test/features/page_header_narrow_test.dart`。
 3. **测「请求在飞时」的用户操作，用 `Completer` 挂住应答。** `FakeHttpAdapter` 的 responder 可以返回 Future：
    `gate.future.then((_) => jsonResponse({...}))`（`ResponseBody` 的流只能读一次，每个请求现造一个）。
    - 页面用例：发起操作 → 先断言前提（请求已发出、还没重拉、弹层还开着）→ 做那个操作（`tester.tapAt(const Offset(400, 40))`
