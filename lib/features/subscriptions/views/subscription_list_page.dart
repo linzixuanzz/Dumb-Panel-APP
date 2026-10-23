@@ -1499,16 +1499,21 @@ class _SubCard extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Text(
-                  sub.lastPullAt != null
-                      ? '上次拉取：${formatTimeCn(sub.lastPullAt, short: true)}'
-                      : '尚未拉取',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: isLight ? AppColors.slate500 : AppColors.slate400,
+                // APP #23 ②：原来文字不可收缩，360dp 屏上把右侧 4 个按钮挤出卡片，删除点不到。
+                // 文字让位（单行省略），4 个 44dp 按钮始终完整可点。
+                Expanded(
+                  child: Text(
+                    sub.lastPullAt != null
+                        ? '上次拉取：${formatTimeCn(sub.lastPullAt, short: true)}'
+                        : '尚未拉取',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isLight ? AppColors.slate500 : AppColors.slate400,
+                    ),
                   ),
                 ),
-                const Spacer(),
                 _SmallIconBtn(
                   icon: sub.isPulling ? Icons.stop : Icons.sync,
                   onTap: sub.isPulling ? onStopPull : onPull,

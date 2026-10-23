@@ -1219,47 +1219,90 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
           children: [
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    '环境变量',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
-                  ),
-                  Row(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  const titleStyle = TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w700,
+                  );
+                  final batchLabel = _selectionMode ? '取消' : '批量';
+                  final sortLabel = _sortMode ? '完成' : '排序';
+                  // APP #21：360dp 屏上「标题 + 批量 + 排序 + ⋯ + ＋」一行放不下，＋被挤出屏幕、点了没反应。
+                  // 按当前字号量一下这一态的按钮完整显示要多宽（与下面的显示条件逐项对应），
+                  // 放不下就让胶囊只留图标；只剩一个「完成」时放得下，照常带字。
+                  // ⋯ 菜单是 32dp 的圆，＋ 是 44dp 命中区，按钮之间各 8dp；
+                  // 标题与按钮之间不另加间距（与原来的排版逐像素一致，384dp 屏仍然带字）。
+                  var fullWidth = measureTextWidth(context, '环境变量', titleStyle);
+                  if (!_sortMode) {
+                    fullWidth += AppChipButton.fullWidth(context, batchLabel);
+                  }
+                  if (!_selectionMode) {
+                    fullWidth += 8 + AppChipButton.fullWidth(context, sortLabel);
+                  }
+                  if (!_sortMode) {
+                    fullWidth += 8 + 32;
+                  }
+                  if (!_selectionMode && !_sortMode) {
+                    fullWidth += 8 + AppTapTarget.min;
+                  }
+                  final compact = fullWidth > constraints.maxWidth;
+                  // 只留图标时按钮间距收到 4：每个按钮自带 44dp 命中区，视觉上仍分得开，
+                  // 省下的 12dp 让 360dp 屏在字号 1.3 时标题也不用省略。
+                  final gap = compact ? 4.0 : 8.0;
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      if (!_sortMode)
-                        AppChipButton(
-                          label: _selectionMode ? '取消' : '批量',
-                          icon: _selectionMode ? Icons.close : Icons.done_all,
-                          onTap: () => _setSelectionMode(!_selectionMode),
+                      // 字号再大也只让标题省略，右边的按钮始终完整可点。
+                      const Flexible(
+                        child: Text(
+                          '环境变量',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: titleStyle,
                         ),
-                      if (!_selectionMode) ...[
-                        const SizedBox(width: 8),
-                        AppChipButton(
-                          label: _sortMode ? '完成' : '排序',
-                          icon: _sortMode ? Icons.check : Icons.swap_vert,
-                          // 每次松手已经各自保存过了（见 _moveEnv），
-                          // 「完成」只是退出排序模式，不再攒到这里统一提交。
-                          onTap: () => setState(() {
-                            _sortMode = !_sortMode;
-                            if (!_sortMode) {
-                              _draggingEnvId = null;
-                            }
-                          }),
-                        ),
-                      ],
-                      if (!_sortMode) ...[
-                        const SizedBox(width: 8),
-                        _buildTransferMenu(),
-                      ],
-                      if (!_selectionMode && !_sortMode) ...[
-                        const SizedBox(width: 8),
-                        AppCircleAddButton(onTap: () => _showCreateDialog()),
-                      ],
+                      ),
+                      Row(
+                        children: [
+                          if (!_sortMode)
+                            AppChipButton(
+                              label: batchLabel,
+                              icon: _selectionMode
+                                  ? Icons.close
+                                  : Icons.done_all,
+                              compact: compact,
+                              onTap: () => _setSelectionMode(!_selectionMode),
+                            ),
+                          if (!_selectionMode) ...[
+                            SizedBox(width: gap),
+                            AppChipButton(
+                              label: sortLabel,
+                              icon: _sortMode ? Icons.check : Icons.swap_vert,
+                              compact: compact,
+                              // 每次松手已经各自保存过了（见 _moveEnv），
+                              // 「完成」只是退出排序模式，不再攒到这里统一提交。
+                              onTap: () => setState(() {
+                                _sortMode = !_sortMode;
+                                if (!_sortMode) {
+                                  _draggingEnvId = null;
+                                }
+                              }),
+                            ),
+                          ],
+                          if (!_sortMode) ...[
+                            SizedBox(width: gap),
+                            _buildTransferMenu(),
+                          ],
+                          if (!_selectionMode && !_sortMode) ...[
+                            SizedBox(width: gap),
+                            AppCircleAddButton(
+                              onTap: () => _showCreateDialog(),
+                            ),
+                          ],
+                        ],
+                      ),
                     ],
-                  ),
-                ],
+                  );
+                },
               ),
             ),
             const SizedBox(height: 16),
