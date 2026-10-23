@@ -21,9 +21,39 @@ import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
 
+/// 新建依赖时把输入框里的多个名字切开：换行、逗号、空白都算分隔，
+/// 但方括号里的逗号和空格不切（面板 #166：`httpx[http2,socks]` 要整个交给 pip，
+/// 原来按 `[\n,\s]+` 一刀切会变成 `httpx[http2` 和 `socks]` 两个装不上的名字）。
+/// 方括号里的空格直接去掉（`httpx[http2, socks]` → `httpx[http2,socks]`）；
+/// 换行无论如何都切，免得少写一个 `]` 把后面几行全吞成一个名字。
+List<String> splitDependencyNames(String raw) {
+  final parts = <String>[];
+  final current = StringBuffer();
+  var bracketDepth = 0;
+  for (final char in raw.split('')) {
+    final isLineBreak = char == '\n' || char == '\r';
+    final isSeparator = isLineBreak || char == ',' || char.trim().isEmpty;
+    if (bracketDepth > 0 && !isLineBreak) {
+      // 方括号里：逗号原样保留，空白丢掉，其余照抄
+      if (char.trim().isNotEmpty) current.write(char);
+    } else if (isSeparator) {
+      if (current.isNotEmpty) parts.add(current.toString());
+      current.clear();
+      bracketDepth = 0;
+      continue;
+    } else {
+      current.write(char);
+    }
+    if (char == '[') bracketDepth++;
+    if (char == ']' && bracketDepth > 0) bracketDepth--;
+  }
+  if (current.isNotEmpty) parts.add(current.toString());
+  return parts;
+}
+
 // ── Provider ──
 
-final depListProvider = StateNotifierProvider<DepListNotifier, DepListState>((
+final depListProvider =StateNotifierProvider<DepListNotifier, DepListState>((
   ref,
 ) {
   return DepListNotifier();
@@ -444,12 +474,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
       final trimmed = raw.trim();
       return trimmed.isEmpty ? const [] : [trimmed];
     }
-    final parts = raw
-        .split(RegExp(r'[\n,\s]+'))
-        .map((item) => item.trim())
-        .where((item) => item.isNotEmpty)
-        .toList();
-    return parts.toSet().toList();
+    return splitDependencyNames(raw).toSet().toList();
   }
 
   Future<void> _changeType(String type) async {
@@ -846,6 +871,9 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                             '天翼云',
                             'https://mirrors.ctyun.cn/pypi/simple',
                           ),
+                          // 面板 #165：v3.3.9 起面板不再把官方源换成默认加速源，给个直达选项（海外机器直连更快）。
+                          // 老面板保存后仍会回落腾讯云，那是面板侧的行为，APP 不做版本判断。
+                          MapEntry('PyPI 官方', 'https://pypi.org/simple'),
                           MapEntry('恢复默认', ''),
                         ].map((entry) {
                           return ActionChip(
@@ -878,6 +906,8 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                             '华为云',
                             'https://repo.huaweicloud.com/repository/npm/',
                           ),
+                          // 面板 #165 同一个根因：npm 官方源现在也原样保存、原样生效。
+                          ('npm 官方', 'https://registry.npmjs.org/'),
                           ('恢复默认', ''),
                         ].map((entry) {
                           return ActionChip(
@@ -1019,6 +1049,9 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                   DropdownButtonFormField<String>(
                     key: ValueKey(selectedVersion),
                     initialValue: selectedVersion,
+                    // APP #23 ① 顺带：窄屏 + 大字号时「Python 3.12（默认）」比下拉框宽，
+                    // 不展开就会横向溢出；展开后文字在框内单行省略。
+                    isExpanded: true,
                     decoration: const InputDecoration(
                       labelText: 'Python 版本',
                       isDense: true,
@@ -1027,7 +1060,11 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                       final suffix = runtime.isDefault ? '（默认）' : '';
                       return DropdownMenuItem(
                         value: runtime.version,
-                        child: Text('${runtime.label}$suffix'),
+                        child: Text(
+                          '${runtime.label}$suffix',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       );
                     }).toList(),
                     onChanged: state.runtimeLoading
@@ -1055,6 +1092,8 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                         child: DropdownButtonFormField<String>(
                           key: ValueKey(selectedVersion),
                           initialValue: selectedVersion,
+                          // 同上：大字号时文字比下拉框宽也只在框内省略。
+                          isExpanded: true,
                           decoration: const InputDecoration(
                             labelText: 'Python 版本',
                             isDense: true,
@@ -1063,7 +1102,11 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                             final suffix = runtime.isDefault ? '（默认）' : '';
                             return DropdownMenuItem(
                               value: runtime.version,
-                              child: Text('${runtime.label}$suffix'),
+                              child: Text(
+                                '${runtime.label}$suffix',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             );
                           }).toList(),
                           onChanged: state.runtimeLoading
@@ -1153,8 +1196,104 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     final state = ref.watch(depListProvider);
     final theme = Theme.of(context);
     final isLight = theme.brightness == Brightness.light;
-    final screenWidth = MediaQuery.of(context).size.width;
-    final isNarrow = screenWidth < 420;
+    // APP #23 ①：计数卡、Python 运行时面板、状态筛选原来都钉在列表上方，
+    // 360dp 屏看 Python 依赖时列表只剩小半屏。现在只固定标题行（和有选中项时的「批量卸载」），
+    // 这一段作为列表的第一项，向上滑就跟着滚走；加载 / 出错 / 空态的列表也都带着它，切类型、筛状态照常可用。
+    final listHeader = Column(
+      children: [
+        const SizedBox(height: 14),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              // 窄屏也一行三个（原来宽度 < 420 时一行两个，Linux 单独占一行）。
+              final width = (constraints.maxWidth - 20) / 3;
+              return Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  SizedBox(
+                    width: width,
+                    child: _buildCountCard(
+                      'nodejs',
+                      'NodeJS',
+                      state.selectedType == 'nodejs',
+                      isLight,
+                    ),
+                  ),
+                  SizedBox(
+                    width: width,
+                    child: _buildCountCard(
+                      'python',
+                      'Python',
+                      state.selectedType == 'python',
+                      isLight,
+                    ),
+                  ),
+                  SizedBox(
+                    width: width,
+                    child: _buildCountCard(
+                      'linux',
+                      'Linux',
+                      state.selectedType == 'linux',
+                      isLight,
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 10),
+        if (state.selectedType == 'python') ...[
+          _buildPythonRuntimePanel(state, isLight),
+          const SizedBox(height: 10),
+        ],
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _StatusFilterChip(
+                label: '全部',
+                count: state.items.length,
+                selected: _statusFilter == null,
+                isLight: isLight,
+                onTap: () => setState(() => _statusFilter = null),
+              ),
+              _StatusFilterChip(
+                label: '已安装',
+                count: state.items.where((d) => d.isInstalled).length,
+                selected: _statusFilter == 'installed',
+                isLight: isLight,
+                // 与下方「已安装」状态徽章同色；原先是 primary，
+                // 和默认也是 primary 的「全部」chip 完全同色。
+                color: AppColors.success,
+                onTap: () => setState(
+                  () => _statusFilter = _statusFilter == 'installed'
+                      ? null
+                      : 'installed',
+                ),
+              ),
+              _StatusFilterChip(
+                label: '失败',
+                count: state.items.where((d) => d.isFailed).length,
+                selected: _statusFilter == 'failed',
+                isLight: isLight,
+                color: AppColors.danger,
+                onTap: () => setState(
+                  () => _statusFilter = _statusFilter == 'failed'
+                      ? null
+                      : 'failed',
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+      ],
+    );
 
     return Scaffold(
       body: Padding(
@@ -1193,97 +1332,8 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                 ],
               ),
             ),
-            const SizedBox(height: 14),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final width = isNarrow
-                      ? (constraints.maxWidth - 10) / 2
-                      : (constraints.maxWidth - 20) / 3;
-                  return Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      SizedBox(
-                        width: width,
-                        child: _buildCountCard(
-                          'nodejs',
-                          'NodeJS',
-                          state.selectedType == 'nodejs',
-                          isLight,
-                        ),
-                      ),
-                      SizedBox(
-                        width: width,
-                        child: _buildCountCard(
-                          'python',
-                          'Python',
-                          state.selectedType == 'python',
-                          isLight,
-                        ),
-                      ),
-                      SizedBox(
-                        width: width,
-                        child: _buildCountCard(
-                          'linux',
-                          'Linux',
-                          state.selectedType == 'linux',
-                          isLight,
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 10),
-            if (state.selectedType == 'python') ...[
-              _buildPythonRuntimePanel(state, isLight),
-              const SizedBox(height: 10),
-            ],
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  _StatusFilterChip(
-                    label: '全部',
-                    count: state.items.length,
-                    selected: _statusFilter == null,
-                    isLight: isLight,
-                    onTap: () => setState(() => _statusFilter = null),
-                  ),
-                  _StatusFilterChip(
-                    label: '已安装',
-                    count: state.items.where((d) => d.isInstalled).length,
-                    selected: _statusFilter == 'installed',
-                    isLight: isLight,
-                    // 与下方「已安装」状态徽章同色；原先是 primary，
-                    // 和默认也是 primary 的「全部」chip 完全同色。
-                    color: AppColors.success,
-                    onTap: () => setState(
-                      () => _statusFilter = _statusFilter == 'installed'
-                          ? null
-                          : 'installed',
-                    ),
-                  ),
-                  _StatusFilterChip(
-                    label: '失败',
-                    count: state.items.where((d) => d.isFailed).length,
-                    selected: _statusFilter == 'failed',
-                    isLight: isLight,
-                    color: AppColors.danger,
-                    onTap: () => setState(
-                      () => _statusFilter = _statusFilter == 'failed'
-                          ? null
-                          : 'failed',
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            // 「批量卸载」不放进随列表滚走的头部：用户是往下滑着勾选的，
+            // 按钮跟着滚出屏幕就得再滑回顶部才能点。有选中项时钉在标题行下方，没选中时不占位。
             if (_selectedIds.isNotEmpty) ...[
               const SizedBox(height: 8),
               Padding(
@@ -1299,7 +1349,6 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                 ),
               ),
             ],
-            const SizedBox(height: 10),
             Expanded(
               child: RefreshIndicator(
                 color: AppColors.primary,
@@ -1307,9 +1356,10 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                 child: state.loading && state.items.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
-                          SizedBox(height: 120),
-                          Center(
+                        children: [
+                          listHeader,
+                          const SizedBox(height: 120),
+                          const Center(
                             child: CircularProgressIndicator(
                               color: AppColors.primary,
                             ),
@@ -1322,6 +1372,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
                         children: [
+                          listHeader,
                           AppErrorView(
                             title: '依赖加载失败',
                             message: state.error!,
@@ -1339,6 +1390,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                           return ListView(
                             physics: const AlwaysScrollableScrollPhysics(),
                             children: [
+                              listHeader,
                               const SizedBox(height: 100),
                               Icon(
                                 Icons.inventory_2_outlined,
@@ -1359,42 +1411,52 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                             ],
                           );
                         }
+                        // 第 0 项是上面那段可滚走的头部，依赖卡片从第 1 项开始。
                         return ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-                          itemCount: filtered.length,
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding: const EdgeInsets.only(bottom: 24),
+                          itemCount: filtered.length + 1,
                           itemBuilder: (_, i) {
-                            final dep = filtered[i];
-                            return _DepCard(
-                              dep: dep,
-                              isLight: isLight,
-                              selected: _selectedIds.contains(dep.id),
-                              subtitle:
-                                  '${_typeLabel(dep.type)}'
-                                  '${dep.type == 'python' && dep.pythonVersion.isNotEmpty ? ' ${dep.pythonVersion}' : ''}'
-                                  ' · ${formatTimeCn(dep.createdAt, short: true)}',
-                              onSelected: (value) {
-                                setState(() {
-                                  if (value) {
-                                    _selectedIds.add(dep.id);
-                                  } else {
-                                    _selectedIds.remove(dep.id);
-                                  }
-                                });
-                              },
-                              onViewLog: () =>
-                                  context.push('/deps/${dep.id}/log-stream'),
-                              onCancel: dep.isBusy
-                                  ? () => _handleCancel(dep)
-                                  : null,
-                              onReinstall: dep.isBusy
-                                  ? null
-                                  : () => _handleReinstall(dep),
-                              onDelete: dep.isBusy
-                                  ? null
-                                  : () => _confirmDelete(dep),
-                              onForceDelete: dep.isBusy
-                                  ? null
-                                  : () => _confirmDelete(dep, force: true),
+                            if (i == 0) {
+                              return listHeader;
+                            }
+                            final dep = filtered[i - 1];
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                              ),
+                              child: _DepCard(
+                                dep: dep,
+                                isLight: isLight,
+                                selected: _selectedIds.contains(dep.id),
+                                subtitle:
+                                    '${_typeLabel(dep.type)}'
+                                    '${dep.type == 'python' && dep.pythonVersion.isNotEmpty ? ' ${dep.pythonVersion}' : ''}'
+                                    ' · ${formatTimeCn(dep.createdAt, short: true)}',
+                                onSelected: (value) {
+                                  setState(() {
+                                    if (value) {
+                                      _selectedIds.add(dep.id);
+                                    } else {
+                                      _selectedIds.remove(dep.id);
+                                    }
+                                  });
+                                },
+                                onViewLog: () =>
+                                    context.push('/deps/${dep.id}/log-stream'),
+                                onCancel: dep.isBusy
+                                    ? () => _handleCancel(dep)
+                                    : null,
+                                onReinstall: dep.isBusy
+                                    ? null
+                                    : () => _handleReinstall(dep),
+                                onDelete: dep.isBusy
+                                    ? null
+                                    : () => _confirmDelete(dep),
+                                onForceDelete: dep.isBusy
+                                    ? null
+                                    : () => _confirmDelete(dep, force: true),
+                              ),
                             );
                           },
                         );
