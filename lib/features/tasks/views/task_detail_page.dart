@@ -12,7 +12,7 @@ import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../providers/task_provider.dart';
-import 'task_list_page.dart' show confirmAndDeleteTask;
+import 'task_list_page.dart' show confirmAndDeleteTask, openLatestTaskLog;
 
 /// 任务详情页（issue #20，照青龙客户端）：从上到下一行一个「标签 — 值」，
 /// 可点的行右侧带「>」，右上角「…」菜单放运行 / 编辑 / 启停 / 置顶 / 复制 / 删除。
@@ -40,27 +40,6 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
 
   void _openLiveLog(Task task) {
     context.push('/tasks/${task.id}/live-logs', extra: task.name);
-  }
-
-  /// 与列表原来「点卡片」的行为一致：运行中开实时日志，否则打开最近一次日志。
-  Future<void> _openLatestLog(Task task) async {
-    if (task.isRunning) {
-      _openLiveLog(task);
-      return;
-    }
-    try {
-      final latestLog = await ref
-          .read(taskProvider.notifier)
-          .fetchLatestLog(task.id);
-      if (!mounted) return;
-      if (latestLog == null) {
-        AppSnack.show(context, '当前任务暂无日志');
-        return;
-      }
-      context.push('/logs/${latestLog.id}/stream');
-    } catch (_) {
-      if (mounted) AppSnack.error(context, '打开日志失败');
-    }
   }
 
   /// 菜单动作统一入口：成功出绿条、失败出红条，文案与列表侧滑一致。
@@ -312,7 +291,8 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
                               : task.lastRunResultText),
                     valueColor: task.isRunning ? null : lastResultColor,
                     key: const Key('task-detail-latest-log'),
-                    onTap: () => _openLatestLog(task),
+                    // 与列表左滑的「日志」共用（APP #22 评论）：运行中开实时日志，否则打开最近一次日志
+                    onTap: () => openLatestTaskLog(context, ref, task),
                   ),
                   row(
                     '日志历史',
