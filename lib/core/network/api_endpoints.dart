@@ -32,6 +32,10 @@ class ApiEndpoints {
   static const String systemRestart = '$baseApi/system/restart';
   static const String panelSettings = '$baseApi/system/panel-settings';
   static const String panelLog = '$baseApi/system/panel-log';
+
+  /// 配置文件 config.sh（APP #22）。GET → `{content, path}`（文件不存在时 content 为空）；
+  /// PUT body `{content}` → `{message}`。两条都只有 admin 能调（面板 server/handler/system.go）。
+  static const String configScript = '$baseApi/system/config-script';
   static const String sponsors = '$baseApi/sponsors';
   static const String backup = '$baseApi/system/backup';
   static const String backups = '$baseApi/system/backups';

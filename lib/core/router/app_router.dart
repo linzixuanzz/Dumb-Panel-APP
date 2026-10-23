@@ -23,6 +23,7 @@ import '../../features/users/views/user_list_page.dart';
 import '../../features/security/views/security_page.dart';
 import '../../features/system/views/system_settings_page.dart';
 import '../../features/system/views/panel_log_page.dart';
+import '../../features/system/views/config_script_page.dart';
 import '../../features/system/views/backup_page.dart';
 import '../../features/openapi/views/open_api_page.dart';
 import '../../features/app_lock/views/app_lock_settings_page.dart';
@@ -254,6 +255,12 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/panel-log',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (_, state) => const PanelLogPage(),
+      ),
+      // 配置文件 config.sh 编辑页（APP #22），入口在「更多」的管理员分区。
+      GoRoute(
+        path: '/config-script',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, state) => const ConfigScriptPage(),
       ),
       GoRoute(
         path: '/backup',

@@ -248,6 +248,13 @@ class _MorePageState extends ConsumerState<MorePage> {
               isLight: isLight,
               onTap: () => context.push('/system-settings'),
             ),
+            // APP #22：原来 APP 里找不到 config.sh 在哪编辑；接口仅 admin，所以放在这个分区。
+            _SettingsItem(
+              icon: Icons.description_outlined,
+              title: '配置文件',
+              isLight: isLight,
+              onTap: () => context.push('/config-script'),
+            ),
             _SettingsItem(
               icon: Icons.article_outlined,
               title: '面板日志',
