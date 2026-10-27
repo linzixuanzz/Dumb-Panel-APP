@@ -6,6 +6,7 @@ import 'core/auth/auth_provider.dart';
 import 'core/auth/token_refresher.dart';
 import 'core/network/app_user_agent.dart';
 import 'core/network/dio_client.dart';
+import 'core/router/default_landing_page.dart';
 import 'core/storage/secure_storage.dart';
 
 void main() async {
@@ -49,6 +50,9 @@ void main() async {
 
   // 启动时先恢复本地可信登录态，7 天内避免重复触发登录接口和登录日志。
   await container.read(authProvider.notifier).restoreTrustedLocalSession();
+
+  // 「默认打开页面」（APP #24）预读进内存：router 的 redirect 是同步的，读不了 SharedPreferences。
+  await DefaultLandingPage.load();
 
   runApp(
     UncontrolledProviderScope(container: container, child: const DaidaiApp()),

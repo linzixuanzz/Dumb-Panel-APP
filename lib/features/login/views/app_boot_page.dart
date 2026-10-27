@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/network/dio_client.dart';
+import '../../../core/router/default_landing_page.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
@@ -170,7 +171,8 @@ class _AppBootPageState extends ConsumerState<AppBootPage> {
       try {
         ref.invalidate(dashboardProvider);
       } catch (_) {}
-      _go('/dashboard');
+      // 落到「默认打开页面」（APP #24），没设过就是主页
+      _go(DefaultLandingPage.route);
       return;
     }
 
@@ -267,13 +269,13 @@ class _AppBootPageState extends ConsumerState<AppBootPage> {
       // 「首页数据慢 / 不返回」直接等于「卡在开屏页」，而当时那一屏连按钮都没有。
       //
       // 取舍：DashboardPage 自己的 initState 里还会 load() 一次
-      //（dashboard_page.dart:32-38），所以不等它并不会让首页空着 ——
+      //（DashboardPage.initState），所以不等它并不会让首页空着 ——
       // 最坏情况只是数据晚一两帧到；换来的是跳转不再被任何网络请求拖住。
       // 请求仍然在跳转前就发出去，「进首页就有数据」的体验保持不变。
       ref.invalidate(dashboardProvider);
       unawaited(_preloadDashboard());
 
-      _go('/dashboard');
+      _go(DefaultLandingPage.route);
       return;
     } on _BootStepTimeout {
       rethrow;

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../auth/auth_provider.dart';
+import 'default_landing_page.dart';
 import '../../features/login/views/app_boot_page.dart';
 import '../../features/login/views/login_page.dart';
 import '../../features/server_config/views/server_config_page.dart';
@@ -73,7 +74,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       }
       if (isServerConfig) {
         if (isAuth && !manualServerConfig && !manageServerConfig) {
-          return '/dashboard';
+          // 进入主界面的落点统一读「默认打开页面」（APP #24），没设过就是主页
+          return DefaultLandingPage.route;
         }
         if (!isAuth &&
             !manualServerConfig &&
@@ -84,7 +86,7 @@ final routerProvider = Provider<GoRouter>((ref) {
         return null;
       }
       if (!isAuth && !isLoginRoute) return '/login';
-      if (isAuth && isLoginRoute) return '/dashboard';
+      if (isAuth && isLoginRoute) return DefaultLandingPage.route;
       return null;
     },
     routes: [

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/providers/server_scoped_providers.dart';
+import '../../../core/router/default_landing_page.dart';
 import '../../../core/services/app_update_service.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
@@ -80,6 +81,61 @@ class _MorePageState extends ConsumerState<MorePage> {
         }
       }
     }
+  }
+
+  /// 「默认打开页面」的选择弹层：四个选项，当前那项打勾，点一下就保存并关掉。
+  Future<void> _pickDefaultLandingPage() async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      useRootNavigator: true,
+      builder: (sheetContext) {
+        final theme = Theme.of(sheetContext);
+        return SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '默认打开页面',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '打开 APP、登录或切换面板后先进入这一页，所有面板共用。',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                for (final entry in DefaultLandingPage.options.entries)
+                  ListTile(
+                    key: Key('default-landing-${entry.key}'),
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      entry.value,
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                    trailing: entry.key == DefaultLandingPage.value
+                        ? const Icon(Icons.check, color: AppColors.primary)
+                        : null,
+                    onTap: () => Navigator.of(sheetContext).pop(entry.key),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (selected == null) return;
+    await DefaultLandingPage.save(selected);
+    if (mounted) setState(() {});
   }
 
   @override
@@ -317,6 +373,21 @@ class _MorePageState extends ConsumerState<MorePage> {
             ),
             onTap: () => _toggleAutoRemind(!_autoRemind),
           ),
+          // 进入主界面时落到哪一页（APP #24），存本机、所有面板共用
+          _SettingsItem(
+            key: const Key('more-default-landing-page'),
+            icon: Icons.home_outlined,
+            title: '默认打开页面',
+            isLight: isLight,
+            trailing: Text(
+              DefaultLandingPage.label,
+              style: TextStyle(
+                fontSize: 13,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            onTap: _pickDefaultLandingPage,
+          ),
           _SettingsItem(
             icon: Icons.info_outline,
             title: '关于',
@@ -475,6 +546,7 @@ class _SettingsItem extends StatelessWidget {
   final bool showChevron;
 
   const _SettingsItem({
+    super.key,
     required this.icon,
     required this.title,
     required this.isLight,

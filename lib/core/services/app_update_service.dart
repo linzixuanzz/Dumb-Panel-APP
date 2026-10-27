@@ -115,6 +115,11 @@ class AppUpdateService {
   @visibleForTesting
   static void resetAutoCheckForTest() => _autoCheckedThisLaunch = false;
 
+  /// 测试用：替换自动检查里的网络请求。[autoCheckAndPrompt] 的调用方（MainScaffold）
+  /// 不方便传 `check` 参数，测试就从这里注入；正常运行时始终为 null。
+  @visibleForTesting
+  static Future<AppUpdateInfo?> Function()? checkOverrideForTest;
+
   /// 「自动提醒更新」开关，没设过时默认开着。
   static Future<bool> getAutoRemindEnabled() async {
     final prefs = await SharedPreferences.getInstance();
@@ -126,7 +131,8 @@ class AppUpdateService {
     await prefs.setBool(_kAutoRemindKey, enabled);
   }
 
-  /// 首页的静默检查：每次启动最多弹一次，且尊重「忽略此版本」「不再自动提醒」。
+  /// 进入主界面时的静默检查（v1.4.4 起由 MainScaffold 首次构建触发，与默认打开页面无关）：
+  /// 每次启动最多弹一次，且尊重「忽略此版本」「不再自动提醒」。
   /// 手动「检查更新」不走这里，不受这两项影响。
   ///
   /// [check] 只给测试替换网络请求用，正常调用不传。
@@ -139,7 +145,7 @@ class AppUpdateService {
     _autoCheckedThisLaunch = true;
     try {
       if (!await getAutoRemindEnabled()) return;
-      final info = await (check ?? checkUpdate)();
+      final info = await (check ?? checkOverrideForTest ?? checkUpdate)();
       if (info == null || !info.hasUpdate) return;
       final prefs = await SharedPreferences.getInstance();
       // 只有和被忽略的版本号完全相同才跳过，出了更新的版本照常提示

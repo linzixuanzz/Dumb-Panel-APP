@@ -1,22 +1,43 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/auth/auth_provider.dart';
+import '../../core/services/app_update_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/design_tokens.dart';
 import 'app_snack.dart';
 
-class MainScaffold extends StatefulWidget {
+class MainScaffold extends ConsumerStatefulWidget {
   final Widget child;
 
   const MainScaffold({super.key, required this.child});
 
   @override
-  State<MainScaffold> createState() => _MainScaffoldState();
+  ConsumerState<MainScaffold> createState() => _MainScaffoldState();
 }
 
-class _MainScaffoldState extends State<MainScaffold> {
+class _MainScaffoldState extends ConsumerState<MainScaffold> {
   DateTime? _lastExitAttemptAt;
+
+  @override
+  void initState() {
+    super.initState();
+    // 每次进入主界面跑一次、与落在哪一页无关的两件事（APP #24）。
+    // 它们原来挂在主页的 initState 里，「默认打开页面」设成任务 / 日志 / 变量时就不会跑：
+    // 1. 用户信息为空时补拉 —— 「更多」页的管理员分区靠它；
+    // 2. 静默检查更新 —— 每次启动最多弹一次，由服务里的进程级标记保证（issue #19）。
+    // 主页自己的数据加载仍留在主页。
+    Future.microtask(() async {
+      if (!mounted) return;
+      if (ref.read(authProvider).user == null) {
+        await ref.read(authProvider.notifier).refreshUser();
+      }
+      if (!mounted) return;
+      await AppUpdateService.autoCheckAndPrompt(context);
+    });
+  }
 
   int _currentIndex(BuildContext context) {
     final location = GoRouterState.of(context).matchedLocation;
@@ -57,6 +78,16 @@ class _MainScaffoldState extends State<MainScaffold> {
 
   @override
   Widget build(BuildContext context) {
+    // 切换面板时主界面不会重建（「更多」页是 push 出服务器配置页的），上面 initState 不再跑；
+    // 新面板恢复出的登录态可能没带用户信息，这里同样补拉一次。只在「有 → 没有」时触发，
+    // 补拉失败状态不变，不会反复请求。
+    ref.listen<AuthState>(authProvider, (previous, next) {
+      if (next.status == AuthStatus.authenticated &&
+          next.user == null &&
+          previous?.user != null) {
+        ref.read(authProvider.notifier).refreshUser();
+      }
+    });
     final theme = Theme.of(context);
     final isLight = theme.brightness == Brightness.light;
     final idx = _currentIndex(context);

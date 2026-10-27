@@ -5,6 +5,7 @@ import '../../../core/auth/auth_provider.dart';
 import '../../../core/auth/auth_service.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/providers/server_scoped_providers.dart';
+import '../../../core/router/default_landing_page.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/widgets/app_snack.dart';
@@ -180,7 +181,8 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
 
     if (!mounted) return;
     if (ref.read(authProvider).status == AuthStatus.authenticated) {
-      context.go('/dashboard');
+      // 落到「默认打开页面」（APP #24），没设过就是主页
+      context.go(DefaultLandingPage.route);
       return;
     }
     context.go(skipAutoLogin ? '/login?manual=1' : '/boot');

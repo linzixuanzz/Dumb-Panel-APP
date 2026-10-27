@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/auth/auth_provider.dart';
+import '../../../core/router/default_landing_page.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/theme/app_theme.dart';
@@ -107,7 +108,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
     if (ref.read(authProvider).status == AuthStatus.authenticated) {
       if (mounted) {
-        context.go('/dashboard');
+        // 落到「默认打开页面」（APP #24），没设过就是主页
+        context.go(DefaultLandingPage.route);
       }
       return;
     }
@@ -197,7 +199,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       } catch (_) {}
 
       if (mounted) {
-        context.go('/dashboard');
+        context.go(DefaultLandingPage.route);
       }
     } catch (e) {
       setState(() {

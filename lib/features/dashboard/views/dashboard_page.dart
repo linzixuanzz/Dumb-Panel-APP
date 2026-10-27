@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/auth/auth_provider.dart';
-import '../../../core/services/app_update_service.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
@@ -29,13 +28,9 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
     SecureStorage.getServerUrl().then((url) {
       if (mounted) setState(() => _serverUrl = url);
     });
-    Future.microtask(() async {
-      await ref.read(dashboardProvider.notifier).load();
-      if (ref.read(authProvider).user == null) {
-        await ref.read(authProvider.notifier).refreshUser();
-      }
-      _silentUpdateCheck();
-    });
+    // 只管主页自己的数据。「user 为空时补拉用户信息」和「静默检查更新」原来也挂在这里，
+    // 默认打开页面（APP #24）不是主页时就不会跑，已挪到 MainScaffold 首次构建。
+    Future.microtask(() => ref.read(dashboardProvider.notifier).load());
   }
 
   String? _buildAvatarUrl(String? avatarPath) {
@@ -44,12 +39,6 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
     }
     if (avatarPath.startsWith('http')) return avatarPath;
     return '$_serverUrl$avatarPath';
-  }
-
-  Future<void> _silentUpdateCheck() async {
-    if (!mounted) return;
-    // 每次启动最多弹一次、尊重「忽略此版本」「不再自动提醒」，都在服务里判（issue #19）
-    await AppUpdateService.autoCheckAndPrompt(context);
   }
 
   Widget _buildDashboardAvatar(AuthState auth, bool isLight, double size) {
