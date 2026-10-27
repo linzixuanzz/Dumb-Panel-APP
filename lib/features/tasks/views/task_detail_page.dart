@@ -210,6 +210,16 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
       PanelStatusTone.warning => AppColors.warning,
       _ => null,
     };
+    // 「环境变量」行：全部 / 指定（分组：a、b；变量：X、Y），空的那一半不写
+    final envScopeParts = [
+      if (task.envGroups.isNotEmpty) '分组：${task.envGroups.join('、')}',
+      if (task.envNames.isNotEmpty) '变量：${task.envNames.join('、')}',
+    ];
+    final envScopeText = !task.isEnvScopeSelected
+        ? '全部'
+        : (envScopeParts.isEmpty
+              ? '指定（未选任何分组或变量，不注入用户变量）'
+              : '指定（${envScopeParts.join('；')}）');
 
     return Scaffold(
       appBar: AppBar(
@@ -303,6 +313,13 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
                       extra: task.name,
                     ),
                   ),
+                  // 任务级「可用环境变量」（面板 #168，v3.4.0 起）。老面板没有 env_scope 键就不出这一行
+                  if (task.hasEnvScope)
+                    row(
+                      '环境变量',
+                      envScopeText,
+                      key: const Key('task-detail-env-scope'),
+                    ),
                   row('运行状态', runStateText),
                   row(
                     '启用状态',

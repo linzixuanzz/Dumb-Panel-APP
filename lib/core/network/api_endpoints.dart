@@ -159,6 +159,8 @@ class ApiEndpoints {
   static const String envsBatchGroup = '$baseApi/envs/batch/group';
   static const String envsSort = '$baseApi/envs/sort';
   static const String envsGroups = '$baseApi/envs/groups';
+  // 变量名 + 全库同名条数（[{name, count}]），任务表单「环境变量 → 变量名」的候选
+  static const String envsNames = '$baseApi/envs/names';
   static const String envsExport = '$baseApi/envs/export';
   static const String envsExportAll = '$baseApi/envs/export-all';
   static const String envsExportFiles = '$baseApi/envs/export-files';

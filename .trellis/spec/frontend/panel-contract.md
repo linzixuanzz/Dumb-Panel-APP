@@ -209,6 +209,7 @@ schema 驱动依赖服务端下发某些键。这些键**是哪个版本引入�
 | `PUT /api/envs/sort` 的 `position:"after"` | **v3.2.8**（`4e5b08b`） | 更老的面板请求结构里没有这个字段（全仓没有 `DisallowUnknownFields`），静默忽略、按 before 处理：落到 target **前面**一格。APP v1.4.0 永远带 `position`，但只有「有筛选 + 拖到可见末尾」才真依赖 after，见下方「`PUT /api/envs/sort`」 |
 | `GET /api/envs` 的 `all=1` | **v2.1.7**（`7fb932b`） | 一次返回全部、硬上限 **5000** 条；`total` 在截断之前数好，截断时 `total > len(data)`。比 APP 关心的最老面板 v2.2.2 早，APP v1.4.0 起环境变量页只用它 |
 | `GET /api/envs` 列表项的 `important` | **v3.3.6** | 形状探测的依据：键不在 = 面板不支持，一切「重要」界面不出现、一个 `important` 都不发（见下方「列表项的 `important`」） |
+| 任务数据的 `env_scope` / `env_groups` / `env_names`（#168） | **v3.4.0** | 形状探测的依据：`env_scope` 不是字符串 = 面板不支持，表单分区 / 详情行不出现、请求体一个键都不带（老面板会静默忽略，见下方「面板 v3.4.0 的接口变化」） |
 | `PUT /api/envs/:id/move-top`、`/cancel-top` | **v1.5.0**（`c9a5081`） | 都有，但 move-top 的落点 v3.2.8 改过（见下方「置顶 / 取消置顶」）。APP v1.4.0 起在变量详情里用，也是排序跨区被拦下时的出路 |
 
 > **为什么这条值得写下来**：`parseSystemConfigGroups` 会跳过 `registered != true` 的项，
@@ -694,6 +695,21 @@ if (_pollAttempts >= 15 && mounted && _statusText == '等待日志...' && identi
   APP 的「PyPI 官方」「npm 官方」选项在老面板上保存后会显示成腾讯云 / npmmirror——这是面板行为，APP 不按版本隐藏。
 - `POST /deps`（#166）：面板 v3.3.9 起，已装 `httpx` 再提交 `httpx[http2]` 会原地升级同一条记录（`data` 里是那条已有记录、状态 installing），
   不再「已存在跳过」。APP 提交后照旧整表重拉，不受影响。依赖名切分（`splitDependencyNames`）：换行一律切，方括号里的逗号不切、空格去掉。
+
+### 面板 v3.4.0 的接口变化（APP v1.4.4 同期）
+
+- 任务级「可用环境变量」（面板 #168）：任务数据（列表 / 创建 / 更新 / 复制的 `ToDict`）新增三项——
+  `env_scope`（`"all"` / `"selected"`，库里不是 `selected` 的一律下发 `all`）、`env_groups`、`env_names`（字符串数组，永远不为 null，空是 `[]`）。
+  创建 / 更新 / 复制的请求体也收这三项：`env_scope` 只收 `all` / `selected`，其它值 400；两个列表收字符串数组（兼容逗号字符串），
+  变量名不合法 400 并点名；最终是 `all` 时两列清空；更新是白名单局部更新，**不带这三项时保持原值**（旧版 APP 编辑任务不会把「指定」冲掉）。
+- 🔴 **按形状探测，不看版本**：老面板任务数据里没有 `env_scope` 键，且会**静默忽略**请求体里的这三项（200、没存）。
+  APP（`Task.hasEnvScope` = `env_scope` 是字符串，null 与缺失同等对待）：编辑看这条任务有没有键；新建看已加载的任务（列表 provider + 表单自己拉的那页）里有没有任一带键，
+  一个任务都没有就不显示（新任务由面板默认 `all`）。不支持时表单不出「环境变量」分区、请求体**一个键都不带**、详情页不出那一行、也不去拉 `/envs/names`。
+  支持时请求体永远三项一起带；选「全部」时两个列表发 `[]`。
+- 候选：`GET /envs/groups` → `{data: [分组名]}`；`GET /envs/names` → `{data: [{name, count}]}`（count 是全库同名条数，选项文案照变量页写成 `JD_COOKIE (3)`）。
+  拉取失败只是候选为空，已选值照样显示、能取消，不挡保存。
+- 「指定」时脚本拿到的 `DAIDAI_TOKEN` 只能发通知（其它接口 403）；**这不是沙箱**，脚本仍能用 `ddp` 或读面板数据文件拿到全部变量，界面说明要如实写。
+- 测试：`test/features/tasks/task_env_scope_test.dart`（模型有键 / 无键 / null / 逗号串；表单支持与不支持时的显隐与请求体；详情行；360 宽 + 字号 1.3）。
 
 ---
 

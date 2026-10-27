@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -118,6 +119,19 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
   bool _showHooks = false;
   List<String> _knownGroups = const [];
 
+  // ── 任务级「可用环境变量」（面板 #168，v3.4.0 起）──
+  // 面板支持（形状探测：任务数据里有 env_scope 键）才显示分区、才在请求体里带这三项。
+  // 老面板会静默忽略这三个字段，发了也存不下，不能让用户以为设上了。
+  bool _envScopeSupported = false;
+  bool _envScopeSelected = false;
+  final List<String> _envGroups = [];
+  final List<String> _envNames = [];
+  List<String> _envGroupOptions = const [];
+
+  /// 变量名候选：(变量名, 全库同名条数)，选项文案照变量页写成 `JD_COOKIE (3)`。
+  List<(String, int)> _envNameOptions = const [];
+  bool _envOptionsLoaded = false;
+
   /// Cron 模板。默认就是老的 3 条硬编码，拉到面板的 21 条后整体替换。
   List<CronTemplate> _cronTemplates = kFallbackCronTemplates;
 
@@ -181,6 +195,16 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
     _randomDelayMode = _resolveRandomDelayMode(task?.randomDelaySeconds);
     _showHooks = _taskBeforeC.text.isNotEmpty || _taskAfterC.text.isNotEmpty;
 
+    // 环境变量分区的显隐：编辑时只看这条任务有没有 env_scope 键；
+    // 新建时看已加载的任务里有没有任一带键（下面 _loadKnownGroups 拉到的那页还会再补判一次）。
+    // 一个任务都没有就不显示：新任务由面板默认「全部」，与不设一样。
+    _envScopeSupported = task != null
+        ? task.hasEnvScope
+        : ref.read(taskProvider).tasks.any((t) => t.hasEnvScope);
+    _envScopeSelected = task?.isEnvScopeSelected ?? false;
+    _envGroups.addAll(task?.envGroups ?? const <String>[]);
+    _envNames.addAll(task?.envNames ?? const <String>[]);
+
     Future.microtask(() async {
       await Future.wait([
         _loadNotificationChannels(),
@@ -188,6 +212,10 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
         _loadPythonRuntimes(),
         _loadCronTemplates(),
       ]);
+      // 候选只在面板支持时才拉：老面板没有 /envs/names，免得白发一个 404。
+      if (mounted && _envScopeSupported) {
+        await _loadEnvOptions();
+      }
     });
     // 进页面就解析一次：编辑已有任务时用户还没动键盘，也应该能看到下次执行时间。
     _scheduleCronParse(immediate: true);
@@ -257,9 +285,10 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
         queryParameters: {'page': 1, 'page_size': 100},
       );
       final paginated = extractPaginated(response.data);
+      final tasks = paginated.items.map(Task.fromJson).toList();
       final groups =
-          paginated.items
-              .map((item) => Task.fromJson(item).groupName?.trim() ?? '')
+          tasks
+              .map((task) => task.groupName?.trim() ?? '')
               .where((group) => group.isNotEmpty)
               .toSet()
               .toList()
@@ -267,8 +296,222 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
       if (!mounted) {
         return;
       }
-      setState(() => _knownGroups = groups);
+      setState(() {
+        _knownGroups = groups;
+        // 新建任务：顺带用这一页任务做环境变量分区的形状探测（只会从「不显示」变成「显示」）。
+        if (!isEditing && tasks.any((task) => task.hasEnvScope)) {
+          _envScopeSupported = true;
+        }
+      });
     } catch (_) {}
+  }
+
+  /// 拉「分组」「变量名」两个多选的候选。各自失败各自兜：拿不到就只是候选为空，
+  /// 已选的值照样显示、照样能取消，也不挡保存（与网页一致）。
+  Future<void> _loadEnvOptions() async {
+    var groups = <String>[];
+    var names = <(String, int)>[];
+    try {
+      final response = await DioClient.instance.dio.get(
+        ApiEndpoints.envsGroups,
+      );
+      final data = extractData(response.data);
+      if (data is List) {
+        groups = data
+            .map((e) => e.toString().trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+      }
+    } catch (_) {}
+    try {
+      final response = await DioClient.instance.dio.get(ApiEndpoints.envsNames);
+      final data = extractData(response.data);
+      if (data is List) {
+        for (final item in data.whereType<Map>()) {
+          final name = item['name']?.toString().trim() ?? '';
+          if (name.isEmpty) continue;
+          final count = item['count'];
+          names.add((name, count is num ? count.toInt() : 0));
+        }
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _envGroupOptions = groups;
+      _envNameOptions = names;
+      _envOptionsLoaded = true;
+    });
+  }
+
+  /// 「分组」「变量名」共用的多选底部弹层：顶部搜索框、中间可勾选列表、底部「清空 / 确定」。
+  ///
+  /// [names] 为 true 选变量名，否则选分组。没点「确定」就关掉弹层时原选择不变。
+  Future<void> _pickEnvValues({required bool names}) async {
+    // 候选还没拉过（新建任务时形状探测比 initState 晚一步）就先拉一次再开弹层。
+    if (!_envOptionsLoaded) {
+      await _loadEnvOptions();
+      if (!mounted) return;
+    }
+    final title = names ? '选择变量名' : '选择分组';
+    final target = names ? _envNames : _envGroups;
+    // (值, 显示文案)。变量名的文案沿用变量页「变量名筛选」的 `JD_COOKIE (3)` 写法。
+    final options = names
+        ? [for (final (name, count) in _envNameOptions) (name, '$name ($count)')]
+        : [for (final group in _envGroupOptions) (group, group)];
+    // 已选但候选里没有的（变量被删了 / 候选拉取失败）也列在最前面，才能取消勾选。
+    final all = <(String, String)>[
+      for (final value in target)
+        if (!options.any((option) => option.$1 == value)) (value, value),
+      ...options,
+    ];
+    final picked = <String>{...target};
+    var keyword = '';
+    final result = await showModalBottomSheet<List<String>>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      useRootNavigator: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, setSheetState) {
+          final theme = Theme.of(sheetContext);
+          final media = MediaQuery.of(sheetContext);
+          final query = keyword.trim().toLowerCase();
+          final visible = query.isEmpty
+              ? all
+              : all
+                    .where((option) => option.$2.toLowerCase().contains(query))
+                    .toList();
+          // 键盘弹起时整块往上让，并把高度收到键盘之上还放得下的程度（360dp 窄屏 + 大字号也不溢出）。
+          final height = math.max(
+            0.0,
+            math.min(
+              media.size.height * 0.7,
+              media.size.height - media.viewInsets.bottom - 80,
+            ),
+          );
+          return Padding(
+            padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+            child: SizedBox(
+              height: height,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: TextField(
+                      key: const Key('task-form-env-sheet-search'),
+                      decoration: const InputDecoration(
+                        hintText: '搜索',
+                        isDense: true,
+                        prefixIcon: Icon(Icons.search, size: 18),
+                      ),
+                      style: const TextStyle(fontSize: 14),
+                      onChanged: (value) => setSheetState(() => keyword = value),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Expanded(
+                    child: visible.isEmpty
+                        ? Center(
+                            child: Text(
+                              all.isEmpty ? '暂无可选项' : '没有匹配的项',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            itemCount: visible.length,
+                            itemBuilder: (_, index) {
+                              final option = visible[index];
+                              return CheckboxListTile(
+                                value: picked.contains(option.$1),
+                                dense: true,
+                                controlAffinity:
+                                    ListTileControlAffinity.leading,
+                                title: Text(
+                                  option.$2,
+                                  style: const TextStyle(fontSize: 14),
+                                ),
+                                onChanged: (checked) => setSheetState(() {
+                                  if (checked == true) {
+                                    picked.add(option.$1);
+                                  } else {
+                                    picked.remove(option.$1);
+                                  }
+                                }),
+                              );
+                            },
+                          ),
+                  ),
+                  SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: SizedBox(
+                              height: AppTapTarget.min,
+                              child: OutlinedButton(
+                                onPressed: picked.isEmpty
+                                    ? null
+                                    : () => setSheetState(picked.clear),
+                                child: const Text('清空'),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: SizedBox(
+                              height: AppTapTarget.min,
+                              child: FilledButton(
+                                // 按候选顺序返回，保存出去的顺序稳定
+                                onPressed: () => Navigator.of(sheetContext).pop(
+                                  all
+                                      .map((option) => option.$1)
+                                      .where(picked.contains)
+                                      .toList(),
+                                ),
+                                child: Text(
+                                  '确定（${picked.length}）',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    // 弹层关掉时页面可能已经被 pop 了
+    if (result == null || !mounted) return;
+    setState(() {
+      target
+        ..clear()
+        ..addAll(result);
+    });
   }
 
   Future<void> _loadPythonRuntimes() async {
@@ -557,6 +800,17 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
       'task_after': _taskAfterC.text.trim(),
       'allow_multiple_instances': _allowMultipleInstances,
     };
+    // 环境变量三项只在面板支持时才带：老面板会静默忽略，带了也存不下。
+    // 「全部」时两个列表发空数组（面板侧也会清空），免得残留上次「指定」的选择。
+    if (_envScopeSupported) {
+      data['env_scope'] = _envScopeSelected ? 'selected' : 'all';
+      data['env_groups'] = _envScopeSelected
+          ? List<String>.of(_envGroups)
+          : <String>[];
+      data['env_names'] = _envScopeSelected
+          ? List<String>.of(_envNames)
+          : <String>[];
+    }
 
     setState(() => _saving = true);
     try {
@@ -950,6 +1204,92 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                   ),
                 ],
               ]),
+
+              // 环境变量（面板 #168，v3.4.0 起；老面板整块不出现）
+              if (_envScopeSupported)
+                section('环境变量', [
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      ChoiceChip(
+                        key: const Key('task-form-env-scope-all'),
+                        label: const Text('全部（默认）'),
+                        selected: !_envScopeSelected,
+                        onSelected: (_) =>
+                            setState(() => _envScopeSelected = false),
+                      ),
+                      ChoiceChip(
+                        key: const Key('task-form-env-scope-selected'),
+                        label: const Text('指定'),
+                        selected: _envScopeSelected,
+                        onSelected: (_) =>
+                            setState(() => _envScopeSelected = true),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  if (!_envScopeSelected)
+                    Text(
+                      '运行时注入全部已启用的环境变量。',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    )
+                  else ...[
+                    for (final (names, label, values) in [
+                      (false, '分组', _envGroups),
+                      (true, '变量名', _envNames),
+                    ]) ...[
+                      // 长得像下拉框的只读字段，点开底部多选弹层
+                      InkWell(
+                        key: Key(
+                          names ? 'task-form-env-names' : 'task-form-env-groups',
+                        ),
+                        borderRadius: BorderRadius.circular(AppRadius.control),
+                        onTap: () => _pickEnvValues(names: names),
+                        child: InputDecorator(
+                          isEmpty: values.isEmpty,
+                          decoration: InputDecoration(
+                            labelText: label,
+                            hintText: '未选择',
+                            suffixIcon: const Icon(Icons.arrow_drop_down),
+                          ),
+                          child: Text(
+                            values.join('、'),
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (_envGroups.isEmpty && _envNames.isEmpty) ...[
+                      Text(
+                        '一个都没选时，不会注入任何用户变量。',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: AppColors.warning,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                    ],
+                    Text(
+                      '只注入命中任一分组或变量名的已启用变量，config.sh 和面板内置变量照常注入；'
+                      '脚本里的 DAIDAI_TOKEN 只能用来发通知。',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '这不是沙箱：脚本仍能用 ddp 命令或读面板数据文件拿到全部变量，来路不明的脚本不要运行。',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: AppColors.warning,
+                      ),
+                    ),
+                  ],
+                ]),
 
               // 通知
               section('通知与并发', [

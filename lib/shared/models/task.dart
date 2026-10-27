@@ -49,6 +49,19 @@ class Task {
   final String? notificationChannelName;
   final bool? notificationChannelEnabled;
   final double? lastRunningTime;
+
+  /// 这台面板有没有下发 `env_scope`（任务级「可用环境变量」，面板 #168，v3.4.0 起）。
+  ///
+  /// **形状探测**：键不在（或不是字符串）= 老面板不支持，表单不出「环境变量」分区、
+  /// 请求体一个字段都不带、详情页不出那一行 —— 老面板会静默忽略这三个字段，
+  /// 发了也存不下，不能让用户以为设上了。不看版本号，理由见 panel-contract.md。
+  final bool hasEnvScope;
+
+  /// `all`（默认，注入全部已启用变量）/ `selected`（只注入命中分组或变量名的）。
+  /// 面板发来别的值一律按 `all` 处理，与面板 ToDict 的归一口径一致。
+  final String envScope;
+  final List<String> envGroups;
+  final List<String> envNames;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -83,6 +96,10 @@ class Task {
     this.notificationChannelName,
     this.notificationChannelEnabled,
     this.lastRunningTime,
+    this.hasEnvScope = false,
+    this.envScope = 'all',
+    this.envGroups = const [],
+    this.envNames = const [],
     required this.createdAt,
     required this.updatedAt,
   });
@@ -120,6 +137,9 @@ class Task {
 
   /// 上次运行是否失败。**只有 1 是失败**，2 是用户主动终止，不该按失败告警。
   bool get lastRunFailed => lastRunStatus == 1;
+
+  /// 是否限定了可用环境变量（「指定」模式）。
+  bool get isEnvScopeSelected => envScope == 'selected';
 
   List<String> get labelList => labels.isEmpty
       ? []
@@ -280,6 +300,11 @@ class Task {
       notificationChannelName: json['notification_channel_name']?.toString(),
       notificationChannelEnabled: json['notification_channel_enabled'] as bool?,
       lastRunningTime: _doubleOrNull(json['last_running_time']),
+      // 形状探测：null 与缺失同等对待（都当老面板）
+      hasEnvScope: json['env_scope'] is String,
+      envScope: json['env_scope'] == 'selected' ? 'selected' : 'all',
+      envGroups: _stringList(json['env_groups']),
+      envNames: _stringList(json['env_names']),
       createdAt: _date(json['created_at']) ?? DateTime.now(),
       updatedAt: _date(json['updated_at']) ?? DateTime.now(),
     );
@@ -294,6 +319,22 @@ int _int(dynamic v) => (v is num) ? v.toInt() : 0;
 int? _intOrNull(dynamic v) => (v is num) ? v.toInt() : null;
 double _double(dynamic v) => (v is num) ? v.toDouble() : 0.0;
 double? _doubleOrNull(dynamic v) => (v is num) ? v.toDouble() : null;
+
+/// 字符串数组：面板 ToDict 下发的是数组；顺手兼容逗号拼接的字符串（库里的存法），
+/// 去空白、去空项、去重，保持原顺序。
+List<String> _stringList(dynamic v) {
+  final Iterable<dynamic> raw = v is List
+      ? v
+      : (v is String ? v.split(',') : const <dynamic>[]);
+  final result = <String>[];
+  for (final item in raw) {
+    final text = item?.toString().trim() ?? '';
+    if (text.isNotEmpty && !result.contains(text)) {
+      result.add(text);
+    }
+  }
+  return result;
+}
 
 /// 可空布尔：**必须**区分「没下发」与「下发了 false」，所以不能照布尔字段的
 /// 惯例写 `== true`。非布尔值（0 / 1 / "true"）一律当没下发，不去猜。
