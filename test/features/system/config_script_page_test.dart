@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:re_editor/re_editor.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../support/fake_http_adapter.dart';
@@ -107,6 +108,19 @@ IconButton _saveButton(WidgetTester tester) => tester.widget<IconButton>(
   find.widgetWithIcon(IconButton, Icons.save_outlined),
 );
 
+/// 编辑器换成 re_editor（APP #25）之后已经没有 TextField，正文直接问它的 controller。
+CodeLineEditingController _editor(WidgetTester tester) =>
+    tester.widget<CodeEditor>(find.byType(CodeEditor)).controller!;
+
+/// 模拟用户全选后输入一段新内容。re_editor 不走 EditableText，`enterText` 用不了，
+/// 这里走它自己的编辑入口（与选择菜单「全选」+ 粘贴 / 输入同一条路）。
+Future<void> _replaceAllText(WidgetTester tester, String text) async {
+  final editor = _editor(tester);
+  editor.selectAll();
+  editor.replaceSelection(text);
+  await tester.pump();
+}
+
 /// APP #22：APP 里新增「配置文件」（config.sh）编辑页。
 ///
 /// 钉住：读到的正文进编辑器；没改动时「保存」不可点；保存的请求体恰好是 `{content: 编辑器里的全文}`；
@@ -128,8 +142,7 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.text('配置文件'), findsOneWidget);
       expect(find.text('config.sh'), findsOneWidget);
-      final editor = tester.widget<TextField>(find.byType(TextField));
-      expect(editor.controller!.text, _original);
+      expect(_editor(tester).text, _original);
       expect(_saveButton(tester).onPressed, isNull);
 
       await _closePage(tester);
@@ -140,8 +153,7 @@ void main() {
     final panel = _FakePanel();
     await _openPage(tester, panel);
 
-    await tester.enterText(find.byType(TextField), 'export A=1\n');
-    await tester.pump();
+    await _replaceAllText(tester, 'export A=1\n');
     expect(find.text('config.sh · 有未保存的修改'), findsOneWidget);
     expect(_saveButton(tester).onPressed, isNotNull);
 
@@ -164,8 +176,7 @@ void main() {
     final panel = _FakePanel()..failSave = true;
     await _openPage(tester, panel);
 
-    await tester.enterText(find.byType(TextField), 'export A=1\n');
-    await tester.pump();
+    await _replaceAllText(tester, 'export A=1\n');
     FocusManager.instance.primaryFocus?.unfocus();
     await tester.pump();
     await tester.tap(find.byTooltip('保存'));
@@ -173,10 +184,7 @@ void main() {
 
     expect(panel.putBodies, hasLength(1));
     expect(find.text('保存配置文件失败'), findsOneWidget);
-    expect(
-      tester.widget<TextField>(find.byType(TextField)).controller!.text,
-      'export A=1\n',
-    );
+    expect(_editor(tester).text, 'export A=1\n');
     expect(_saveButton(tester).onPressed, isNotNull);
 
     await _closePage(tester);
@@ -188,16 +196,13 @@ void main() {
 
     expect(find.text('配置文件加载失败'), findsOneWidget);
     expect(find.text('读取配置文件失败'), findsOneWidget);
-    expect(find.byType(TextField), findsNothing);
+    expect(find.byType(CodeEditor), findsNothing);
 
     await tester.tap(find.text('重试'));
     await tester.pumpAndSettle();
 
     expect(panel.getCount, 2);
-    expect(
-      tester.widget<TextField>(find.byType(TextField)).controller!.text,
-      _original,
-    );
+    expect(_editor(tester).text, _original);
 
     await _closePage(tester);
   });
@@ -206,8 +211,7 @@ void main() {
     final panel = _FakePanel();
     await _openPage(tester, panel);
 
-    await tester.enterText(find.byType(TextField), 'export A=1\n');
-    await tester.pump();
+    await _replaceAllText(tester, 'export A=1\n');
     FocusManager.instance.primaryFocus?.unfocus();
     await tester.pump();
 

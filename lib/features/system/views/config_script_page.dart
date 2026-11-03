@@ -1,6 +1,5 @@
-import 'dart:ui' show BoxHeightStyle;
-
 import 'package:flutter/material.dart';
+import 'package:re_editor/re_editor.dart';
 
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
@@ -12,15 +11,14 @@ import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
 import '../../scripts/utils/script_search.dart';
+import '../../scripts/widgets/script_code_editor.dart';
 import '../../scripts/widgets/script_find_bar.dart';
-import '../../scripts/widgets/script_highlight_controller.dart';
-import '../../scripts/widgets/script_line_number_gutter.dart';
 
 /// 配置文件 config.sh 编辑页（APP #22：原来 APP 里找不到在哪编辑）。
 ///
 /// 面板接口只有两条、都仅 admin：GET 拿 `{content, path}`（文件不存在时 content 为空），
-/// PUT `{content}` 整篇覆盖。编辑器沿用脚本编辑页（`ScriptViewPage`）的行号栏 / 查找高亮 / 查找条，
-/// 但这里打开即可编辑：config.sh 只有「改」这一件事，不需要先点「编辑」。
+/// PUT `{content}` 整篇覆盖。编辑器与脚本编辑页（`ScriptViewPage`）共用 [ScriptCodeEditor]
+/// 和查找条，但这里打开即可编辑：config.sh 只有「改」这一件事，不需要先点「编辑」。
 class ConfigScriptPage extends StatefulWidget {
   const ConfigScriptPage({super.key});
 
@@ -29,16 +27,13 @@ class ConfigScriptPage extends StatefulWidget {
 }
 
 class _ConfigScriptPageState extends State<ConfigScriptPage> {
-  /// 编辑器内边距。行号栏拿它当滚动视口的起点，两边必须是同一个值，否则行号整体错位。
-  static const _editorContentPadding = EdgeInsets.all(14);
+  final CodeLineEditingController _contentController =
+      CodeLineEditingController();
 
-  final ScriptHighlightController _contentController =
-      ScriptHighlightController();
-  final ScrollController _contentScrollController = ScrollController();
+  /// 查找命中的高亮层（命中仍由本页用 script_search.dart 算，见 ScriptEditorFindController）。
+  final ScriptEditorFindController _matchHighlights =
+      ScriptEditorFindController();
   final TextEditingController _findController = TextEditingController();
-
-  /// 挂在编辑器 TextField 上，行号栏与查找滚动靠它找到 TextField 自己的 RenderEditable。
-  final GlobalKey _editorKey = GlobalKey();
 
   bool _loading = true;
   bool _saving = false;
@@ -58,8 +53,11 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
   int _currentMatchIndex = -1;
   bool _matchTruncated = false;
 
-  /// 上一次的文本：controller 在移动光标、改选区时也会通知，只有文本真的变了才重算。
-  String _lastContentText = '';
+  /// 上一次的行列表：controller 在移动光标、改选区时也会通知，只有内容真的变了才重算。
+  ///
+  /// re_editor 每次改内容都会换一个新的 CodeLines 对象、只改选区时沿用旧的，
+  /// 所以比引用就够了，不用每次都把全文拼成字符串去比。
+  CodeLines? _lastCodeLines;
 
   @override
   void initState() {
@@ -73,7 +71,7 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
   void dispose() {
     _contentController.removeListener(_handleContentChanged);
     _contentController.dispose();
-    _contentScrollController.dispose();
+    _matchHighlights.dispose();
     _findController.dispose();
     super.dispose();
   }
@@ -92,13 +90,19 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
       final content = map['content']?.toString() ?? '';
       final path = map['path']?.toString().trim() ?? '';
       if (!mounted) return;
+      // 编辑器按行存内容、取全文时统一用 \n 拼回（与面板网页的 CodeMirror 一致），
+      // 所以「已保存的正文」也记归一化之后的样子，否则 CRLF 文件一打开就显示「有未保存的修改」。
+      final normalized = content
+          .replaceAll('\r\n', '\n')
+          .replaceAll('\r', '\n');
       // 先记下「已保存的正文」再灌进编辑器：灌入会同步触发 _handleContentChanged，
       // 顺序反了那一下会被误判成「有未保存的修改」。
-      _savedContent = content;
-      _contentController.value = TextEditingValue(
-        text: content,
-        selection: const TextSelection.collapsed(offset: -1),
+      _savedContent = normalized;
+      _contentController.value = CodeLineEditingValue(
+        codeLines: normalized.codeLines,
       );
+      // 撤销记录里不该留着「加载前」的空内容。
+      _contentController.clearHistory();
       setState(() {
         _path = path.isEmpty ? 'config.sh' : path;
         _dirty = false;
@@ -177,10 +181,10 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
   }
 
   void _handleContentChanged() {
-    final text = _contentController.text;
-    if (text == _lastContentText) return;
-    _lastContentText = text;
-    final dirty = text != _savedContent;
+    final codeLines = _contentController.codeLines;
+    if (identical(codeLines, _lastCodeLines)) return;
+    _lastCodeLines = codeLines;
+    final dirty = _contentController.text != _savedContent;
     if (dirty != _dirty) {
       setState(() => _dirty = dirty);
     }
@@ -201,14 +205,11 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
             _currentMatchIndex < _matchOffsets.length
         ? _matchOffsets[_currentMatchIndex]
         : null;
+    final text = _contentController.text;
     // 多要一个，才分得清「恰好 500 个」和「被截断」。
     final probed = query.isEmpty
         ? const <int>[]
-        : findMatchOffsets(
-            _contentController.text,
-            query,
-            limit: kScriptSearchMatchLimit + 1,
-          );
+        : findMatchOffsets(text, query, limit: kScriptSearchMatchLimit + 1);
     final truncated = probed.length > kScriptSearchMatchLimit;
     final offsets = truncated
         ? probed.sublist(0, kScriptSearchMatchLimit)
@@ -223,7 +224,8 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
       _matchOffsets = offsets;
       _matchTruncated = truncated;
       _currentMatchIndex = current;
-      _contentController.updateMatches(
+      _matchHighlights.updateMatches(
+        text: text,
         offsets: offsets,
         current: current,
         length: query.length,
@@ -240,11 +242,7 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
     final next = nextMatchIndex(_currentMatchIndex, total, forward: forward);
     setState(() {
       _currentMatchIndex = next;
-      _contentController.updateMatches(
-        offsets: _matchOffsets,
-        current: next,
-        length: _matchQuery.length,
-      );
+      _matchHighlights.updateCurrent(next);
     });
     _scrollToMatch(_matchOffsets[next]);
   }
@@ -264,7 +262,8 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
       _matchOffsets = const [];
       _matchTruncated = false;
       _currentMatchIndex = -1;
-      _contentController.updateMatches(
+      _matchHighlights.updateMatches(
+        text: '',
         offsets: const [],
         current: -1,
         length: 0,
@@ -272,22 +271,12 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
     });
   }
 
-  /// 把命中滚进视口：问 TextField 自己的 RenderEditable 要真实 y，与行号栏同一份排版。
+  /// 把命中滚进视口：命中不在视口里时滚到视口中间，上下都留得下上下文；已经看得见就不动。
   void _scrollToMatch(int offset) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_contentScrollController.hasClients) return;
-      final editable = findScriptRenderEditable(_editorKey.currentContext);
-      if (editable == null || !editable.hasSize) return;
-      final top = scriptContentTopForOffset(editable, offset);
-      final position = _contentScrollController.position;
-      final target = (top - position.viewportDimension / 3).clamp(
-        0.0,
-        position.maxScrollExtent,
-      );
-      _contentScrollController.animateTo(
-        target,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOut,
+      if (!mounted) return;
+      _contentController.makePositionCenterIfInvisible(
+        _matchHighlights.positionForOffset(offset),
       );
     });
   }
@@ -299,31 +288,6 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
     final editorBackground =
         _editorBackgroundColor ??
         (isDark ? const Color(0xFF1E1E1E) : Colors.white);
-    final onDarkEditor = editorBackground.computeLuminance() < 0.45;
-    final editorForeground = onDarkEditor
-        ? const Color(0xFFD4D4D4)
-        : AppColors.slate900;
-    // 与 ScriptViewPage._editorTextStyle 同一组参数：影响度量的字段全部钉死、
-    // 跟上系统「粗体文字」，行号栏和代码才是同一行高、同一基线（原因见那里的注释）。
-    final baseStyle = TextStyle(
-      fontSize: 13,
-      fontFamily: 'monospace',
-      height: 1.5,
-      fontWeight: FontWeight.w400,
-      fontStyle: FontStyle.normal,
-      letterSpacing: 0,
-      wordSpacing: 0,
-      textBaseline: TextBaseline.alphabetic,
-      leadingDistribution: TextLeadingDistribution.even,
-      color: editorForeground,
-    );
-    final textStyle = MediaQuery.boldTextOf(context)
-        ? baseStyle.merge(const TextStyle(fontWeight: FontWeight.bold))
-        : baseStyle;
-    final strutStyle = StrutStyle.fromTextStyle(
-      textStyle,
-      forceStrutHeight: true,
-    );
 
     return PopScope(
       canPop: !_dirty,
@@ -367,94 +331,55 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
                   onRetry: _load,
                 ),
               )
-            : Column(
-                children: [
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                    child: Text(
-                      _dirty ? '$_path · 有未保存的修改' : _path,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: _dirty
-                            ? AppColors.amber500
-                            : Theme.of(context).colorScheme.onSurfaceVariant,
+            // 路径行、查找条、编辑器划进同一个 CodeEditorTapRegion：点查找条「上一个 / 下一个」、
+            // 误碰路径行时编辑器不失焦（键盘不收、选区不丢），原因见 ScriptViewPage 同一处。
+            : CodeEditorTapRegion(
+                child: Column(
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                      child: Text(
+                        _dirty ? '$_path · 有未保存的修改' : _path,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: _dirty
+                              ? AppColors.amber500
+                              : Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
                       ),
                     ),
-                  ),
-                  if (_findBarVisible)
-                    ScriptFindBar(
-                      controller: _findController,
-                      matchCount: _matchOffsets.length,
-                      currentIndex: _currentMatchIndex,
-                      truncated: _matchTruncated,
-                      onChanged: _runSearch,
-                      onPrevious: () => _stepMatch(forward: false),
-                      onNext: () => _stepMatch(forward: true),
-                      onClose: _toggleFindBar,
-                    ),
-                  Expanded(
-                    child: AppCard(
-                      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                      // 内边距由 InputDecoration.contentPadding 提供，卡片不再补一层。
-                      padding: EdgeInsets.zero,
-                      radius: AppRadius.md,
-                      color: editorBackground,
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          return Row(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              ScriptLineNumberGutter(
-                                controller: _contentController,
-                                editorKey: _editorKey,
-                                editorWidth: constraints.maxWidth,
-                                scrollController: _contentScrollController,
-                                textStyle: textStyle,
-                                strutStyle: strutStyle,
-                                textScaler: MediaQuery.textScalerOf(context),
-                                color: onDarkEditor
-                                    ? AppColors.editorGutterOnDark
-                                    : AppColors.editorGutterOnLight,
-                                verticalPadding: _editorContentPadding.top,
-                              ),
-                              Expanded(
-                                child: TextSelectionTheme(
-                                  data: TextSelectionThemeData(
-                                    selectionColor: AppColors.primary
-                                        .withAlpha(60),
-                                  ),
-                                  child: TextField(
-                                    key: _editorKey,
-                                    controller: _contentController,
-                                    scrollController: _contentScrollController,
-                                    expands: true,
-                                    maxLines: null,
-                                    style: textStyle,
-                                    strutStyle: strutStyle,
-                                    cursorColor: editorForeground,
-                                    selectionHeightStyle: BoxHeightStyle.max,
-                                    // 三个 border 要一起关、filled 写死 false，
-                                    // 原因见 ScriptViewPage 编辑器 InputDecoration 的注释。
-                                    decoration: const InputDecoration(
-                                      border: InputBorder.none,
-                                      enabledBorder: InputBorder.none,
-                                      focusedBorder: InputBorder.none,
-                                      contentPadding: _editorContentPadding,
-                                      filled: false,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          );
-                        },
+                    if (_findBarVisible)
+                      ScriptFindBar(
+                        controller: _findController,
+                        matchCount: _matchOffsets.length,
+                        currentIndex: _currentMatchIndex,
+                        truncated: _matchTruncated,
+                        onChanged: _runSearch,
+                        onPrevious: () => _stepMatch(forward: false),
+                        onNext: () => _stepMatch(forward: true),
+                        onClose: _toggleFindBar,
+                      ),
+                    Expanded(
+                      child: AppCard(
+                        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                        // 内边距由编辑器自己的 padding 提供，卡片不再补一层。
+                        padding: EdgeInsets.zero,
+                        radius: AppRadius.md,
+                        color: editorBackground,
+                        // config.sh 打开即可编辑，所以 readOnly 恒为 false。
+                        child: ScriptCodeEditor(
+                          controller: _contentController,
+                          findController: _matchHighlights,
+                          readOnly: false,
+                          background: editorBackground,
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
       ),
     );

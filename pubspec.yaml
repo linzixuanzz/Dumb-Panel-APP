@@ -43,6 +43,9 @@ dependencies:
   path_provider: ^2.1.5
   webview_flutter: ^4.10.0
 
+  # 脚本 / 配置文件编辑器：按行虚拟化渲染，几千行的长脚本打字、滚动不再整篇重排（APP #25）
+  re_editor: ^0.10.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

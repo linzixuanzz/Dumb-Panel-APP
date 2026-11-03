@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ui';
 
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
@@ -8,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:re_editor/re_editor.dart';
 
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
@@ -24,9 +24,8 @@ import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
 import '../../tasks/views/task_form_page.dart';
 import '../utils/script_search.dart';
+import '../widgets/script_code_editor.dart';
 import '../widgets/script_find_bar.dart';
-import '../widgets/script_highlight_controller.dart';
-import '../widgets/script_line_number_gutter.dart';
 
 final scriptProvider = StateNotifierProvider<ScriptNotifier, ScriptState>((
   ref,
@@ -1953,13 +1952,13 @@ class ScriptViewPage extends ConsumerStatefulWidget {
 }
 
 class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
-  /// 编辑器内边距。行号栏要拿它当滚动视口的起点，所以必须是常量而不是字面量 ——
-  /// 两边一旦写岔，行号会整体错位。
-  static const _editorContentPadding = EdgeInsets.all(14);
+  /// 编辑器内容。APP #25 起换成 re_editor 的按行控制器：长脚本打字、滚动只排版视口里那几行。
+  late final CodeLineEditingController _contentController;
 
-  late final ScriptHighlightController _contentController;
+  /// 查找命中的高亮层（命中仍由本页用 script_search.dart 算，见 ScriptEditorFindController）。
+  final ScriptEditorFindController _matchHighlights =
+      ScriptEditorFindController();
   late final FocusNode _contentFocusNode;
-  final ScrollController _contentScrollController = ScrollController();
   final TextEditingController _findController = TextEditingController();
   bool _editing = false;
   bool _debugRunning = false;
@@ -1980,26 +1979,37 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
   /// 命中数是否被 [kScriptSearchMatchLimit] 截断过（决定计数显示成 `500` 还是 `500+`）。
   bool _matchTruncated = false;
 
-  /// 挂在编辑器 TextField 上。行号栏与搜索滚动都靠它找到 TextField 自己的
-  /// `RenderEditable` 问几何 —— 不再另排一遍全文（APP issue #18：3000+ 行脚本
-  /// 每敲一个字符都多一次整篇 layout，打字明显卡）。
-  final GlobalKey _editorKey = GlobalKey();
-
-  /// `_contentController` 上一次的文本。
+  /// `_contentController` 上一次的行列表。
   ///
   /// controller 是 ValueNotifier，**移动光标、改选区、输入法组合**都会通知过来，
-  /// 而这些跟命中偏移毫无关系。缓存上一次的 text 比对一下，才能只在内容真的变了时
-  /// 重扫全文。
-  String _lastContentText = '';
+  /// 而这些跟命中偏移毫无关系。re_editor 每次改内容都会换一个新的 CodeLines 对象、
+  /// 只改选区时沿用旧的，所以比一下引用，就能只在内容真的变了时重扫全文。
+  CodeLines? _lastCodeLines;
+
+  /// 首帧到 loadContent 真正发出之间，一律按「加载中」处理。
+  ///
+  /// scriptProvider 是全局的：重新打开刚看过的同一个脚本时，首帧读到的是上一次已加载好的
+  /// 状态（selectedPath 对得上、loadingContent 为 false），会先把编辑器挂上；下一帧
+  /// loadContent 把 loadingContent 置真又把它卸掉。re_editor 刚挂上就卸，可能撞上它
+  /// 分块分析后台 isolate 的关闭竞态、把 isolate 漏掉，这一帧还会闪一下旧内容。
+  /// 所以首帧不挂编辑器，等 microtask 里 loadContent 发出（它第一句就同步置 loadingContent）再放开。
+  bool _awaitingFirstLoad = true;
 
   @override
   void initState() {
     super.initState();
-    _contentController = ScriptHighlightController();
+    _contentController = CodeLineEditingController();
     _contentController.addListener(_handleContentChanged);
     _contentFocusNode = FocusNode();
     Future.microtask(() async {
-      await ref.read(scriptProvider.notifier).loadContent(widget.path);
+      final loading = ref
+          .read(scriptProvider.notifier)
+          .loadContent(widget.path);
+      // 走到这里 provider 已经是 loadingContent = true，放开标记也不会挂上编辑器。
+      if (mounted) {
+        setState(() => _awaitingFirstLoad = false);
+      }
+      await loading;
       if (!mounted) {
         return;
       }
@@ -2012,9 +2022,9 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
 
   @override
   void dispose() {
-    _contentScrollController.dispose();
     _contentController.removeListener(_handleContentChanged);
     _contentController.dispose();
+    _matchHighlights.dispose();
     _findController.dispose();
     _contentFocusNode.dispose();
     super.dispose();
@@ -2176,99 +2186,39 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
     setState(() => _editorBackgroundColor = color);
   }
 
-  bool _useLightForeground(Color background) =>
-      background.computeLuminance() < 0.45;
-
-  /// 编辑器正文样式。
-  ///
-  /// 那些「看起来多余」的字段是**必须**写死的：TextField 会把 style 合并到主题的
-  /// `bodyLarge` 上（M3 的 bodyLarge 自带 `letterSpacing: 0.5`），而行号栏另建的
-  /// TextPainter 拿不到这层合并。字宽一旦对不上，软换行的断点就会分叉，
-  /// 行号会越往下偏得越多。把影响度量的字段全部钉死，两边算的才是同一件事。
-  ///
-  /// ⚠️ 需要 context 是因为**系统「无障碍 → 粗体文字」**这一层：SDK 的
-  /// `EditableText.didChangeDependencies` 里会做
-  /// `_style = MediaQuery.boldTextOf(context) ? widget.style.merge(bold) : widget.style`，
-  /// 行号栏那份 TextPainter 同样拿不到它。开着粗体文字时 TextField 按 bold 排版
-  /// （字宽变大、断行提前）、行号栏还按 w400 算，长行脚本从第一处软换行起就整体错位，
-  /// 越往下差得越多。这里提前把同一层 merge 做掉，strut 也由它派生，两边才对得齐。
-  ///
-  /// 注：APP issue #18 之后行号栏改问 TextField 自己的 `RenderEditable`，断行不会
-  /// 再分叉；但行号文字仍用这份 style / strut 画，钉死它才能让行号与代码同一行高、
-  /// 同一基线，所以这些字段继续保留。
-  static TextStyle _editorTextStyle(BuildContext context, Color color) {
-    const base = TextStyle(
-      fontSize: 13,
-      fontFamily: 'monospace',
-      height: 1.5,
-      fontWeight: FontWeight.w400,
-      fontStyle: FontStyle.normal,
-      letterSpacing: 0,
-      wordSpacing: 0,
-      textBaseline: TextBaseline.alphabetic,
-      leadingDistribution: TextLeadingDistribution.even,
-    );
-    final style = base.copyWith(color: color);
-    return MediaQuery.boldTextOf(context)
-        ? style.merge(const TextStyle(fontWeight: FontWeight.bold))
-        : style;
-  }
-
-  /// `forceStrutHeight` 让每条视觉行的高度只由 strut 决定，与这一行里有没有中文、
-  /// emoji 无关 —— 否则一行中文注释就会把它后面所有行号整体推下去。
-  static StrutStyle _editorStrutStyle(TextStyle style) =>
-      StrutStyle.fromTextStyle(style, forceStrutHeight: true);
-
   /// 把命中滚进视口。
   ///
-  /// 行高不再硬编码：改造前写死 `13 * 1.5` 又只数 `\n`，软换行、contentPadding、
-  /// 系统字体缩放一个都没算，长行脚本上系统性跳偏。现在直接问 TextField 自己的
-  /// `RenderEditable` 要真实 y —— 与行号栏问的是同一份排版。
+  /// 命中不在视口里时滚到视口中间，上下都留得下上下文；已经看得见就不动。
+  /// 行列由 re_editor 按它自己的排版定位，软换行、系统字号都算在内。
   void _scrollToMatch(int offset) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_contentScrollController.hasClients) {
+      if (!mounted) {
         return;
       }
-      // 在回调里现取：这一帧刚排完版，拿到的就是当前文本的几何。
-      final editable = findScriptRenderEditable(_editorKey.currentContext);
-      if (editable == null || !editable.hasSize) {
-        return;
-      }
-      final top = scriptContentTopForOffset(editable, offset);
-      final position = _contentScrollController.position;
-      // 让命中落在视口上三分之一处，命中的前后都还留得下上下文。
-      final target = (top - position.viewportDimension / 3).clamp(
-        0.0,
-        position.maxScrollExtent,
-      );
-      _contentScrollController.animateTo(
-        target,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOut,
+      _contentController.makePositionCenterIfInvisible(
+        _matchHighlights.positionForOffset(offset),
       );
     });
   }
 
   /// 把 provider 里的内容同步进编辑器。
   ///
-  /// ⚠️ 绝不能写成 `_contentController.text = content`：Flutter 的 `set text`
-  /// 会把 selection 强制打回 `TextSelection.collapsed(offset: -1)`，而这一句改造前
-  /// 是放在 **build() 里每帧执行**的（SDK 文档明写「不应在 build / layout / paint
-  /// 阶段设置」）。于是搜索刚设好的选区同帧就被抹掉，下次点「下一个」时
-  /// `selection.isValid` 为 false、查找起点回落成 0 —— 这就是 issue #6 (c) 的根因，
-  /// 同时也让 (b) 那个琥珀色高亮一帧都留不住。
+  /// ⚠️ 只在内容**真的变了**时同步一次：改造前这件事放在 build() 里每帧执行，
+  /// 每帧都把选区打回原点，搜索游标跟着被抹掉 —— 这就是 issue #6 (c) 的根因。
+  /// 命中偏移的重算交给 [_handleContentChanged] —— 这一句赋值会同步触发它。
   ///
-  /// 现在只在内容**真的变了**时同步一次；命中偏移的重算交给
-  /// [_handleContentChanged] —— 这一句赋值会同步触发它。
+  /// re_editor 按行存内容、取全文时统一用 \n 拼回（与面板网页的 CodeMirror 一致），
+  /// 所以先把 \r\n / \r 归一成 \n 再比，不然 CRLF 脚本每次都会被当成「内容变了」重灌一遍。
   void _applyContentFromState(String content) {
-    if (_contentController.text == content) {
+    final normalized = content.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    if (_contentController.text == normalized) {
       return;
     }
-    _contentController.value = TextEditingValue(
-      text: content,
-      selection: const TextSelection.collapsed(offset: -1),
-      composing: TextRange.empty,
+    _contentController.value = CodeLineEditingValue(
+      codeLines: normalized.codeLines,
     );
+    // 撤销记录里不该留着上一个文件 / 服务端旧版本的内容。
+    _contentController.clearHistory();
   }
 
   /// 编辑器内容变了就重算命中偏移。
@@ -2282,11 +2232,11 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
   /// 而真正贵的高亮切片已经被 `kScriptSearchMatchLimit` 封顶了 ——
   /// 相比「高亮染错地方」这个正确性问题，这点开销必须付。
   void _handleContentChanged() {
-    final text = _contentController.text;
-    if (text == _lastContentText) {
+    final codeLines = _contentController.codeLines;
+    if (identical(codeLines, _lastCodeLines)) {
       return;
     }
-    _lastContentText = text;
+    _lastCodeLines = codeLines;
     // 查找条关掉之后 _matchQuery 会被清空（输入框里的词还留着，方便重开），
     // 那时不该再把高亮算回来。
     if (_matchQuery.isEmpty) {
@@ -2314,13 +2264,10 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
         : null;
     // 多要一个：拿到 limit+1 个才说明真的被截断了。只按 `== limit` 判断的话，
     // 恰好 500 个命中的文件会被误标成「500+」。
+    final text = _contentController.text;
     final probed = query.isEmpty
         ? const <int>[]
-        : findMatchOffsets(
-            _contentController.text,
-            query,
-            limit: kScriptSearchMatchLimit + 1,
-          );
+        : findMatchOffsets(text, query, limit: kScriptSearchMatchLimit + 1);
     final truncated = probed.length > kScriptSearchMatchLimit;
     final offsets = truncated
         ? probed.sublist(0, kScriptSearchMatchLimit)
@@ -2335,7 +2282,8 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
       _matchOffsets = offsets;
       _matchTruncated = truncated;
       _currentMatchIndex = current;
-      _contentController.updateMatches(
+      _matchHighlights.updateMatches(
+        text: text,
         offsets: offsets,
         current: current,
         length: query.length,
@@ -2358,11 +2306,7 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
     final next = nextMatchIndex(_currentMatchIndex, total, forward: forward);
     setState(() {
       _currentMatchIndex = next;
-      _contentController.updateMatches(
-        offsets: _matchOffsets,
-        current: next,
-        length: _matchQuery.length,
-      );
+      _matchHighlights.updateCurrent(next);
     });
     _scrollToMatch(_matchOffsets[next]);
   }
@@ -2386,7 +2330,8 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
       _matchOffsets = const [];
       _matchTruncated = false;
       _currentMatchIndex = -1;
-      _contentController.updateMatches(
+      _matchHighlights.updateMatches(
+        text: '',
         offsets: const [],
         current: -1,
         length: 0,
@@ -2439,7 +2384,9 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
     // AppBar 上的编辑/保存/查找/调试全被藏起来，下一帧才切回 loading。
     // 所以：只要 state 讲的还是别的文件，就一律按 loading 处理。
     final stateMatchesPath = state.selectedPath == widget.path;
-    final loadingContent = state.loadingContent || !stateMatchesPath;
+    // _awaitingFirstLoad：重新打开同一个脚本时首帧也别挂编辑器，原因见字段注释。
+    final loadingContent =
+        _awaitingFirstLoad || state.loadingContent || !stateMatchesPath;
     final contentError = stateMatchesPath ? state.contentError : null;
     // isBinary 同样要跟着 stateMatchesPath 走，否则「看完二进制文件再开文本文件」
     // 会在整个请求时长里把 AppBar 上的按钮全藏掉，回来时又凭空出现。
@@ -2454,10 +2401,6 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
     final editorBackground =
         _editorBackgroundColor ??
         (isDark ? const Color(0xFF1E1E1E) : Colors.white);
-    final onDarkEditor = _useLightForeground(editorBackground);
-    final editorForeground = onDarkEditor
-        ? const Color(0xFFD4D4D4)
-        : AppColors.slate900;
 
     return Scaffold(
       appBar: AppBar(
@@ -2524,11 +2467,12 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
               onPressed: () {
                 final next = !_editing;
                 setState(() => _editing = next);
-                if (!next) {
-                  // 退回查看模式：与改造前一致，未保存的修改丢弃、回到服务端内容。
-                  // 改造前这件事是靠 build 里那句每帧赋值顺带完成的，现在得显式做。
-                  _applyContentFromState(ref.read(scriptProvider).content);
-                }
+                // 退回查看模式：与改造前一致，未保存的修改丢弃、回到服务端内容。
+                // 改造前这件事是靠 build 里那句每帧赋值顺带完成的，现在得显式做。
+                // 进入编辑模式也重灌一次（内容没变时是空操作）：万一只读期间缓冲区被
+                // 改过（如外接键盘，ScriptCodeEditor 已拦，这里兜底），别把误改带进编辑、
+                // 再被保存写回服务端。
+                _applyContentFromState(ref.read(scriptProvider).content);
               },
               icon: Icon(
                 _editing ? Icons.visibility_outlined : Icons.edit_outlined,
@@ -2573,122 +2517,54 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
             )
           : isBinary
           ? const _BinaryFileHint()
-          : Column(
-              children: [
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                  child: Text(
-                    widget.path,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+          // 路径行、查找条、编辑器划进同一个 CodeEditorTapRegion：re_editor 把「点在编辑器外」
+          // 一律当成失焦（键盘收起、选区取消），原生 TextField 在触摸下不会这样。
+          // 编辑时点查找条「上一个 / 下一个」、误碰路径行，都不该把键盘和选区弄没。
+          : CodeEditorTapRegion(
+              child: Column(
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                    child: Text(
+                      widget.path,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
-                ),
-                if (_findBarVisible)
-                  ScriptFindBar(
-                    controller: _findController,
-                    matchCount: _matchOffsets.length,
-                    currentIndex: _currentMatchIndex,
-                    truncated: _matchTruncated,
-                    onChanged: _runSearch,
-                    onPrevious: () => _stepMatch(forward: false),
-                    onNext: () => _stepMatch(forward: true),
-                    onClose: _toggleFindBar,
-                  ),
-                Expanded(
-                  child: AppCard(
-                    margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                    // 编辑器内边距由 InputDecoration.contentPadding 提供，
-                    // 卡片再补一层会让光标与描边之间多出 16 的空白。
-                    padding: EdgeInsets.zero,
-                    radius: AppRadius.md,
-                    // 编辑器底色跟随用户设置的日志/编辑器主题，与页面明暗无关。
-                    color: editorBackground,
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final textScaler = MediaQuery.textScalerOf(context);
-                        final textStyle = _editorTextStyle(
-                          context,
-                          editorForeground,
-                        );
-                        final strutStyle = _editorStrutStyle(textStyle);
-                        // 这里**不再**套 ValueListenableBuilder 监听 controller：
-                        // 那样光标 / 选区一动整块就重建一次。行号栏自己监听，
-                        // 只在文本真的变了时重扫行首；TextField 本来就自己听 controller。
-                        return Row(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            ScriptLineNumberGutter(
-                              controller: _contentController,
-                              editorKey: _editorKey,
-                              editorWidth: constraints.maxWidth,
-                              scrollController: _contentScrollController,
-                              textStyle: textStyle,
-                              strutStyle: strutStyle,
-                              textScaler: textScaler,
-                              // 跟编辑器底色的明暗走，而不是跟 App 主题走 ——
-                              // 编辑器底色是用户在面板里自定义的。
-                              color: onDarkEditor
-                                  ? AppColors.editorGutterOnDark
-                                  : AppColors.editorGutterOnLight,
-                              verticalPadding: _editorContentPadding.top,
-                            ),
-                            Expanded(
-                              child: TextSelectionTheme(
-                                data: TextSelectionThemeData(
-                                  selectionColor: AppColors.primary.withAlpha(
-                                    60,
-                                  ),
-                                ),
-                                child: TextField(
-                                  key: _editorKey,
-                                  controller: _contentController,
-                                  focusNode: _contentFocusNode,
-                                  scrollController: _contentScrollController,
-                                  readOnly: !_editing,
-                                  expands: true,
-                                  maxLines: null,
-                                  style: textStyle,
-                                  // 与行号栏同一份 strut：行高只由它决定，
-                                  // 中文注释才不会把后面的行号整体推下去。
-                                  strutStyle: strutStyle,
-                                  cursorColor: editorForeground,
-                                  selectionHeightStyle: BoxHeightStyle.max,
-                                  decoration: const InputDecoration(
-                                    // ⚠️ 只写 border 挡不住：applyDefaults 会把主题的
-                                    // enabledBorder / focusedBorder 填进来，而
-                                    // _InputDecoratorState 取的是它们**优先**，
-                                    // border 只在两者都为 null 时才回落。本仓主题恰好两个都给了
-                                    // OutlineInputBorder，所以必须三个一起关掉 —— 否则行号栏
-                                    // 拆到 TextField 外面之后，那圈描边只框住右半边代码区，
-                                    // 聚焦时还会冒出一个只圈代码区的主色圆角框。
-                                    border: InputBorder.none,
-                                    enabledBorder: InputBorder.none,
-                                    focusedBorder: InputBorder.none,
-                                    contentPadding: _editorContentPadding,
-                                    // 不写 filled 会继承主题 inputDecorationTheme
-                                    // 的 filled:true + fillColor:cardColor，而
-                                    // InputBorder.none 的 outer path 就是整个矩形，
-                                    // 这层 fill 会把 AppCard 的 editorBackground 整块盖掉。
-                                    // 改造前 TextField 铺满整张卡片所以看不出来（顺带说明：
-                                    // 面板的 editor_background_color 设置项一直是无效的）；
-                                    // 行号栏挪到 TextField 外面之后，露出来的就是
-                                    // 「左边行号条 editorBackground + 右边代码区 cardColor」
-                                    // 的一条竖直色缝。写死 false，那个设置项也第一次真正生效。
-                                    filled: false,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        );
-                      },
+                  if (_findBarVisible)
+                    ScriptFindBar(
+                      controller: _findController,
+                      matchCount: _matchOffsets.length,
+                      currentIndex: _currentMatchIndex,
+                      truncated: _matchTruncated,
+                      onChanged: _runSearch,
+                      onPrevious: () => _stepMatch(forward: false),
+                      onNext: () => _stepMatch(forward: true),
+                      onClose: _toggleFindBar,
+                    ),
+                  Expanded(
+                    child: AppCard(
+                      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                      // 编辑器内边距由编辑器自己的 padding 提供，
+                      // 卡片再补一层会让光标与描边之间多出 16 的空白。
+                      padding: EdgeInsets.zero,
+                      radius: AppRadius.md,
+                      // 编辑器底色跟随用户设置的日志/编辑器主题，与页面明暗无关。
+                      color: editorBackground,
+                      child: ScriptCodeEditor(
+                        controller: _contentController,
+                        findController: _matchHighlights,
+                        focusNode: _contentFocusNode,
+                        readOnly: !_editing,
+                        background: editorBackground,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
     );
   }

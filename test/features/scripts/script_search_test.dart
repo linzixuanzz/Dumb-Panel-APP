@@ -1,6 +1,4 @@
 import 'package:daidai_app/features/scripts/utils/script_search.dart';
-import 'package:daidai_app/features/scripts/widgets/script_line_number_gutter.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 脚本编辑页搜索（issue #6）的行为锁。
@@ -117,107 +115,6 @@ void main() {
 
     test('末尾换行会多出一行 —— 与编辑器显示一致', () {
       expect(lineNumberForOffset('a\n', 2), 2);
-    });
-  });
-
-  group('ScriptEditorTextMetrics（行号几何）', () {
-    // 与编辑器同一套度量：strut 强制行高，行号才可能逐行对齐。
-    const style = TextStyle(fontSize: 13, height: 1.5);
-    final strut = StrutStyle.fromTextStyle(style, forceStrutHeight: true);
-
-    testWidgets('无软换行时每条逻辑行都有行号，y 依次递增', (tester) async {
-      final metrics = ScriptEditorTextMetrics.compute(
-        text: 'aaa\nbbb\nccc',
-        style: style,
-        strutStyle: strut,
-        textScaler: TextScaler.noScaling,
-        // 宽到不可能触发换行。
-        maxWidth: 1000,
-      );
-
-      expect(metrics.lineNumbers, [1, 2, 3]);
-      expect(metrics.visualLineCount, 3);
-      expect(metrics.lineTops.first, 0);
-      expect(metrics.lineTops[1], greaterThan(metrics.lineTops[0]));
-      expect(metrics.lineTops[2], greaterThan(metrics.lineTops[1]));
-
-      metrics.dispose();
-    });
-
-    testWidgets('有软换行时续行留空：视觉行更多，行号只有一个', (tester) async {
-      final metrics = ScriptEditorTextMetrics.compute(
-        text: 'aaa bbb ccc ddd eee',
-        style: style,
-        strutStyle: strut,
-        textScaler: TextScaler.noScaling,
-        // 19 个字符 × 13 远超这个宽度，必然被折成多条视觉行。
-        maxWidth: 100,
-      );
-
-      // 只有一条**逻辑**行，所以只画一个行号（与 VS Code 一致）。
-      expect(metrics.lineNumbers, [1]);
-      // 但它确实被折断了 —— 否则这条用例根本没在测软换行。
-      expect(metrics.visualLineCount, greaterThan(1));
-
-      metrics.dispose();
-    });
-
-    testWidgets('空文件也要有第 1 行，不能一个行号都不画', (tester) async {
-      final metrics = ScriptEditorTextMetrics.compute(
-        text: '',
-        style: style,
-        strutStyle: strut,
-        textScaler: TextScaler.noScaling,
-        maxWidth: 200,
-      );
-
-      expect(metrics.lineNumbers, [1]);
-      expect(metrics.lineTops, [0]);
-
-      metrics.dispose();
-    });
-
-    testWidgets('topForOffset 随下标单调增，dispose 之后给 null 而不是脏值', (tester) async {
-      final metrics = ScriptEditorTextMetrics.compute(
-        text: 'aaa\nbbb\nccc',
-        style: style,
-        strutStyle: strut,
-        textScaler: TextScaler.noScaling,
-        maxWidth: 1000,
-      );
-
-      final first = metrics.topForOffset(0);
-      final last = metrics.topForOffset(9);
-      expect(first, isNotNull);
-      expect(last, isNotNull);
-      expect(last, greaterThan(first!));
-
-      metrics.dispose();
-      // 搜索的滚动回调是 post-frame 触发的，可能跑在几何被换掉之后，
-      // 那时必须放弃这次滚动，而不是拿已释放的 painter 去算。
-      expect(metrics.topForOffset(0), isNull);
-    });
-
-    testWidgets('行号栏宽度随位数增长，且个位数文件不比两位数窄', (tester) async {
-      final oneDigit = scriptGutterWidth(
-        lineCount: 9,
-        style: style,
-        textScaler: TextScaler.noScaling,
-      );
-      final twoDigits = scriptGutterWidth(
-        lineCount: 42,
-        style: style,
-        textScaler: TextScaler.noScaling,
-      );
-      final fourDigits = scriptGutterWidth(
-        lineCount: 1234,
-        style: style,
-        textScaler: TextScaler.noScaling,
-      );
-
-      // 最少按两位算：文件从 9 行涨到 10 行时整条栏不该横向跳一下。
-      expect(oneDigit, twoDigits);
-      expect(fourDigits, greaterThan(twoDigits));
     });
   });
 
