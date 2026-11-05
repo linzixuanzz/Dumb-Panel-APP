@@ -3,6 +3,7 @@ import 'package:daidai_app/core/network/dio_client.dart';
 import 'package:daidai_app/features/scripts/views/script_list_page.dart';
 import 'package:daidai_app/features/scripts/widgets/script_code_editor.dart';
 import 'package:daidai_app/features/system/views/config_script_page.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -96,6 +97,10 @@ List<CodeLineRenderParagraph> _paragraphs(WidgetTester tester) => tester
     .notifier
     .value!
     .paragraphs;
+
+/// 光标（选区终点）所在的「行, 列」。不比 affinity：re_editor 左右移动时会顺带改它。
+(int, int) _caret(CodeLineEditingController controller) =>
+    (controller.selection.extentIndex, controller.selection.extentOffset);
 
 /// 截住剪贴板：setData 记下来，getData 回 [pasteText]。
 List<String> _mockClipboard(WidgetTester tester, {String pasteText = ''}) {
@@ -470,6 +475,212 @@ void main() {
       expect(cursorLine.bottom, lessThanOrEqualTo(viewport + 0.5));
 
       await h.dispose(tester);
+    });
+
+    // ── APP #26：输入法「光标键盘」的方向键 ───────────────────────────────
+    // 搜狗 / 百度等输入法的光标键发的是 DPAD 方向键事件；re_editor 在移动端只接退格 / 回车，
+    // 由 ScriptCodeEditor 外层的 Focus 接住。以下几条都在 Android 平台下跑，结束时复位。
+
+    testWidgets('APP #26：方向键移动光标、Home / End 到行首行尾；只读时也能移、内容不变', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      try {
+        const text = 'abc\n  def\nghi';
+        for (final readOnly in [false, true]) {
+          final h = _Harness(text, readOnly: readOnly);
+          await h.pump(tester);
+          h.focusNode.requestFocus();
+          await tester.pump();
+          h.controller.selection = const CodeLineSelection.collapsed(
+            index: 1,
+            offset: 3,
+          );
+          await tester.pump();
+
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+          await tester.pump();
+          expect(_caret(h.controller), (1, 4));
+
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+          await tester.pump();
+          expect(_caret(h.controller), (1, 2));
+
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+          await tester.pump();
+          expect(h.controller.selection.isCollapsed, isTrue);
+          expect(h.controller.selection.extentIndex, 2);
+
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+          await tester.pump();
+          expect(h.controller.selection.isCollapsed, isTrue);
+          expect(h.controller.selection.extentIndex, 0);
+
+          // 行尾 / 行首（「行首」先到缩进后的第一个字）。
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+          await tester.sendKeyEvent(LogicalKeyboardKey.end);
+          await tester.pump();
+          expect(_caret(h.controller), (1, 5));
+          await tester.sendKeyEvent(LogicalKeyboardKey.home);
+          await tester.pump();
+          expect(_caret(h.controller), (1, 2));
+
+          // 移动光标从不改内容（只读、可编辑都一样）。
+          expect(h.controller.text, text);
+          await h.dispose(tester);
+        }
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    testWidgets('APP #26：Shift+方向键扩展选区，起点不动；不带 Shift 再按就收起选区', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      try {
+        final h = _Harness('hello world\nsecond line');
+        await h.pump(tester);
+        h.focusNode.requestFocus();
+        await tester.pump();
+        h.controller.selection = const CodeLineSelection.collapsed(
+          index: 0,
+          offset: 6,
+        );
+        await tester.pump();
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+        for (var i = 0; i < 5; i++) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+        }
+        await tester.pump();
+        expect(h.controller.selectedText, 'world');
+        expect((h.controller.selection.baseIndex, h.controller.selection.baseOffset), (0, 6));
+
+        // Shift+↓：终点挪到下一行，起点仍在第 1 行。
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pump();
+        expect(h.controller.selection.baseIndex, 0);
+        expect(h.controller.selection.baseOffset, 6);
+        expect(h.controller.selection.extentIndex, 1);
+
+        // Shift+Home：终点回到这一行的行首。
+        await tester.sendKeyEvent(LogicalKeyboardKey.home);
+        await tester.pump();
+        expect(h.controller.selectedText, 'world\n');
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+        await tester.pump();
+
+        // 松开 Shift 再按 →：选区收到末尾，变回光标。
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+        await tester.pump();
+        expect(h.controller.selection.isCollapsed, isTrue);
+        expect(_caret(h.controller), (1, 0));
+        expect(h.controller.text, 'hello world\nsecond line');
+
+        await h.dispose(tester);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    testWidgets('APP #26：拼音组字中按方向键不动光标、不打散组合区；上屏后照常移动', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      try {
+        final h = _Harness('ab\ncd');
+        await h.pump(tester);
+        h.focusNode.requestFocus();
+        await tester.pump();
+        h.controller.selection = const CodeLineSelection.collapsed(
+          index: 0,
+          offset: 2,
+        );
+        await tester.pump();
+        final state = tester.testTextInput.editingState!;
+        final remote = state['text'] as String;
+        final caret = state['selectionBase'] as int;
+
+        // 敲 n：组合中。
+        await _sendDelta(
+          tester,
+          oldText: remote,
+          deltaText: 'n',
+          start: caret,
+          end: caret,
+          selection: caret + 1,
+          composingBase: caret,
+          composingExtent: caret + 1,
+        );
+        expect(h.controller.isComposing, isTrue);
+        final composingSelection = h.controller.selection;
+
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pump();
+        expect(h.controller.selection, composingSelection);
+        expect(h.controller.isComposing, isTrue);
+        expect(h.controller.text, 'abn\ncd');
+
+        // 选「你」上屏，组合结束：方向键恢复作用。
+        await _sendDelta(
+          tester,
+          oldText: '${remote}n',
+          deltaText: '你',
+          start: caret,
+          end: caret + 1,
+          selection: caret + 1,
+          composingBase: -1,
+          composingExtent: -1,
+        );
+        expect(h.controller.isComposing, isFalse);
+        expect(_caret(h.controller), (0, 3));
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+        await tester.pump();
+        expect(_caret(h.controller), (0, 2));
+        expect(h.controller.text, 'ab你\ncd');
+
+        await h.dispose(tester);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    testWidgets('APP #26：方向键把光标移出视口时自动滚回来', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      try {
+        final h = _Harness(List.generate(80, (i) => 'line $i').join('\n'));
+        await h.pump(tester);
+        h.focusNode.requestFocus();
+        await tester.pump();
+        h.controller.selection = const CodeLineSelection.collapsed(
+          index: 0,
+          offset: 0,
+        );
+        await tester.pump();
+        final scrollable = tester.state<ScrollableState>(
+          find
+              .descendant(
+                of: find.byType(CodeEditor),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        );
+        expect(scrollable.position.pixels, 0);
+
+        // 一路按 ↓ 到第 61 行，远超一屏（640 高约二三十行）。
+        for (var i = 0; i < 60; i++) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+          await tester.pump();
+        }
+        expect(h.controller.selection.extentIndex, 60);
+        expect(scrollable.position.pixels, greaterThan(0));
+        final cursorLine = _paragraphs(tester).firstWhere((p) => p.index == 60);
+        final viewport = tester.getSize(find.byType(CodeEditor)).height;
+        expect(cursorLine.top, greaterThanOrEqualTo(-0.5));
+        expect(cursorLine.bottom, lessThanOrEqualTo(viewport + 0.5));
+
+        await h.dispose(tester);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
     });
 
     testWidgets('系统「粗体文字」：正文与行号都加粗；关着时不加粗', (tester) async {

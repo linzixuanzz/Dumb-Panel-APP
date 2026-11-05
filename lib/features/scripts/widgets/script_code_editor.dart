@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:re_editor/re_editor.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -17,6 +19,7 @@ import '../../../core/theme/design_tokens.dart';
 /// - 关掉代码折叠、括号 / 引号自动补全、语法高亮——原来的编辑器都没有，别凭空多出来；
 /// - 只读时不显示光标、选择菜单里只有「复制 / 全选」，外接键盘也改不了内容；
 /// - 跟随系统「粗体文字」；键盘弹起压矮编辑器时把光标行滚回视口；
+/// - 移动端接住方向键 / Home / End（输入法的光标键盘就发这些），re_editor 自己不管（APP #26）；
 /// - 点同一组 [CodeEditorTapRegion] 里的控件（查找条、路径行）不让编辑器失焦，
 ///   所以页面要把紧挨编辑器的区域一起包进 [CodeEditorTapRegion]。
 class ScriptCodeEditor extends StatefulWidget {
@@ -212,7 +215,7 @@ class _ScriptCodeEditorState extends State<ScriptCodeEditor>
           : AppColors.editorGutterOnLight,
     );
 
-    return CodeEditor(
+    final editor = CodeEditor(
       controller: _editorController,
       findController: widget.findController,
       focusNode: _focusNode,
@@ -259,6 +262,78 @@ class _ScriptCodeEditorState extends State<ScriptCodeEditor>
           ),
         );
       },
+    );
+
+    // ── 输入法光标键盘的方向键（APP #26） ──────────────────────────────────
+    // re_editor 在 Android / iOS 上不挂快捷键，只用一个 Focus.onKey 接管退格和回车，
+    // 方向键一律放过。搜狗 / 百度等输入法的「光标键盘」发的正是方向键（DPAD）事件，
+    // 于是点了光标纹丝不动。这里在 CodeEditor 外面再套一层 Focus：按键先到编辑器自己的
+    // 焦点节点，它放过的方向键冒泡上来，在这一层交给 controller 自带的移动方法
+    // （上下按软换行后的视觉行走，移完自己会把光标滚进视口）。
+    // 这层 Focus 自己不抢焦点、不参与 Tab 切换，只在编辑器有焦点时收到冒泡的按键。
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      includeSemantics: false,
+      onKeyEvent: (node, event) {
+        // 桌面端 re_editor 自带一整套快捷键，不在这里重复处理。
+        if (defaultTargetPlatform != TargetPlatform.android &&
+            defaultTargetPlatform != TargetPlatform.iOS) {
+          return KeyEventResult.ignored;
+        }
+        // 只认按下与长按连发；抬起不管。
+        if (event is KeyUpEvent) {
+          return KeyEventResult.ignored;
+        }
+        // 拼音组字中（还没上屏）方向键留给输入法自己，不动光标，免得把组合区打散。
+        // 只读时照常移动（看长脚本也要能挪光标 / 用 Shift 扩选后复制），移动不改内容。
+        if (_editorController.isComposing) {
+          return KeyEventResult.ignored;
+        }
+        final shift = HardwareKeyboard.instance.isShiftPressed;
+        final key = event.logicalKey;
+        final AxisDirection? direction;
+        if (key == LogicalKeyboardKey.arrowLeft) {
+          direction = AxisDirection.left;
+        } else if (key == LogicalKeyboardKey.arrowRight) {
+          direction = AxisDirection.right;
+        } else if (key == LogicalKeyboardKey.arrowUp) {
+          direction = AxisDirection.up;
+        } else if (key == LogicalKeyboardKey.arrowDown) {
+          direction = AxisDirection.down;
+        } else {
+          direction = null;
+        }
+        if (direction != null) {
+          // 带 Shift 是扩展选区（选区起点不动），不带就是移动光标（有选区时先收起）。
+          if (shift) {
+            _editorController.extendSelection(direction);
+          } else {
+            _editorController.moveCursor(direction);
+          }
+          return KeyEventResult.handled;
+        }
+        // Home / End：到行首 / 行尾。re_editor 的「行首」是先到缩进后的第一个字，
+        // 再按一次才到第 0 列（与 VS Code 一致）。
+        if (key == LogicalKeyboardKey.home) {
+          if (shift) {
+            _editorController.extendSelectionToLineStart();
+          } else {
+            _editorController.moveCursorToLineStart();
+          }
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.end) {
+          if (shift) {
+            _editorController.extendSelectionToLineEnd();
+          } else {
+            _editorController.moveCursorToLineEnd();
+          }
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: editor,
     );
   }
 }
