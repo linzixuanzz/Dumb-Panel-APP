@@ -387,6 +387,9 @@ String resolveConfigGroupLabel(String group, {String? groupLabel}) {
 /// 只收 `registered == true` 的项：其余是面板运行时自己写的临时状态
 /// （auto_update_pending_version 之类），没有 schema，渲染出来也没有意义，
 /// 而且**渲染了就有被回写覆盖的风险**。
+///
+/// `web_only == true` 的项也跳过（面板 v4.0 起，主题预设之类只对网页生效的外观配置）。
+/// 面板对 APP 的请求本来就不下发它们，这里是双保险：不渲染，也就不会进 [buildSystemConfigWritePayload] 的回写。
 List<SystemConfigGroup> parseSystemConfigGroups(dynamic data) {
   if (data is! Map) {
     return const <SystemConfigGroup>[];
@@ -400,6 +403,9 @@ List<SystemConfigGroup> parseSystemConfigGroups(dynamic data) {
       continue;
     }
     if (raw['registered'] != true) {
+      continue;
+    }
+    if (raw['web_only'] == true) {
       continue;
     }
     items.add(_parseItem(key, raw));

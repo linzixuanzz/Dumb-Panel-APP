@@ -12,6 +12,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/env_var.dart';
 import '../../../shared/utils/api_utils.dart';
+import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_circle_add_button.dart';
 import '../../../shared/widgets/app_buttons.dart';
 import '../../../shared/widgets/app_card.dart';
@@ -2018,6 +2019,15 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
+                // 详情里给完整时间（带年份和秒），列表卡上只给到分钟（APP #27）。
+                const SizedBox(height: 4),
+                Text(
+                  '更新于 ${formatTimeCn(env.updatedAt)} · 创建于 ${formatTimeCn(env.createdAt)}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.slate400,
+                  ),
+                ),
                 const SizedBox(height: 16),
                 TextField(
                   controller: nameC,
@@ -3481,21 +3491,41 @@ class _EnvCardState extends State<_EnvCard> {
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
-                          if (widget.env.remarks.isNotEmpty) ...[
-                            const SizedBox(height: 2),
-                            Text(
-                              widget.env.remarks,
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: widget.isLight
-                                    ? AppColors.slate400
-                                    : AppColors.slate500,
-                                fontStyle: FontStyle.italic,
+                          // 备注与「更新于」同一行（APP #27）：备注占左边剩余宽度、长了照常省略，
+                          // 时间靠右不折行，卡片不因为多了时间而变高。没有备注时这一行只剩时间。
+                          // updated_at 在面板改值 / 启用 / 禁用时都会刷新，用户靠它看「什么时候动过」。
+                          const SizedBox(height: 2),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: widget.env.remarks.isNotEmpty
+                                    ? Text(
+                                        widget.env.remarks,
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: widget.isLight
+                                              ? AppColors.slate400
+                                              : AppColors.slate500,
+                                          fontStyle: FontStyle.italic,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      )
+                                    : const SizedBox.shrink(),
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
+                              const SizedBox(width: 8),
+                              Text(
+                                '更新于 ${formatTimeCn(widget.env.updatedAt, short: true)}',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: widget.isLight
+                                      ? AppColors.slate400
+                                      : AppColors.slate500,
+                                ),
+                                maxLines: 1,
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                     ),

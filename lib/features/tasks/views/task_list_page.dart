@@ -60,6 +60,62 @@ const _taskStatusFilters = [
 
 enum _TaskBatchAction { run, enable, disable, delete }
 
+/// 快捷排序的一项（APP #28）。[rule] 为 null = 默认排序。
+class _TaskQuickSortOption {
+  final String label;
+  final TaskViewSortRule? rule;
+
+  const _TaskQuickSortOption(this.label, this.rule);
+
+  /// 本机记忆里存的值：`字段:方向`，默认排序存空串。不存下标：以后增删选项时旧记忆不会错位。
+  String get storageValue =>
+      rule == null ? '' : '${rule!.field}:${rule!.direction}';
+}
+
+/// 与网页任务页 `quickSortOptions`（web/src/views/tasks/index.vue）逐项一致，顺序和文案都照抄，
+/// 两端用户说「按 XX 排」时指的是同一个东西。面板新增排序字段要两端一起加。
+const _taskQuickSortOptions = [
+  _TaskQuickSortOption('默认排序', null),
+  _TaskQuickSortOption('名称 A→Z', TaskViewSortRule(field: 'name')),
+  _TaskQuickSortOption(
+    '名称 Z→A',
+    TaskViewSortRule(field: 'name', direction: 'desc'),
+  ),
+  _TaskQuickSortOption(
+    '创建时间（最新优先）',
+    TaskViewSortRule(field: 'created_at', direction: 'desc'),
+  ),
+  _TaskQuickSortOption('创建时间（最早优先）', TaskViewSortRule(field: 'created_at')),
+  _TaskQuickSortOption(
+    '最后运行（最近优先）',
+    TaskViewSortRule(field: 'last_run_at', direction: 'desc'),
+  ),
+  _TaskQuickSortOption('最后运行（最早优先）', TaskViewSortRule(field: 'last_run_at')),
+  _TaskQuickSortOption('下次运行（最快到来）', TaskViewSortRule(field: 'next_run_at')),
+  _TaskQuickSortOption(
+    '下次运行（最晚到来）',
+    TaskViewSortRule(field: 'next_run_at', direction: 'desc'),
+  ),
+  // 按每天最早一次执行的时刻排，不是按表达式字符串（面板 v3.3.3 起的口径，见网页那两项的注释）。
+  _TaskQuickSortOption(
+    '定时规则（每天时刻 早→晚）',
+    TaskViewSortRule(field: 'cron_expression'),
+  ),
+  _TaskQuickSortOption(
+    '定时规则（每天时刻 晚→早）',
+    TaskViewSortRule(field: 'cron_expression', direction: 'desc'),
+  ),
+];
+
+/// 排序按钮上的短字段名（同网页 quickSortFieldLabels 里用得到的几项）。
+const _quickSortFieldLabels = {
+  'name': '名称',
+  'created_at': '创建时间',
+  'last_run_at': '最后运行',
+  'next_run_at': '下次运行',
+  'cron_expression': '定时规则',
+};
+
 class _TaskListPageState extends ConsumerState<TaskListPage> {
   static const _collapsedGroupsStorageKey = 'tasks.collapsed_groups';
   static const _scrollOffsetStorageKey = 'tasks.scroll_offset';
@@ -69,6 +125,10 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   /// 选中的任务视图 id。存空串表示「全部任务」。
   /// 视图是全局共享的，别人随时可能删掉它，所以恢复时必须能回落。
   static const _selectedViewStorageKey = 'tasks.selected_view';
+
+  /// 上次选的快捷排序（APP #28），值见 [_TaskQuickSortOption.storageValue]。
+  /// 同上面几项本机偏好一样不分服务器。
+  static const _quickSortStorageKey = 'tasks.quick_sort';
   final _searchController = TextEditingController();
   final _scrollController = ScrollController();
   final Set<String> _collapsedGroups = <String>{};
@@ -651,6 +711,19 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
           .read(taskProvider.notifier)
           .setLabelSelection(normalized.isEmpty ? null : normalized);
     }
+    // 恢复快捷排序，同样只写 provider 不发请求，唯一一次请求留给 _bootstrapTaskPage 末尾的 load()。
+    // 存的值对不上任何一项（被手改过 / 以后删了某项）就当默认排序。
+    final quickSortRaw = await SecureStorage.getUiState(_quickSortStorageKey);
+    if (!mounted) {
+      return;
+    }
+    TaskViewSortRule? quickSort;
+    for (final option in _taskQuickSortOptions) {
+      if (option.rule != null && option.storageValue == quickSortRaw?.trim()) {
+        quickSort = option.rule;
+      }
+    }
+    ref.read(taskProvider.notifier).setQuickSortSelection(quickSort);
   }
 
   /// 上次选中的视图 id。没存过 / 存的是空串 / 存了个非数字，都当成「全部任务」。
@@ -934,6 +1007,58 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     }
     ref.read(taskProvider.notifier).applyView(view);
     await _persistSelectedView(view?.id);
+    // applyView 把快捷排序复位成了默认，本机记忆跟着清掉，否则下次进来又恢复成旧的。
+    await SecureStorage.saveUiState(_quickSortStorageKey, '');
+  }
+
+  /// 快捷排序选择（APP #28）。底部弹层列出与网页一致的 11 项，当前项打勾。
+  Future<void> _showQuickSortPicker() async {
+    final current = ref.read(taskProvider).quickSort;
+    bool isCurrent(_TaskQuickSortOption option) =>
+        option.rule?.field == current?.field &&
+        option.rule?.direction == current?.direction;
+    // 返回下标而不是规则：「默认排序」的规则是 null，会和「点遮罩关掉」的 null 混在一起。
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      // 11 项在矮屏上超过默认的半屏高度，放开高度、内容自己滚。
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const ListTile(
+              title: Text('排序方式'),
+              subtitle: Text('选了排序后，视图自带的排序暂不生效；切换视图时恢复默认排序'),
+            ),
+            for (var i = 0; i < _taskQuickSortOptions.length; i++)
+              ListTile(
+                title: Text(_taskQuickSortOptions[i].label),
+                trailing: isCurrent(_taskQuickSortOptions[i])
+                    ? const Icon(Icons.check, color: AppColors.primary)
+                    : null,
+                onTap: () => Navigator.pop(sheetContext, i),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || picked == null) {
+      return;
+    }
+    final option = _taskQuickSortOptions[picked];
+    if (isCurrent(option)) {
+      return;
+    }
+    if (_scrollController.hasClients && _scrollController.offset > 0) {
+      _scrollController.jumpTo(0);
+    }
+    // 按快捷排序显示时拖拽不可用（dragSortDisabledReason），正在拖拽排序就顺手退出来。
+    if (option.rule != null && _taskSortMode) {
+      setState(() => _taskSortMode = false);
+    }
+    ref.read(taskProvider.notifier).applyQuickSort(option.rule);
+    await SecureStorage.saveUiState(_quickSortStorageKey, option.storageValue);
   }
 
   Future<void> _openTaskViewEditor({TaskView? view}) async {
@@ -1241,6 +1366,17 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       reverse: true,
                       child: Row(
                         children: [
+                          // 快捷排序入口（APP #28）。不叫「排序」：页头的「排序」是拖拽排序模式。
+                          TextButton.icon(
+                            onPressed: _showQuickSortPicker,
+                            icon: const Icon(Icons.sort, size: 16),
+                            label: _buildFilterButtonLabel(
+                              state.quickSort == null
+                                  ? '默认排序'
+                                  : '${_quickSortFieldLabels[state.quickSort!.field] ?? '自定义'} '
+                                        '${state.quickSort!.isDescending ? '↓' : '↑'}',
+                            ),
+                          ),
                           if (_showViewFilterEntry(viewState, canManageViews))
                             TextButton.icon(
                               onPressed: _showViewPicker,

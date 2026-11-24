@@ -28,6 +28,12 @@ class TaskListState {
   /// 当前选中的视图 id，只用于 UI 高亮与本地持久化。
   final int? selectedViewId;
 
+  /// 快捷排序（APP #28，选项与网页任务页 quickSortOptions 同一套）。null = 默认排序。
+  ///
+  /// 优先级同网页：快捷排序 > 视图自带排序。默认排序时不另传，视图有排序就用视图的，
+  /// 没有就什么都不传、走面板默认的置顶 + 状态分区。用户切视图时复位（见 [TaskNotifier.applyView]）。
+  final TaskViewSortRule? quickSort;
+
   const TaskListState({
     this.tasks = const [],
     this.total = 0,
@@ -39,7 +45,12 @@ class TaskListState {
     this.filters = const [],
     this.sortRules = const [],
     this.selectedViewId,
+    this.quickSort,
   });
+
+  /// 真正发给面板的 sort_rules：快捷排序优先，否则用视图自带的。
+  List<TaskViewSortRule> get effectiveSortRules =>
+      quickSort != null ? [quickSort!] : sortRules;
 
   /// 此刻不能拖拽排序的原因，能拖返回 null。条件与文案对齐网页端 tasks/index.vue 的
   /// dragSortDisabledReason（只取 APP 也有的两条）：
@@ -48,6 +59,10 @@ class TaskListState {
   ///   而 [TaskNotifier.moveTask] 拿「看得见的邻居」当锚，拖了会白拖，甚至落到别的位置。
   ///   「已启用 / 已禁用」筛选是服务端按 status 精确匹配，运行中的会被筛掉，所以文案给的是这条出路。
   String? get dragSortDisabledReason {
+    // 文案对齐网页：快捷排序排在视图排序前面判，因为它的优先级更高。
+    if (quickSort != null) {
+      return '当前正在按快捷排序显示，先切回「默认排序」再拖拽';
+    }
     if (sortRules.isNotEmpty) {
       return '当前视图自带排序规则，切到不带排序的视图再拖拽';
     }
@@ -68,6 +83,7 @@ class TaskListState {
     List<TaskViewFilter>? filters,
     List<TaskViewSortRule>? sortRules,
     Object? selectedViewId = _unset,
+    Object? quickSort = _unset,
   }) {
     return TaskListState(
       tasks: tasks ?? this.tasks,
@@ -86,6 +102,9 @@ class TaskListState {
       selectedViewId: identical(selectedViewId, _unset)
           ? this.selectedViewId
           : selectedViewId as int?,
+      quickSort: identical(quickSort, _unset)
+          ? this.quickSort
+          : quickSort as TaskViewSortRule?,
     );
   }
 }
@@ -126,8 +145,10 @@ class TaskNotifier extends StateNotifier<TaskListState> {
       if (state.filters.isNotEmpty) {
         queryParams['filters'] = encodeTaskViewFilters(state.filters);
       }
-      if (state.sortRules.isNotEmpty) {
-        queryParams['sort_rules'] = encodeTaskViewSortRules(state.sortRules);
+      // 快捷排序优先于视图排序（APP #28，同网页 loadTasks）；两者都没有就不传。
+      final sortRules = state.effectiveSortRules;
+      if (sortRules.isNotEmpty) {
+        queryParams['sort_rules'] = encodeTaskViewSortRules(sortRules);
       }
 
       final response = await dio.get(
@@ -185,8 +206,23 @@ class TaskNotifier extends StateNotifier<TaskListState> {
   }
 
   /// 切换任务视图。传 null 表示回到「全部任务」（清空规则）。
+  ///
+  /// 用户切视图时快捷排序复位成默认（同网页 handleViewChange），否则选了带排序的视图却看不到它的排序。
+  /// 复位只放在这里、不放进 [setViewSelection]：冷启动恢复走的是后者，放进去会把刚恢复的快捷排序抹掉。
   void applyView(TaskView? view) {
     setViewSelection(view);
+    state = state.copyWith(quickSort: null, error: state.error);
+    load(refresh: true);
+  }
+
+  /// 只写快捷排序，**不发请求**。冷启动恢复时用，理由同 [setViewSelection]。
+  void setQuickSortSelection(TaskViewSortRule? rule) {
+    state = state.copyWith(quickSort: rule, error: state.error);
+  }
+
+  /// 选中一项快捷排序并刷新列表。传 null = 默认排序。
+  void applyQuickSort(TaskViewSortRule? rule) {
+    setQuickSortSelection(rule);
     load(refresh: true);
   }
 

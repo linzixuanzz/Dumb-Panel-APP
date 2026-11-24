@@ -619,4 +619,65 @@ void main() {
       expect(resolveConfigGroupLabel(''), '其它');
     });
   });
+
+  // 面板 v4.0 给只对网页生效的外观配置（panel_theme_preset 等）加了 web_only: true。
+  // 面板对 APP 本来就不下发它们，APP 这边再挡一道：不渲染、不回写。
+  group('web_only 的配置项', () {
+    Map<String, dynamic> configs() => {
+      'panel_title': {
+        'value': '呆呆面板',
+        'default_value': '呆呆面板',
+        'value_type': 'string',
+        'group': 'panel',
+        'registered': true,
+      },
+      'panel_theme_preset': {
+        'value': 'ocean',
+        'default_value': 'default',
+        'value_type': 'string',
+        'group': 'panel',
+        'registered': true,
+        'web_only': true,
+      },
+      // web_only 不是 true（false / 缺失 / 非布尔）都照常显示：未知值不猜成「只限网页」。
+      'panel_language': {
+        'value': 'zh',
+        'default_value': 'zh',
+        'value_type': 'string',
+        'group': 'panel',
+        'registered': true,
+        'web_only': 'true',
+      },
+      'log_retention_days': {
+        'value': '7',
+        'default_value': '7',
+        'value_type': 'int',
+        'group': 'tasks',
+        'registered': true,
+        'web_only': false,
+      },
+    };
+
+    test('web_only == true 的项不渲染，其余照常', () {
+      final keys = flattenSystemConfigItems(
+        parseSystemConfigGroups(configs()),
+      ).map((item) => item.key).toSet();
+      expect(keys, {'panel_title', 'panel_language', 'log_retention_days'});
+    });
+
+    test('web_only 的项即使出现在 draft 里也不回写', () {
+      final items = flattenSystemConfigItems(
+        parseSystemConfigGroups(configs()),
+      );
+      final draft = <String, String>{
+        for (final item in items) item.key: item.value,
+        'panel_theme_preset': 'forest',
+      };
+      final payload = buildSystemConfigWritePayload(
+        items: items,
+        draft: draft,
+      );
+      expect(payload, isEmpty);
+    });
+  });
 }
