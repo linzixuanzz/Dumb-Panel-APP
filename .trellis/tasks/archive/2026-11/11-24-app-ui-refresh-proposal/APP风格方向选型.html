@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>呆呆面板 APP · 风格方向选型</title>
+<!-- 4 个风格方向的同一张主页，内容完全相同，只比风格。数据为本地模拟。 -->
+<style>
+@property --ang{syntax:"<angle>";inherits:false;initial-value:0deg}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Inter","HarmonyOS Sans SC","PingFang SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;background:#0e0f13;color:#e9eaee;-webkit-font-smoothing:antialiased}
+.wrap{display:flex;gap:34px;justify-content:center;padding:34px 30px 40px;flex-wrap:wrap}
+figure{display:flex;flex-direction:column;align-items:center;gap:14px}
+figcaption{text-align:center}
+figcaption b{display:block;font-size:20px;letter-spacing:.5px}
+figcaption span{font-size:13px;color:#9ea2b0}
+.device{width:414px;height:868px;padding:12px;border-radius:58px;background:linear-gradient(145deg,#3a3c44,#0b0c0f);box-shadow:0 0 0 1.5px #4a4d56,0 40px 80px -24px rgba(0,0,0,.7)}
+.ph{position:relative;width:390px;height:844px;border-radius:46px;overflow:hidden;isolation:isolate}
+.ph .isl{position:absolute;top:11px;left:50%;width:120px;height:34px;margin-left:-60px;border-radius:20px;background:#000;z-index:50}
+.sb{position:absolute;top:0;left:0;right:0;height:52px;display:flex;justify-content:space-between;align-items:center;padding:4px 32px 0 36px;font-size:15px;font-weight:700;z-index:40}
+.sb i{font-style:normal;letter-spacing:2px;font-size:11px}
+.page{position:absolute;inset:0;padding:60px 18px 0;overflow:hidden}
+.mono{font-family:"JetBrains Mono","Cascadia Code","SF Mono",Consolas,monospace;font-variant-numeric:tabular-nums}
+.ic{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.ic.f{fill:currentColor;stroke:none}
+
+/* ======================= A 液态玻璃 ======================= */
+.A{background:#16112b;color:#fff}
+.A .wall{position:absolute;inset:-40px;z-index:-1;background:
+  radial-gradient(240px 240px at 18% 14%,#ff9f0a 0,transparent 70%),
+  radial-gradient(300px 300px at 92% 26%,#ff375f 0,transparent 70%),
+  radial-gradient(340px 340px at 8% 62%,#5e5ce6 0,transparent 70%),
+  radial-gradient(280px 280px at 88% 82%,#30d1c8 0,transparent 70%),
+  radial-gradient(220px 220px at 50% 46%,#ffd60a 0,transparent 70%),#2a1a55;filter:saturate(1.15);animation:wallmove 14s ease-in-out infinite alternate}
+@keyframes wallmove{to{transform:translate(-18px,14px) scale(1.06) rotate(2deg)}}
+.A .glass{position:relative;border-radius:30px;background:linear-gradient(135deg,rgba(255,255,255,.28),rgba(255,255,255,.08) 55%,rgba(255,255,255,.14));-webkit-backdrop-filter:blur(26px) saturate(190%) brightness(1.08);backdrop-filter:blur(26px) saturate(190%) brightness(1.08);box-shadow:inset 0 1.5px 1px rgba(255,255,255,.75),inset 0 -1px 1px rgba(255,255,255,.18),inset 0 0 0 1px rgba(255,255,255,.22),0 18px 40px -16px rgba(20,0,60,.55);overflow:hidden}
+.A .glass::before{content:"";position:absolute;inset:0;background:radial-gradient(120% 60% at 15% 0%,rgba(255,255,255,.45),transparent 45%);pointer-events:none;mix-blend-mode:overlay}
+.A .glass::after{content:"";position:absolute;left:8%;right:8%;top:0;height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.95),transparent);pointer-events:none}
+.A h1{font-size:36px;font-weight:800;letter-spacing:-.8px;text-shadow:0 2px 12px rgba(0,0,0,.25)}
+.A .top{display:flex;justify-content:space-between;align-items:flex-end;margin:6px 4px 16px}
+.A .top small{display:block;font-size:13px;font-weight:600;opacity:.85}
+.A .av{width:46px;height:46px;border-radius:50%;padding:3px}
+.A .av img{width:100%;height:100%;border-radius:50%}
+.A .hero{padding:18px;display:flex;gap:14px;align-items:center}
+.A .hero img{width:74px;height:74px;border-radius:24px;box-shadow:0 10px 24px -8px rgba(0,0,0,.4)}
+.A .hero b{font-size:25px;line-height:1.15;font-weight:800;letter-spacing:-.4px;display:block}
+.A .hero span{font-size:13px;opacity:.85;display:block;margin-top:6px}
+.A .alert{margin-top:10px;padding:12px 12px 12px 16px;display:flex;align-items:center;gap:10px;border-radius:22px}
+.A .alert .dot{width:10px;height:10px;border-radius:50%;background:#ff453a;box-shadow:0 0 12px #ff453a}
+.A .alert div{flex:1;font-size:14px;font-weight:700;line-height:1.3}
+.A .alert div small{display:block;font-weight:500;opacity:.8;font-size:12px}
+.A .pillbtn{height:36px;padding:0 16px;border-radius:18px;font-weight:800;font-size:13.5px;color:#fff;display:inline-flex;align-items:center}
+.A .live{margin-top:12px;height:58px;padding:0 10px 0 8px;display:flex;align-items:center;gap:10px;border-radius:29px}
+.A .live img{width:42px;height:42px;border-radius:50%}
+.A .live b{font-size:14px;display:block}
+.A .live small{font-size:12px;opacity:.8}
+.A .wave{display:flex;gap:3px;align-items:center;height:22px;margin-left:auto;margin-right:8px}
+.A .wave i{width:3.5px;border-radius:2px;background:#fff;animation:wv 1s ease-in-out infinite alternate}
+.A .wave i:nth-child(2){animation-delay:.2s}.A .wave i:nth-child(3){animation-delay:.4s}.A .wave i:nth-child(4){animation-delay:.1s}.A .wave i:nth-child(5){animation-delay:.3s}
+@keyframes wv{from{height:5px}to{height:22px}}
+.A .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+.A .w{padding:14px;height:132px;display:flex;flex-direction:column;justify-content:space-between}
+.A .w small{font-size:12px;font-weight:700;opacity:.85}
+.A .w b{font-size:34px;font-weight:800;letter-spacing:-1px}
+.A .ring{width:62px;height:62px;transform:rotate(-90deg)}
+.A .ring circle{fill:none;stroke-width:8;stroke-linecap:round}
+.A .list{margin-top:12px;padding:6px 16px}
+.A .li{display:flex;align-items:center;gap:10px;height:42px;font-size:14px;font-weight:650}
+.A .li+.li{border-top:1px solid rgba(255,255,255,.18)}
+.A .li i{width:8px;height:8px;border-radius:50%}
+.A .li span{margin-left:auto;opacity:.75;font-size:12px}
+.A .tab{position:absolute;left:16px;right:84px;bottom:26px;height:64px;border-radius:32px;display:flex;align-items:center;padding:0 6px;z-index:30}
+.A .tab button{flex:1;height:52px;border-radius:26px;border:0;background:none;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font:600 10.5px inherit;opacity:.9}
+.A .tab button.on{background:rgba(255,255,255,.32);box-shadow:inset 0 1px 1px rgba(255,255,255,.7);opacity:1}
+.A .tab button span{font-size:10.5px}
+.A .fab{position:absolute;right:16px;bottom:26px;width:64px;height:64px;border-radius:50%;display:grid;place-items:center;z-index:30}
+
+/* ======================= B 点阵极客 ======================= */
+.B{background:#000;color:#ededed}
+.B .dm{font-family:"Arial Black","Inter",sans-serif;font-weight:900;background:radial-gradient(circle,var(--dc,#fff) 1.25px,transparent 1.6px) 0 0/4.6px 4.6px;-webkit-background-clip:text;background-clip:text;color:transparent;letter-spacing:2px}
+.B .lab{font-family:"JetBrains Mono",Consolas,monospace;font-size:11px;letter-spacing:2.2px;text-transform:uppercase;color:#8a8a8a}
+.B .head{display:flex;justify-content:space-between;align-items:center;margin:8px 4px 14px}
+.B .head b{font-family:"JetBrains Mono",Consolas,monospace;letter-spacing:4px;font-size:14px}
+.B .red{display:inline-block;width:9px;height:9px;border-radius:50%;background:#ff2b2b;box-shadow:0 0 10px #ff2b2b;animation:blink 1.6s steps(2) infinite}
+@keyframes blink{50%{opacity:.25}}
+.B .cell{border:1px solid #2a2a2a;border-radius:26px;padding:16px;background:#0b0b0b;position:relative;overflow:hidden}
+.B .hero{display:flex;align-items:center;gap:6px;padding:18px 16px}
+.B .hero .big{font-size:92px;line-height:.9;--dc:#f5f5f5}
+.B .hero img{width:118px;height:118px;filter:grayscale(1) contrast(1.6) brightness(1.15);-webkit-mask:radial-gradient(circle,#000 1.5px,transparent 1.9px) 0 0/4.6px 4.6px;mask:radial-gradient(circle,#000 1.5px,transparent 1.9px) 0 0/4.6px 4.6px;margin-left:auto}
+.B .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.B .alert{grid-column:span 2;display:flex;gap:12px;align-items:center;border-color:#3a1111;background:linear-gradient(90deg,#1a0606,#0b0b0b 70%)}
+.B .alert b{font-size:16px;display:block}
+.B .alert small{font-size:12px;color:#9a9a9a}
+.B .alert button{margin-left:auto;height:38px;padding:0 16px;border-radius:19px;border:1px solid #ededed;background:none;color:#ededed;font:700 12px "JetBrains Mono",monospace;letter-spacing:1.5px}
+.B .sq{height:150px;display:flex;flex-direction:column;justify-content:space-between}
+.B .sq .dm{font-size:46px;line-height:1}
+.B .dots{display:flex;gap:4px;flex-wrap:wrap}
+.B .dots i{width:6px;height:6px;border-radius:50%;background:#2c2c2c}
+.B .dots i.on{background:#ededed}
+.B .dots i.r{background:#ff2b2b}
+.B .run i.on{animation:runr 1.4s steps(1) infinite}
+@keyframes runr{50%{background:#2c2c2c}}
+.B .week{display:flex;gap:7px;align-items:flex-end;height:64px}
+.B .week span{display:flex;flex-direction:column-reverse;gap:3px}
+.B .week span i{width:7px;height:7px;border-radius:50%;background:#2a2a2a}
+.B .week span i.on{background:#ededed}
+.B .week span:last-child i.on{background:#ff2b2b}
+.B .tab{position:absolute;left:18px;right:18px;bottom:26px;height:60px;border-radius:30px;border:1px solid #2a2a2a;background:#0b0b0b;display:flex;align-items:center;justify-content:space-around;font:700 11px "JetBrains Mono",monospace;letter-spacing:2px;color:#777}
+.B .tab .on{color:#fff;display:flex;align-items:center;gap:6px}
+
+/* ======================= C 暗黑霓虹 ======================= */
+.C{background:#07070a;color:#f4f2f7}
+.C .orb{position:absolute;width:420px;height:420px;border-radius:50%;filter:blur(70px);z-index:-1;animation:orb 10s ease-in-out infinite alternate}
+.C .o1{top:-180px;left:-60px;background:conic-gradient(from 120deg,#ff6a00,#ff2e88,#8b2cff,#ff6a00);opacity:.75}
+.C .o2{bottom:-200px;right:-160px;background:radial-gradient(#c6ff3d,transparent 65%);opacity:.35;animation-duration:13s}
+@keyframes orb{to{transform:translate(30px,30px) rotate(40deg) scale(1.1)}}
+.C .grain{position:absolute;inset:0;z-index:-1;opacity:.12;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.95' numOctaves='3'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");mix-blend-mode:screen}
+.C .grad{background:linear-gradient(95deg,#ffb35c,#ff4d8d 45%,#a855ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.C .head{display:flex;justify-content:space-between;align-items:center;margin:8px 2px 10px;font-size:13px;font-weight:600;color:#a9a6b5}
+.C .head .av{width:40px;height:40px;border-radius:14px;padding:2px;background:conic-gradient(from var(--ang),#ffb35c,#ff4d8d,#a855ff,#ffb35c);animation:sp 4s linear infinite}
+@keyframes sp{to{--ang:360deg}}
+.C .head .av img{width:100%;height:100%;border-radius:12px;display:block}
+.C h1{font-size:50px;line-height:.98;font-weight:900;letter-spacing:-2px;margin:6px 2px 4px}
+.C .sub{font-size:14px;color:#a9a6b5;margin:0 2px 16px}
+.C .card{position:relative;border-radius:26px;background:#111117;padding:16px;overflow:hidden}
+.C .card.glowb::before{content:"";position:absolute;inset:0;border-radius:inherit;padding:1.5px;background:conic-gradient(from var(--ang),#ff4d8d,transparent 30%,#ffb35c 50%,transparent 70%,#a855ff);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;animation:sp 5s linear infinite}
+.C .alert{display:flex;align-items:center;gap:12px}
+.C .alert .ico{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;background:linear-gradient(135deg,#ff4d6d,#ff8a3d);color:#fff;box-shadow:0 8px 24px -6px #ff4d6d}
+.C .alert b{display:block;font-size:15.5px}
+.C .alert small{font-size:12.5px;color:#a9a6b5}
+.C .alert button{margin-left:auto;height:38px;padding:0 16px;border-radius:19px;border:0;font-weight:800;font-size:13px;color:#140a12;background:linear-gradient(95deg,#ffb35c,#ff4d8d)}
+.C .row{display:grid;grid-template-columns:1.25fr 1fr;gap:10px;margin-top:10px}
+.C .run b{font-size:13px;color:#a9a6b5;font-weight:600;display:block}
+.C .run .t{font-size:17px;font-weight:800;margin:4px 0 12px;display:block}
+.C .bar{height:8px;border-radius:4px;background:#22222b;overflow:hidden}
+.C .bar i{display:block;height:100%;width:62%;border-radius:4px;background:linear-gradient(90deg,#ffb35c,#ff4d8d,#a855ff);background-size:200% 100%;animation:flow 2s linear infinite}
+@keyframes flow{to{background-position:-200% 0}}
+.C .big{font-size:44px;font-weight:900;letter-spacing:-1.5px;line-height:1}
+.C .k{font-size:12px;color:#a9a6b5;font-weight:600}
+.C .lime{color:#c6ff3d;text-shadow:0 0 18px rgba(198,255,61,.5)}
+.C .stats{display:flex;gap:10px;margin-top:10px}
+.C .stats .card{flex:1;padding:14px}
+.C .spark{width:100%;height:40px;margin-top:8px}
+.C .tab{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);height:62px;padding:0 8px;border-radius:31px;background:rgba(20,20,26,.85);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,.08);display:flex;align-items:center;gap:4px}
+.C .tab button{width:58px;height:46px;border-radius:23px;border:0;background:none;color:#8d8a99;display:grid;place-items:center}
+.C .tab button.on{width:96px;color:#140a12;background:linear-gradient(95deg,#ffb35c,#ff4d8d);font-weight:800;font-size:13px;display:flex;justify-content:center;gap:6px;align-items:center}
+
+/* ======================= D 3D 粘土 ======================= */
+.D{background:linear-gradient(170deg,#eef0ff,#fdf2ff 55%,#fff6e8);color:#2b2f4a}
+.D .clay{border-radius:32px;background:linear-gradient(145deg,#ffffff,#f2f3ff);box-shadow:10px 12px 26px rgba(130,138,200,.32),-8px -8px 20px rgba(255,255,255,.95),inset 2px 2px 3px rgba(255,255,255,1),inset -4px -5px 10px rgba(130,138,200,.16)}
+.D .head{display:flex;justify-content:space-between;align-items:center;margin:6px 4px 8px;font-size:13px;font-weight:700;color:#7b80a6}
+.D .hero{display:flex;align-items:center;gap:6px;padding:8px 4px 14px}
+.D .hero img{width:150px;height:150px;filter:drop-shadow(0 22px 22px rgba(90,100,170,.35));animation:float 3.6s ease-in-out infinite}
+@keyframes float{50%{transform:translateY(-8px) rotate(-3deg)}}
+.D .hero b{font-size:31px;line-height:1.1;font-weight:900;letter-spacing:-.8px}
+.D .hero b em{font-style:normal;color:#ff5a6e}
+.D .hero span{display:block;font-size:13px;color:#7b80a6;margin-top:8px;font-weight:600}
+.D .alert{display:flex;align-items:center;gap:12px;padding:14px 14px 14px 16px}
+.D .ball{width:46px;height:46px;border-radius:50%;flex:none;display:grid;place-items:center;color:#fff;background:radial-gradient(circle at 32% 28%,#fff8 0 8%,transparent 30%),radial-gradient(circle at 50% 50%,var(--c1),var(--c2));box-shadow:0 10px 18px -6px var(--c2),inset -3px -5px 8px rgba(0,0,0,.18)}
+.D .alert b{display:block;font-size:15px;font-weight:800}
+.D .alert small{font-size:12px;color:#7b80a6}
+.D .puffy{margin-left:auto;height:40px;padding:0 16px;border-radius:20px;border:0;font-weight:900;font-size:13.5px;color:#fff;background:linear-gradient(180deg,#ff7a8a,#ff4d63);box-shadow:0 8px 16px -6px #ff4d63,inset 0 2px 2px rgba(255,255,255,.6),inset 0 -3px 4px rgba(150,0,30,.25)}
+.D .row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+.D .w{padding:16px;height:140px;display:flex;flex-direction:column;justify-content:space-between}
+.D .w small{font-size:12px;font-weight:800;color:#7b80a6}
+.D .w b{font-size:32px;font-weight:900;letter-spacing:-1px}
+.D .prog{height:14px;border-radius:7px;background:#e6e8fb;box-shadow:inset 2px 2px 4px rgba(130,138,200,.3);overflow:hidden}
+.D .prog i{display:block;height:100%;width:64%;border-radius:7px;background:linear-gradient(180deg,#7aa8ff,#4a7dff);box-shadow:inset 0 2px 2px rgba(255,255,255,.6)}
+.D .tab{position:absolute;left:18px;right:18px;bottom:24px;height:72px;border-radius:36px;display:flex;align-items:center;justify-content:space-around;padding:0 10px}
+.D .tab button{width:52px;height:52px;border-radius:50%;border:0;background:none;color:#a0a5c8;display:grid;place-items:center}
+.D .tab button.on{color:#fff;background:radial-gradient(circle at 32% 28%,#fff8 0 8%,transparent 30%),radial-gradient(circle,#6f9bff,#3f6df2);box-shadow:0 10px 18px -6px #3f6df2,inset -3px -5px 8px rgba(0,0,0,.18)}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z"/></symbol>
+  <symbol id="home" viewBox="0 0 24 24"><path d="M3 11 12 3l9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="list" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/></symbol>
+  <symbol id="logs" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></symbol>
+  <symbol id="key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/></symbol>
+  <symbol id="search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7.5"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="alert" viewBox="0 0 24 24"><path d="M12 8v5M12 17h.01"/><circle cx="12" cy="12" r="9.5"/></symbol>
+  <symbol id="me" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></symbol>
+  <symbol id="spin" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"/></symbol>
+</svg>
+<div class="wrap">
+
+<!-- A 液态玻璃 -->
+<figure><div class="device"><div class="ph A"><span class="isl"></span><div class="wall"></div>
+  <div class="sb"><span>21:30</span><i>●●● 100</i></div>
+  <div class="page">
+    <div class="top"><div><small>11月24日 周二 · 家里的 NAS</small><h1>今天</h1></div><div class="av glass"><img src="images/mascot.png" alt=""></div></div>
+    <div class="glass hero"><img src="images/mascot.png" alt=""><div><b>有 1 件事<br>要你处理</b><span>今天跑了 142 次 · 成功率 95%</span></div></div>
+    <div class="glass alert"><span class="dot"></span><div>更新 IP 数据库<small>连续失败 3 次 · 连接超时</small></div><span class="pillbtn glass">重跑</span></div>
+    <div class="glass live"><img src="images/mascot.png" alt=""><div><b>2 个任务运行中</b><small>系统健康检查 · <span class="mono">0:42</span></small></div><div class="wave"><i></i><i></i><i></i><i></i><i></i></div></div>
+    <div class="row2"><div class="glass w"><small>下一个 · 系统健康检查</small><b class="mono">08:12</b></div>
+      <div class="glass w" style="flex-direction:row;align-items:center;gap:10px"><svg class="ring" viewBox="0 0 80 80"><circle cx="40" cy="40" r="32" style="stroke:rgba(255,255,255,.25)"/><circle cx="40" cy="40" r="32" pathLength="100" style="stroke:#fff;stroke-dasharray:100;stroke-dashoffset:5"/></svg><div><small>成功率</small><b style="font-size:28px;display:block">95%</b></div></div></div>
+    <div class="glass list"><div class="li"><i style="background:#30d158"></i>监控指标采集<span>21:20 · 2.1s</span></div><div class="li"><i style="background:#30d158"></i>系统健康检查<span>21:20 · 1.3s</span></div><div class="li"><i style="background:#30d158"></i>同步配置文件<span>21:00 · 6.8s</span></div></div>
+  </div>
+  <div class="tab glass"><button class="on"><svg class="ic"><use href="#home"/></svg><span>今天</span></button><button><svg class="ic"><use href="#list"/></svg><span>任务</span></button><button><svg class="ic"><use href="#logs"/></svg><span>日志</span></button><button><svg class="ic"><use href="#key"/></svg><span>变量</span></button></div>
+  <div class="fab glass"><svg class="ic" style="color:#fff"><use href="#search"/></svg></div>
+</div></div><figcaption><b>A · 液态玻璃</b><span>折射玻璃 + 高光边缘 + 悬浮胶囊底栏（iOS 26 那一代的观感）</span></figcaption></figure>
+
+<!-- B 点阵极客 -->
+<figure><div class="device"><div class="ph B"><span class="isl"></span>
+  <div class="sb"><span class="mono">21:30</span><i>■■■ 100</i></div>
+  <div class="page">
+    <div class="head"><b>DAIDAI</b><span class="lab">TUE 24 NOV &nbsp;<span class="red"></span></span></div>
+    <div class="cell hero"><div><div class="lab">RUNS TODAY</div><div class="dm big">142</div><div class="lab" style="margin-top:6px">SUCCESS 95%</div></div><img src="images/mascot.png" alt=""></div>
+    <div class="grid">
+      <div class="cell alert"><span class="red"></span><div><b>更新 IP 数据库</b><small>FAILED × 3 · TIMEOUT</small></div><button>RERUN</button></div>
+      <div class="cell sq run"><div class="lab">RUNNING</div><div class="dm" style="--dc:#fff">02</div><div class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+      <div class="cell sq"><div class="lab">NEXT RUN</div><div class="dm" style="--dc:#ff2b2b">08:12</div><div class="lab" style="color:#bbb">HEALTH CHECK</div></div>
+      <div class="cell" style="grid-column:span 2;display:flex;justify-content:space-between;align-items:flex-end"><div><div class="lab">7 DAYS</div><div class="dm" style="font-size:36px;margin-top:8px">95%</div></div>
+        <div class="week"></div></div>
+    </div>
+  </div>
+  <div class="tab"><span class="on"><span class="red"></span>TODAY</span><span>TASKS</span><span>LOGS</span><span>VARS</span></div>
+</div></div><figcaption><b>B · 点阵极客</b><span>纯黑 + 点阵数字 + 唯一的红点（类 Nothing OS 的硬核感）</span></figcaption></figure>
+
+<!-- C 暗黑霓虹 -->
+<figure><div class="device"><div class="ph C"><span class="isl"></span><div class="orb o1"></div><div class="orb o2"></div><div class="grain"></div>
+  <div class="sb"><span>21:30</span><i>●●● 100</i></div>
+  <div class="page">
+    <div class="head"><span>周二 · 家里的 NAS</span><span class="av"><img src="images/mascot.png" alt=""></span></div>
+    <h1><span class="grad">1 件事</span><br>要处理</h1><div class="sub">今天 142 次 · 成功率 <b class="lime">95%</b></div>
+    <div class="card glowb alert"><span class="ico"><svg class="ic"><use href="#alert"/></svg></span><div><b>更新 IP 数据库</b><small>连续失败 3 次 · 连接超时</small></div><button>重跑</button></div>
+    <div class="row"><div class="card run"><b>正在运行 · 2</b><span class="t">系统健康检查</span><div class="bar"><i></i></div><div class="mono" style="font-size:12px;color:#a9a6b5;margin-top:8px">0:42 · 检查数据库连接…</div></div>
+      <div class="card"><div class="k">下一个</div><div class="big mono grad" style="margin:8px 0 6px">08:12</div><div class="k">每日数据备份</div></div></div>
+    <div class="stats"><div class="card"><div class="k">今日执行</div><div class="big" style="font-size:34px;margin-top:4px">142</div><svg class="spark" viewBox="0 0 120 40" preserveAspectRatio="none"><defs><linearGradient id="cg" x1="0" x2="1"><stop offset="0" stop-color="#ffb35c"/><stop offset=".5" stop-color="#ff4d8d"/><stop offset="1" stop-color="#a855ff"/></linearGradient></defs><path d="M0,30 L15,26 L30,28 L45,18 L60,22 L75,12 L90,16 L105,8 L120,12" fill="none" stroke="url(#cg)" stroke-width="3" stroke-linecap="round"/></svg></div>
+      <div class="card"><div class="k">成功率</div><div class="big lime" style="font-size:34px;margin-top:4px">95%</div><div class="k" style="margin-top:14px">较昨日 −0.7%</div></div></div>
+  </div>
+  <div class="tab"><button class="on"><svg class="ic"><use href="#home"/></svg>今天</button><button><svg class="ic"><use href="#list"/></svg></button><button><svg class="ic"><use href="#logs"/></svg></button><button><svg class="ic"><use href="#key"/></svg></button><button><svg class="ic"><use href="#me"/></svg></button></div>
+</div></div><figcaption><b>C · 暗黑霓虹</b><span>近黑 + 日落渐变 + 发光数字 + 流动描边（AI / 金融类新 App 的气质）</span></figcaption></figure>
+
+<!-- D 3D 粘土 -->
+<figure><div class="device"><div class="ph D"><span class="isl"></span>
+  <div class="sb" style="color:#2b2f4a"><span>21:30</span><i>●●● 100</i></div>
+  <div class="page">
+    <div class="head"><span>11月24日 · 家里的 NAS</span><span class="clay" style="width:44px;height:44px;border-radius:16px;display:grid;place-items:center"><svg class="ic"><use href="#search"/></svg></span></div>
+    <div class="hero"><img src="images/mascot.png" alt=""><div><b>有 <em>1</em> 件事<br>要你处理</b><span>今天跑了 142 次<br>成功率 95%</span></div></div>
+    <div class="clay alert"><span class="ball" style="--c1:#ff8a98;--c2:#ff4d63"><svg class="ic"><use href="#alert"/></svg></span><div><b>更新 IP 数据库</b><small>连续失败 3 次</small></div><button class="puffy">重跑</button></div>
+    <div class="row"><div class="clay w"><small>正在运行 · 2</small><div><b style="font-size:16px;display:block;margin-bottom:10px">系统健康检查</b><div class="prog"><i></i></div></div></div>
+      <div class="clay w"><small>下一个任务</small><b class="mono">08:12</b><span class="ball" style="--c1:#7aa8ff;--c2:#3f6df2;width:38px;height:38px;align-self:flex-end;margin-top:-34px"><svg class="ic f" style="width:16px;height:16px"><use href="#play"/></svg></span></div></div>
+    <div class="row"><div class="clay w" style="height:112px"><small>今日执行</small><b>142</b></div><div class="clay w" style="height:112px"><small>成功率</small><b style="color:#22b573">95%</b></div></div>
+  </div>
+  <div class="tab clay"><button class="on"><svg class="ic"><use href="#home"/></svg></button><button><svg class="ic"><use href="#list"/></svg></button><button><svg class="ic"><use href="#logs"/></svg></button><button><svg class="ic"><use href="#key"/></svg></button><button><svg class="ic"><use href="#me"/></svg></button></div>
+</div></div><figcaption><b>D · 3D 粘土</b><span>软质立体卡片 + 3D 按钮 + 漂浮的呆呆（可爱但精致）</span></figcaption></figure>
+
+</div>
+<script>
+// 点阵风的周柱：每天一列点，亮起的点数 = 当天成功率映射
+document.querySelectorAll('.B .week').forEach(w => {
+  w.innerHTML = [6, 7, 5, 7, 6, 7, 6].map(n => `<span>${Array.from({ length: 8 }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</span>`).join('');
+});
+document.querySelectorAll('.B .dots').forEach(d => { d.innerHTML = d.innerHTML.replace('${\'\'}', ''); });
+</script>
+</body>
+</html>

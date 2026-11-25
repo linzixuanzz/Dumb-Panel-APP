@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "APP 前端规范索引（大文件按关键词 grep，不要整读）"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "模型解析与类型约定"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Riverpod provider 写法"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用既有组件，别另写一份"}
+{"file": ".trellis/tasks/11-24-app-ui-refresh-proposal/prd.md", "reason": "需求、决定与验收"}
+{"file": ".trellis/tasks/11-24-app-ui-refresh-proposal/design.md", "reason": "令牌、共享组件、路由、v4 接口与组间契约"}
+{"file": ".trellis/tasks/11-24-app-ui-refresh-proposal/implement.md", "reason": "分组与文件归属"}
+{"file": ".trellis/tasks/11-24-app-ui-refresh-proposal/wave-a-handoff.md", "reason": "第一波交付的令牌、组件、路由、v4 接口契约（第二波只读不改）"}
