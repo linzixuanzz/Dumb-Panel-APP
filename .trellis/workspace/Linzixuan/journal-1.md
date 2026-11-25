@@ -44,3 +44,41 @@
 - NEXT.md 已记三条留到后面的：整体超时后的孤儿流程、环境变量信封解析平移到 utils、
   编辑/详情弹层的提示同样被遮挡。
 
+
+
+## Session 1: APP v2.0.0 视觉焕新发布
+
+**Date**: 2026-11-25
+**Task**: APP v2.0.0 视觉焕新发布
+**Branch**: `main`
+
+### Summary
+
+APP v2.0.0：iOS 26 式留白、5 个 Tab（任务/日志/概览/变量/设置）、常用任务与按住运行、任务详情弹层（月历/P90）、日志四色筛选与错误行、概览页、变量遮蔽（开了应用锁才验证）、安卓快捷方式/桌面小组件/可选常驻通知，含 #27 #28；两波 9 组并行 + 一轮复核，测试 728→955；首次 Release 因 home_widget 要求 iOS 14 失败，提到 14.0 后重打 v2.0.0 发布成功。设计素材移到仓库外 design-assets/app-v2.0。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dca0f83` | (see git log) |
+| `5f5798d` | (see git log) |
+| `034ba3e` | (see git log) |
+| `043c856` | (see git log) |
+| `d93cdf0` | (see git log) |
+| `f8d2a6d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
