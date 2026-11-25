@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 
-import '../../core/theme/app_theme.dart';
+import '../../core/theme/design_tokens.dart';
 import '../utils/ansi_text.dart';
 import '../utils/log_line_buffer.dart';
 
@@ -403,7 +403,7 @@ class _LogViewState extends State<LogView> {
     final muted =
         widget.mutedColor ??
         widget.textStyle.color?.withAlpha(170) ??
-        AppColors.slate500;
+        context.palette.text2;
     final label = widget.truncatedActionLabel;
     final action = widget.onTruncatedAction;
     final hint = widget.truncatedHint;
@@ -479,8 +479,8 @@ class _LogViewState extends State<LogView> {
     return Theme(
       data: Theme.of(context).copyWith(
         textSelectionTheme: TextSelectionThemeData(
-          selectionColor: AppColors.primary.withAlpha(80),
-          selectionHandleColor: AppColors.primary,
+          selectionColor: context.palette.accent.withAlpha(80),
+          selectionHandleColor: context.palette.accent,
         ),
       ),
       child: Stack(

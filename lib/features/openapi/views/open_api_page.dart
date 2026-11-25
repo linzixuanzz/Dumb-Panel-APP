@@ -3,13 +3,14 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_circle_add_button.dart';
 import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_large_title_header.dart';
+import '../../../shared/widgets/app_pill_button.dart';
 import '../../../shared/widgets/app_snack.dart';
 
 class _ApiScopeOption {
@@ -89,46 +90,33 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
 
   @override
   Widget build(BuildContext context) {
-    final isLight = Theme.of(context).brightness == Brightness.light;
+    final p = context.palette;
+    // 二级页面没有悬浮底栏，这里读到的是系统安全区 + 16。
+    final listBottom = AppSpacing.listBottomOf(context);
 
     return Scaffold(
       body: Padding(
         padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12),
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  const AppBackButton(),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      'Open API',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  AppCircleAddButton(onTap: _showCreateDialog),
-                ],
-              ),
+            // 返回头 + 大标题（v2.0 次级页面统一写法）
+            AppLargeTitleHeader(
+              title: 'Open API',
+              leading: const AppBackButton(),
+              actions: [AppCircleAddButton(onTap: _showCreateDialog)],
+              padding: const EdgeInsets.fromLTRB(8, 0, 16, 16),
             ),
-            const SizedBox(height: 16),
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: p.accent,
                 onRefresh: _load,
                 child: _loading && _apps.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
-                          SizedBox(height: 120),
+                        children: [
+                          const SizedBox(height: 120),
                           Center(
-                            child: CircularProgressIndicator(
-                              color: AppColors.primary,
-                            ),
+                            child: CircularProgressIndicator(color: p.accent),
                           ),
                         ],
                       )
@@ -140,22 +128,22 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                           Icon(
                             Icons.api_outlined,
                             size: 56,
-                            color: AppColors.slate400.withAlpha(120),
+                            color: p.text3,
                           ),
                           const SizedBox(height: 12),
-                          const Center(
+                          Center(
                             child: Text(
                               '暂无 API 应用',
-                              style: TextStyle(color: AppColors.slate400),
+                              style: TextStyle(color: p.text2),
                             ),
                           ),
                         ],
                       )
                     : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                        padding: EdgeInsets.fromLTRB(20, 0, 20, listBottom),
                         itemCount: _apps.length,
                         itemBuilder: (_, i) =>
-                            _buildAppCard(app: _apps[i], isLight: isLight),
+                            _buildAppCard(app: _apps[i]),
                       ),
               ),
             ),
@@ -225,7 +213,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                 const SizedBox(height: 8),
                 Text(
                   '留空表示该应用创建成功，但没有任何接口访问权限。',
-                  style: TextStyle(fontSize: 11, color: AppColors.slate400),
+                  style: TextStyle(fontSize: 11, color: context.palette.text2),
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -307,9 +295,9 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               '请妥善保管以下密钥，关闭后无法再次查看：',
-              style: TextStyle(fontSize: 12, color: AppColors.red500),
+              style: TextStyle(fontSize: 12, color: context.palette.errInk),
             ),
             const SizedBox(height: 12),
             _CopyableField(label: 'App Key', value: appKey),
@@ -333,8 +321,8 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
 
   Widget _buildAppCard({
     required Map<String, dynamic> app,
-    required bool isLight,
   }) {
+    final p = context.palette;
     final id = (app['id'] as num?)?.toInt() ?? 0;
     final name = app['name']?.toString() ?? '';
     final appKey = app['app_key']?.toString() ?? '';
@@ -373,9 +361,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                             vertical: 2,
                           ),
                           decoration: BoxDecoration(
-                            color: enabled
-                                ? AppColors.success.withAlpha(25)
-                                : AppColors.slate400.withAlpha(25),
+                            color: enabled ? p.tint(p.ok) : p.fill,
                             // 10px 微徽章。原值 4，全库这一类统一走 sm。
                             borderRadius: BorderRadius.circular(AppRadius.sm),
                           ),
@@ -384,12 +370,8 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                             style: TextStyle(
                               fontSize: 10,
                               fontWeight: FontWeight.w700,
-                              // 底色是同一个色的 alpha=25 淡底。
-                              color: context.surfaces.tintFg(
-                                enabled
-                                    ? AppColors.success
-                                    : AppColors.slate400,
-                              ),
+                              // 淡底上的字用墨色。
+                              color: enabled ? p.okInk : p.text2,
                             ),
                           ),
                         ),
@@ -409,15 +391,13 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                               style: TextStyle(
                                 fontSize: 11,
                                 fontFamily: 'monospace',
-                                color: isLight
-                                    ? AppColors.slate500
-                                    : AppColors.slate400,
+                                color: p.text2,
                               ),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
                           const SizedBox(width: 4),
-                          Icon(Icons.copy, size: 12, color: AppColors.slate400),
+                          Icon(Icons.copy, size: 12, color: p.text3),
                         ],
                       ),
                     ),
@@ -448,7 +428,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                 icon: Icon(
                   Icons.more_vert,
                   size: 18,
-                  color: isLight ? AppColors.slate400 : AppColors.slate500,
+                  color: p.text3,
                 ),
                 itemBuilder: (_) => [
                   const PopupMenuItem(value: 'edit', child: Text('编辑')),
@@ -462,12 +442,9 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                   ),
                   const PopupMenuItem(value: 'reset', child: Text('重置密钥')),
                   const PopupMenuItem(value: 'logs', child: Text('调用日志')),
-                  const PopupMenuItem(
+                  PopupMenuItem(
                     value: 'delete',
-                    child: Text(
-                      '删除',
-                      style: TextStyle(color: AppColors.red500),
-                    ),
+                    child: Text('删除', style: TextStyle(color: p.errInk)),
                   ),
                 ],
                 onSelected: (v) async {
@@ -579,12 +556,12 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                                 Expanded(
                                   child: SizedBox(
                                     height: 44,
-                                    child: FilledButton(
+                                    child: AppPillButton(
+                                      label: '删除',
+                                      variant: AppPillVariant.danger,
+                                      expand: true,
+                                      height: 44,
                                       onPressed: () => Navigator.pop(d, true),
-                                      style: FilledButton.styleFrom(
-                                        backgroundColor: AppColors.red500,
-                                      ),
-                                      child: const Text('删除'),
                                     ),
                                   ),
                                 ),
@@ -627,7 +604,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
             '调用次数: $callCount · 速率限制: $rateLimit/小时',
             style: TextStyle(
               fontSize: 11,
-              color: isLight ? AppColors.slate500 : AppColors.slate400,
+              color: p.text2,
             ),
           ),
         ],
@@ -806,6 +783,8 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                         if (!mounted) {
                           return;
                         }
+                        // 弹窗可能已被别的途径关掉，pop 前确认它的 context 还在。
+                        if (!dialogCtx.mounted) return;
                         Navigator.of(dialogCtx).pop();
                         if (data is Map && data['app_secret'] != null) {
                           _showSecretDialog(
@@ -872,10 +851,10 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
             const SizedBox(height: 12),
             Expanded(
               child: logs.isEmpty
-                  ? const Center(
+                  ? Center(
                       child: Text(
                         '暂无日志',
-                        style: TextStyle(color: AppColors.slate400),
+                        style: TextStyle(color: ctx.palette.text2),
                       ),
                     )
                   : ListView.builder(
@@ -908,9 +887,9 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                                   vertical: 2,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: ok
-                                      ? AppColors.success.withAlpha(25)
-                                      : AppColors.red500.withAlpha(25),
+                                  color: ctx.palette.tint(
+                                    ok ? ctx.palette.ok : ctx.palette.err,
+                                  ),
                                   // 10px 微徽章，嵌在 md 的日志卡里 → 走 sm。
                                   borderRadius: BorderRadius.circular(
                                     AppRadius.sm,
@@ -922,12 +901,10 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                                     fontSize: 10,
                                     fontWeight: FontWeight.w700,
                                     fontFamily: 'monospace',
-                                    // 底色是同一个色的 alpha=25 淡底。
-                                    color: AppSurfaces.of(ctx).tintFg(
-                                      ok
-                                          ? AppColors.success
-                                          : AppColors.red500,
-                                    ),
+                                    // 淡底上的字用墨色。
+                                    color: ok
+                                        ? ctx.palette.okInk
+                                        : ctx.palette.errInk,
                                   ),
                                 ),
                               ),
@@ -949,7 +926,7 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                                       '${log['ip'] ?? ''} · ${duration.toStringAsFixed(1)}ms',
                                       style: TextStyle(
                                         fontSize: 10,
-                                        color: AppColors.slate400,
+                                        color: ctx.palette.text2,
                                       ),
                                     ),
                                   ],
@@ -957,9 +934,9 @@ class _OpenApiPageState extends ConsumerState<OpenApiPage> {
                               ),
                               Text(
                                 formatTimeCn(time),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 10,
-                                  color: AppColors.slate400,
+                                  color: ctx.palette.text3,
                                 ),
                               ),
                             ],
@@ -982,13 +959,11 @@ class _CopyableField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.palette;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: const TextStyle(fontSize: 11, color: AppColors.slate400),
-        ),
+        Text(label, style: TextStyle(fontSize: 11, color: p.text2)),
         const SizedBox(height: 4),
         GestureDetector(
           onTap: () {
@@ -999,7 +974,7 @@ class _CopyableField extends StatelessWidget {
             width: double.infinity,
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: AppColors.slate100,
+              color: p.card2,
               // 可复制的凭据代码块，嵌在卡片里的次级底块 → sm。
               borderRadius: BorderRadius.circular(AppRadius.sm),
             ),
@@ -1014,7 +989,7 @@ class _CopyableField extends StatelessWidget {
                     ),
                   ),
                 ),
-                const Icon(Icons.copy, size: 14, color: AppColors.slate400),
+                Icon(Icons.copy, size: 14, color: p.text3),
               ],
             ),
           ),
@@ -1063,63 +1038,50 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final isLight = Theme.of(context).brightness == Brightness.light;
+    final p = context.palette;
+    // 二级页面没有悬浮底栏，这里读到的是系统安全区 + 16。
+    final listBottom = AppSpacing.listBottomOf(context);
 
     return Scaffold(
       body: Padding(
         padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12),
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  const AppBackButton(),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      'API 调用日志',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+            // 返回头 + 大标题（v2.0 次级页面统一写法）
+            const AppLargeTitleHeader(
+              title: 'API 调用日志',
+              leading: AppBackButton(),
+              padding: EdgeInsets.fromLTRB(8, 0, 16, 16),
             ),
-            const SizedBox(height: 16),
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: p.accent,
                 onRefresh: _load,
                 child: _loading
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
-                          SizedBox(height: 120),
+                        children: [
+                          const SizedBox(height: 120),
                           Center(
-                            child: CircularProgressIndicator(
-                              color: AppColors.primary,
-                            ),
+                            child: CircularProgressIndicator(color: p.accent),
                           ),
                         ],
                       )
                     : _logs.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
-                          SizedBox(height: 100),
+                        children: [
+                          const SizedBox(height: 100),
                           Center(
                             child: Text(
                               '暂无日志',
-                              style: TextStyle(color: AppColors.slate400),
+                              style: TextStyle(color: p.text2),
                             ),
                           ),
                         ],
                       )
                     : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                        padding: EdgeInsets.fromLTRB(20, 0, 20, listBottom),
                         itemCount: _logs.length,
                         itemBuilder: (_, i) {
                           final log = _logs[i];
@@ -1146,9 +1108,7 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
                                     vertical: 2,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: ok
-                                        ? AppColors.success.withAlpha(25)
-                                        : AppColors.red500.withAlpha(25),
+                                    color: p.tint(ok ? p.ok : p.err),
                                     // 10px 微徽章，嵌在 lg 的日志卡里 → 走 sm。
                                     borderRadius: BorderRadius.circular(
                                       AppRadius.sm,
@@ -1160,12 +1120,8 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
                                       fontSize: 10,
                                       fontWeight: FontWeight.w700,
                                       fontFamily: 'monospace',
-                                      // 底色是同一个色的 alpha=25 淡底。
-                                      color: context.surfaces.tintFg(
-                                        ok
-                                            ? AppColors.success
-                                            : AppColors.red500,
-                                      ),
+                                      // 淡底上的字用墨色。
+                                      color: ok ? p.okInk : p.errInk,
                                     ),
                                   ),
                                 ),
@@ -1189,9 +1145,7 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
                                         '${log['ip'] ?? ''} · ${duration.toStringAsFixed(1)}ms',
                                         style: TextStyle(
                                           fontSize: 10,
-                                          color: isLight
-                                              ? AppColors.slate500
-                                              : AppColors.slate400,
+                                          color: p.text2,
                                         ),
                                       ),
                                     ],
@@ -1201,9 +1155,7 @@ class _OpenApiLogsPageState extends ConsumerState<OpenApiLogsPage> {
                                   time != null ? formatTimeCn(time) : '',
                                   style: TextStyle(
                                     fontSize: 10,
-                                    color: isLight
-                                        ? AppColors.slate400
-                                        : AppColors.slate500,
+                                    color: p.text3,
                                   ),
                                 ),
                               ],

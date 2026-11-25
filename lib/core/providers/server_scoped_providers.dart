@@ -1,12 +1,14 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../features/dashboard/providers/dashboard_provider.dart';
+import '../../features/overview/providers/dashboard_provider.dart';
 import '../../features/deps/views/dep_list_page.dart';
 import '../../features/envs/views/env_list_page.dart';
 import '../../features/logs/views/log_list_page.dart';
 import '../../features/notifications/views/notification_list_page.dart';
 import '../../features/scripts/views/script_list_page.dart';
 import '../../features/subscriptions/views/subscription_list_page.dart';
+import '../../features/tasks/providers/favorite_tasks_provider.dart';
+import '../../features/tasks/providers/task_health_provider.dart';
 import '../../features/tasks/providers/task_provider.dart';
 import '../../features/tasks/providers/task_view_provider.dart';
 import '../../features/users/views/user_list_page.dart';
@@ -36,4 +38,8 @@ void invalidateServerScopedProviders(WidgetRef ref) {
   ref.invalidate(subscriptionListProvider);
   ref.invalidate(notificationListProvider);
   ref.invalidate(userListProvider);
+  // v2.0：常用任务（按面板存本机）与任务健康画像（family，整组作废）。
+  // 两者 state 里都记着面板标识，不失效也不会串数据，这里作废是为了不留上一台面板的旧状态。
+  ref.invalidate(favoriteTasksProvider);
+  ref.invalidate(taskHealthProvider);
 }

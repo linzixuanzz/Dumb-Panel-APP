@@ -8,6 +8,11 @@ import '../../../core/providers/server_scoped_providers.dart';
 import '../../../core/router/default_landing_page.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/design_tokens.dart';
+import '../../../shared/widgets/app_back_button.dart';
+import '../../../shared/widgets/app_grouped_list.dart';
+import '../../../shared/widgets/app_icon_tile.dart';
+import '../../../shared/widgets/app_large_title_header.dart';
+import '../../../shared/widgets/app_pill_button.dart';
 import '../../../shared/widgets/app_snack.dart';
 
 class ServerConfigPage extends ConsumerStatefulWidget {
@@ -362,140 +367,138 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final palette = context.palette;
     final isAuthenticated =
         ref.watch(authProvider).status == AuthStatus.authenticated;
+    final caption = AppText.caption.copyWith(color: palette.text2);
 
     return Scaffold(
-      appBar: _isManageMode ? AppBar(title: const Text('服务器管理')) : null,
       body: SafeArea(
-        top: !_isManageMode,
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              SizedBox(height: _isManageMode ? 8 : 40),
-              ClipRRect(
-                // 64 的主视觉 logo，直接摆在页面上、内部不再套层，走 lg。
-                borderRadius: BorderRadius.circular(AppRadius.lg),
-                child: Image.asset('assets/icon.png', width: 64, height: 64),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                _isManageMode ? '管理面板服务器' : '连接呆呆面板',
-                style: theme.textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
+              if (_isManageMode) ...[
+                // 二级页：返回按钮在上，大标题在下（iOS 的导航大标题样式）
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: AppBackButton(),
                 ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                _isManageMode ? '新增、删除或切换服务器，每台面板的登录状态各自保存。' : '选择已有面板或添加新面板',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+                AppLargeTitleHeader(
+                  title: '服务器管理',
+                  subtitle: '新增、删除或切换服务器，每台面板的登录状态各自保存。',
+                  padding: const EdgeInsets.fromLTRB(4, 4, 4, 20),
                 ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '建议使用 HTTPS；HTTP 连接需确认安全后方可使用。',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              if (_panels.isNotEmpty) ...[
-                const SizedBox(height: 28),
-                Text('已保存的面板', style: theme.textTheme.titleSmall),
-                const SizedBox(height: 8),
-                ..._panels.map(
-                  (panel) => Card(
-                    child: ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: theme.colorScheme.primaryContainer,
-                        child: Icon(
-                          Icons.dashboard,
-                          size: 20,
-                          color: theme.colorScheme.primary,
-                        ),
-                      ),
-                      title: Text(
-                        panel.name.isNotEmpty ? panel.name : panel.url,
-                        style: theme.textTheme.titleSmall,
-                      ),
-                      subtitle: Text(
-                        panel.url,
-                        style: theme.textTheme.bodySmall,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (panel.url == _activeServerUrl)
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.primaryContainer,
-                                borderRadius: BorderRadius.circular(
-                                  AppRadius.pill,
-                                ),
-                              ),
-                              child: Text(
-                                '当前',
-                                style: theme.textTheme.labelSmall?.copyWith(
-                                  color: theme.colorScheme.primary,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          // 凭据分片后每台面板各存一份登录状态，所以除了「删除服务器」，
-                          // 还要给一个「只清这台的登录状态、保留地址」的出口（issue #13）。
-                          // 两个动作收进同一个菜单，免得 trailing 挤成三个图标。
-                          PopupMenuButton<String>(
-                            icon: Icon(
-                              Icons.more_vert,
-                              size: 20,
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                            onSelected: (value) => value == 'clear'
-                                ? _clearPanelSession(panel)
-                                : _deletePanel(panel),
-                            itemBuilder: (_) => [
-                              const PopupMenuItem(
-                                value: 'clear',
-                                child: Text('清除该面板登录状态'),
-                              ),
-                              PopupMenuItem(
-                                value: 'delete',
-                                child: Text(
-                                  '删除服务器',
-                                  style: TextStyle(
-                                    color: theme.colorScheme.error,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      onTap: () => _connect(
-                        url: panel.url,
-                        skipAutoLogin: !panel.autoLogin,
-                      ),
+              ] else ...[
+                const SizedBox(height: 32),
+                Center(
+                  child: ClipRRect(
+                    // 与登录页、开屏页的图标同一种圆角（彩色图标方块 15/46 的比例）
+                    borderRadius: BorderRadius.circular(
+                      AppRadius.tile * 64 / 46,
+                    ),
+                    child: Image.asset(
+                      'assets/icon.png',
+                      width: 64,
+                      height: 64,
                     ),
                   ),
                 ),
-                const SizedBox(height: 20),
-                const Divider(),
+                const SizedBox(height: 16),
+                Text(
+                  '连接呆呆面板',
+                  style: AppText.largeTitle.copyWith(color: palette.text),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 6),
+                Text('选择已有面板或添加新面板', style: caption, textAlign: TextAlign.center),
+                const SizedBox(height: 28),
               ],
-              const SizedBox(height: 20),
-              Text('添加新面板', style: theme.textTheme.titleSmall),
-              const SizedBox(height: 12),
+
+              if (_panels.isNotEmpty) ...[
+                AppGroupedList(
+                  header: '已保存的面板',
+                  children: [
+                    for (final panel in _panels)
+                      AppGroupedRow(
+                        leading: AppIconTile(
+                          icon: Icons.dns_rounded,
+                          color: palette.accent,
+                          // 当前在用的那台实色，其它浅底
+                          solid: panel.url == _activeServerUrl,
+                        ),
+                        title: panel.name.isNotEmpty ? panel.name : panel.url,
+                        subtitle: panel.url,
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (panel.url == _activeServerUrl)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: palette.tint(palette.accent),
+                                  borderRadius: BorderRadius.circular(
+                                    AppRadius.pill,
+                                  ),
+                                ),
+                                child: Text(
+                                  '当前',
+                                  style: AppText.caption.copyWith(
+                                    fontSize: 12,
+                                    color: palette.accentInk,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            // 凭据分片后每台面板各存一份登录状态，所以除了「删除服务器」，
+                            // 还要给一个「只清这台的登录状态、保留地址」的出口（issue #13）。
+                            // 两个动作收进同一个菜单，免得 trailing 挤成三个图标。
+                            PopupMenuButton<String>(
+                              icon: Icon(
+                                Icons.more_horiz_rounded,
+                                size: 22,
+                                color: palette.text2,
+                              ),
+                              onSelected: (value) => value == 'clear'
+                                  ? _clearPanelSession(panel)
+                                  : _deletePanel(panel),
+                              itemBuilder: (_) => [
+                                const PopupMenuItem(
+                                  value: 'clear',
+                                  child: Text('清除该面板登录状态'),
+                                ),
+                                PopupMenuItem(
+                                  value: 'delete',
+                                  child: Text(
+                                    '删除服务器',
+                                    style: TextStyle(color: palette.errInk),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        onTap: () => _connect(
+                          url: panel.url,
+                          skipAutoLogin: !panel.autoLogin,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 28),
+              ],
+
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Text(
+                  '添加新面板',
+                  style: caption.copyWith(fontWeight: FontWeight.w500),
+                ),
+              ),
               Form(
                 key: _formKey,
                 child: Column(
@@ -529,41 +532,42 @@ class _ServerConfigPageState extends ConsumerState<ServerConfigPage> {
                 const SizedBox(height: 12),
                 Text(
                   _error!,
-                  style: TextStyle(color: theme.colorScheme.error),
+                  style: AppText.caption.copyWith(color: palette.errInk),
                   textAlign: TextAlign.center,
                 ),
               ] else if (_controller.text.trim().isNotEmpty) ...[
                 const SizedBox(height: 12),
                 Text(
                   _httpSecurityHint(_controller.text),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-              if (_isManageMode && isAuthenticated) ...[
-                const SizedBox(height: 12),
-                Text(
-                  '登录状态按面板分别保存在本机加密存储中，切换面板不会退出账号；'
-                  '不想留着某台的凭据，可在它的菜单里「清除该面板登录状态」。',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
+                  style: caption,
                   textAlign: TextAlign.center,
                 ),
               ],
               const SizedBox(height: 20),
-              FilledButton(
+              // v2.0 主操作：黑色胶囊。检测中只换文案、禁用，不在胶囊里转圈。
+              AppPillButton(
+                label: _checking
+                    ? '正在检测…'
+                    : (_isManageMode ? '保存并检测' : '连接'),
+                expand: true,
+                height: 52,
                 onPressed: _checking ? null : _connect,
-                child: _checking
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Text(_isManageMode ? '保存并检测' : '连接'),
               ),
+              const SizedBox(height: 16),
+              Text(
+                '建议使用 HTTPS；HTTP 连接需确认安全后方可使用。',
+                style: caption,
+                textAlign: TextAlign.center,
+              ),
+              if (_isManageMode && isAuthenticated) ...[
+                const SizedBox(height: 8),
+                Text(
+                  '登录状态按面板分别保存在本机加密存储中，切换面板不会退出账号；'
+                  '不想留着某台的凭据，可在它的菜单里「清除该面板登录状态」。',
+                  style: caption,
+                  textAlign: TextAlign.center,
+                ),
+              ],
             ],
           ),
         ),

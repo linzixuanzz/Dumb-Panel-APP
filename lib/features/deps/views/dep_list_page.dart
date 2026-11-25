@@ -16,6 +16,8 @@ import '../../../shared/utils/panel_enums.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_circle_add_button.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_large_title_header.dart';
+import '../../../shared/widgets/app_pill_button.dart';
 import '../../../shared/widgets/app_notice.dart';
 import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_snack.dart';
@@ -631,10 +633,11 @@ class _DepListPageState extends ConsumerState<DepListPage> {
             onPressed: () => Navigator.pop(dialogCtx, false),
             child: const Text('取消'),
           ),
-          FilledButton(
+          AppPillButton(
+            label: '批量卸载',
+            variant: AppPillVariant.danger,
+            height: 40,
             onPressed: () => Navigator.pop(dialogCtx, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.red500),
-            child: const Text('批量卸载'),
           ),
         ],
       ),
@@ -673,10 +676,11 @@ class _DepListPageState extends ConsumerState<DepListPage> {
             onPressed: () => Navigator.pop(dialogCtx, false),
             child: const Text('取消'),
           ),
-          FilledButton(
+          AppPillButton(
+            label: force ? '强制卸载' : '卸载',
+            variant: AppPillVariant.danger,
+            height: 40,
             onPressed: () => Navigator.pop(dialogCtx, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.red500),
-            child: Text(force ? '强制卸载' : '卸载'),
           ),
         ],
       ),
@@ -950,7 +954,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                   ),
                   const SizedBox(height: 12),
                   AppNotice(
-                    color: AppColors.blue500,
+                    color: dialogCtx.palette.accent,
                     text:
                         '当前检测：${initial.linuxPackageManager.isEmpty ? '未识别' : initial.linuxPackageManager}'
                         '${initial.linuxDistribution.isEmpty ? '' : ' / ${initial.linuxDistribution}'}'
@@ -988,15 +992,15 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     String type,
     String label,
     bool selected,
-    bool isLight,
   ) {
     final count = _counts[type] ?? 0;
+    final p = context.palette;
     return AppCard(
       onTap: () => _changeType(type),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       // 选中态是淡底 + 实色边，必须显式传入，否则会落回 AppCard 的默认卡片配色。
-      color: selected ? AppColors.primary.withAlpha(isLight ? 18 : 24) : null,
-      borderColor: selected ? AppColors.primary : null,
+      color: selected ? p.tint(p.accent) : null,
+      borderColor: selected ? p.accent : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1004,9 +1008,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
             label,
             style: TextStyle(
               fontSize: 12,
-              color: selected
-                  ? AppColors.primaryDark
-                  : (isLight ? AppColors.slate500 : AppColors.slate400),
+              color: selected ? p.accentInk : p.text2,
             ),
           ),
           const SizedBox(height: 6),
@@ -1015,9 +1017,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
             style: TextStyle(
               fontSize: 22,
               fontWeight: FontWeight.w800,
-              color: selected
-                  ? AppColors.primary
-                  : (isLight ? AppColors.slate900 : AppColors.slate50),
+              color: selected ? p.accentInk : p.text,
             ),
           ),
         ],
@@ -1025,7 +1025,8 @@ class _DepListPageState extends ConsumerState<DepListPage> {
     );
   }
 
-  Widget _buildPythonRuntimePanel(DepListState state, bool isLight) {
+  Widget _buildPythonRuntimePanel(DepListState state) {
+    final p = context.palette;
     final runtimes = state.pythonRuntimes;
     final hasSelected = runtimes.any(
       (runtime) => runtime.version == state.selectedPythonVersion,
@@ -1143,18 +1144,16 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                                 : '暂无运行时信息',
                             style: TextStyle(
                               fontSize: 12,
-                              color: isLight
-                                  ? AppColors.slate500
-                                  : AppColors.slate400,
+                              color: p.text2,
                             ),
                           ),
                         ]
                       : runtimes.map((runtime) {
                           // 「可用」是健康态，属 success 绿；primary 不表达可用。
-                          // 这一个变量同时驱动淡底、描边和 tintFg 前景，改一处即可。
-                          final color = runtime.available
-                              ? AppColors.success
-                              : AppColors.amber500;
+                          // 实色驱动淡底和描边，文字用对应的墨色。
+                          final (color, ink) = runtime.available
+                              ? (p.ok, p.okInk)
+                              : (p.warn, p.warnInk);
                           return Tooltip(
                             message: runtime.message,
                             child: Container(
@@ -1163,7 +1162,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                                 vertical: 4,
                               ),
                               decoration: BoxDecoration(
-                                color: color.withAlpha(18),
+                                color: p.tint(color),
                                 borderRadius: BorderRadius.circular(
                                   AppRadius.pill,
                                 ),
@@ -1174,9 +1173,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                                 style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.w600,
-                                  // 「需安装」用的是 amber，压在自己的淡底上
-                                  // 只有 2.04:1，是这一批里最看不清的。
-                                  color: context.surfaces.tintFg(color),
+                                  color: ink,
                                 ),
                               ),
                             ),
@@ -1194,8 +1191,9 @@ class _DepListPageState extends ConsumerState<DepListPage> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(depListProvider);
-    final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
+    final p = context.palette;
+    // 二级页面没有悬浮底栏，这里读到的是系统安全区 + 16。
+    final listBottom = AppSpacing.listBottomOf(context);
     // APP #23 ①：计数卡、Python 运行时面板、状态筛选原来都钉在列表上方，
     // 360dp 屏看 Python 依赖时列表只剩小半屏。现在只固定标题行（和有选中项时的「批量卸载」），
     // 这一段作为列表的第一项，向上滑就跟着滚走；加载 / 出错 / 空态的列表也都带着它，切类型、筛状态照常可用。
@@ -1218,7 +1216,6 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                       'nodejs',
                       'NodeJS',
                       state.selectedType == 'nodejs',
-                      isLight,
                     ),
                   ),
                   SizedBox(
@@ -1227,7 +1224,6 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                       'python',
                       'Python',
                       state.selectedType == 'python',
-                      isLight,
                     ),
                   ),
                   SizedBox(
@@ -1236,7 +1232,6 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                       'linux',
                       'Linux',
                       state.selectedType == 'linux',
-                      isLight,
                     ),
                   ),
                 ],
@@ -1246,7 +1241,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
         ),
         const SizedBox(height: 10),
         if (state.selectedType == 'python') ...[
-          _buildPythonRuntimePanel(state, isLight),
+          _buildPythonRuntimePanel(state),
           const SizedBox(height: 10),
         ],
         Padding(
@@ -1259,17 +1254,16 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                 label: '全部',
                 count: state.items.length,
                 selected: _statusFilter == null,
-                isLight: isLight,
                 onTap: () => setState(() => _statusFilter = null),
               ),
               _StatusFilterChip(
                 label: '已安装',
                 count: state.items.where((d) => d.isInstalled).length,
                 selected: _statusFilter == 'installed',
-                isLight: isLight,
                 // 与下方「已安装」状态徽章同色；原先是 primary，
                 // 和默认也是 primary 的「全部」chip 完全同色。
-                color: AppColors.success,
+                color: p.ok,
+                ink: p.okInk,
                 onTap: () => setState(
                   () => _statusFilter = _statusFilter == 'installed'
                       ? null
@@ -1280,8 +1274,8 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                 label: '失败',
                 count: state.items.where((d) => d.isFailed).length,
                 selected: _statusFilter == 'failed',
-                isLight: isLight,
-                color: AppColors.danger,
+                color: p.err,
+                ink: p.errInk,
                 onTap: () => setState(
                   () => _statusFilter = _statusFilter == 'failed'
                       ? null
@@ -1300,37 +1294,27 @@ class _DepListPageState extends ConsumerState<DepListPage> {
         padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12),
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  const AppBackButton(),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      '依赖管理',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: '镜像源设置',
-                    onPressed: _mirrorLoading || _mirrorSaving
-                        ? null
-                        : _openMirrorDialog,
-                    icon: _mirrorLoading || _mirrorSaving
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.settings_suggest_outlined),
-                  ),
-                  AppCircleAddButton(onTap: _handleCreate),
-                ],
-              ),
+            // 返回头 + 大标题（v2.0 次级页面统一写法）
+            AppLargeTitleHeader(
+              title: '依赖管理',
+              leading: const AppBackButton(),
+              padding: const EdgeInsets.fromLTRB(8, 0, 16, 0),
+              actions: [
+                IconButton(
+                  tooltip: '镜像源设置',
+                  onPressed: _mirrorLoading || _mirrorSaving
+                      ? null
+                      : _openMirrorDialog,
+                  icon: _mirrorLoading || _mirrorSaving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.settings_suggest_outlined),
+                ),
+                AppCircleAddButton(onTap: _handleCreate),
+              ],
             ),
             // 「批量卸载」不放进随列表滚走的头部：用户是往下滑着勾选的，
             // 按钮跟着滚出屏幕就得再滑回顶部才能点。有选中项时钉在标题行下方，没选中时不占位。
@@ -1343,7 +1327,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                   icon: const Icon(Icons.delete_sweep_outlined, size: 18),
                   label: Text('批量卸载 (${_selectedIds.length})'),
                   style: FilledButton.styleFrom(
-                    foregroundColor: AppColors.red500,
+                    foregroundColor: p.errInk,
                     minimumSize: const Size(double.infinity, 40),
                   ),
                 ),
@@ -1351,7 +1335,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
             ],
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: p.accent,
                 onRefresh: _loadPageData,
                 child: state.loading && state.items.isEmpty
                     ? ListView(
@@ -1359,10 +1343,8 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                         children: [
                           listHeader,
                           const SizedBox(height: 120),
-                          const Center(
-                            child: CircularProgressIndicator(
-                              color: AppColors.primary,
-                            ),
+                          Center(
+                            child: CircularProgressIndicator(color: p.accent),
                           ),
                         ],
                       )
@@ -1395,7 +1377,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                               Icon(
                                 Icons.inventory_2_outlined,
                                 size: 56,
-                                color: AppColors.slate400.withAlpha(120),
+                                color: p.text3,
                               ),
                               const SizedBox(height: 12),
                               Center(
@@ -1403,9 +1385,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                                   _statusFilter != null
                                       ? '没有${_statusFilter == 'installed' ? '已安装' : '失败'}的依赖'
                                       : '暂无${_typeLabel(state.selectedType)}依赖',
-                                  style: const TextStyle(
-                                    color: AppColors.slate400,
-                                  ),
+                                  style: TextStyle(color: p.text2),
                                 ),
                               ),
                             ],
@@ -1414,7 +1394,7 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                         // 第 0 项是上面那段可滚走的头部，依赖卡片从第 1 项开始。
                         return ListView.builder(
                           physics: const AlwaysScrollableScrollPhysics(),
-                          padding: const EdgeInsets.only(bottom: 24),
+                          padding: EdgeInsets.only(bottom: listBottom),
                           itemCount: filtered.length + 1,
                           itemBuilder: (_, i) {
                             if (i == 0) {
@@ -1427,7 +1407,6 @@ class _DepListPageState extends ConsumerState<DepListPage> {
                               ),
                               child: _DepCard(
                                 dep: dep,
-                                isLight: isLight,
                                 selected: _selectedIds.contains(dep.id),
                                 subtitle:
                                     '${_typeLabel(dep.type)}'
@@ -1474,7 +1453,6 @@ class _DepListPageState extends ConsumerState<DepListPage> {
 
 class _DepCard extends StatelessWidget {
   final Dependency dep;
-  final bool isLight;
   final bool selected;
   final String subtitle;
   final ValueChanged<bool> onSelected;
@@ -1486,7 +1464,6 @@ class _DepCard extends StatelessWidget {
 
   const _DepCard({
     required this.dep,
-    required this.isLight,
     required this.selected,
     required this.subtitle,
     required this.onSelected,
@@ -1504,41 +1481,40 @@ class _DepCard extends StatelessWidget {
   // 「未知」这一档是本次补的：改动前最后一个分支是绿色，等价于
   // 「凡是我不认识的依赖状态，一律画成已安装」。徽章文字已经改成显示原始状态
   // 了，颜色再不跟上，用户看到的仍是一个绿色的成功态。
-  Color _statusBg() {
+  // 徽章：底是状态色的淡底，字用对应的墨色。
+  Color _statusBg(AppPalette p) {
     switch (dep.statusTone) {
       case PanelStatusTone.running:
-        return isLight ? AppColors.infoLight : AppColors.info.withAlpha(25);
+        return p.tint(p.accent);
       case PanelStatusTone.danger:
-        return isLight ? AppColors.dangerLight : AppColors.danger.withAlpha(25);
+        return p.tint(p.err);
       case PanelStatusTone.success:
-        return isLight
-            ? AppColors.successLight
-            : AppColors.success.withAlpha(25);
+        return p.tint(p.ok);
       case PanelStatusTone.warning:
-        return AppColors.warning.withAlpha(isLight ? 18 : 25);
+        return p.tint(p.warn);
       case PanelStatusTone.neutral:
-        return isLight ? AppColors.slate100 : AppColors.slate700;
+        return p.fill;
     }
   }
 
-  Color _statusFg() {
+  Color _statusFg(AppPalette p) {
     switch (dep.statusTone) {
       case PanelStatusTone.running:
-        return isLight ? AppColors.infoDark : AppColors.info;
+        return p.accentInk;
       case PanelStatusTone.danger:
-        return isLight ? AppColors.dangerDark : AppColors.danger;
+        return p.errInk;
       case PanelStatusTone.success:
-        return isLight ? AppColors.successDark : AppColors.success;
+        return p.okInk;
       case PanelStatusTone.warning:
-        return (isLight ? AppSurfaces.light : AppSurfaces.dark)
-            .tintFg(AppColors.warning);
+        return p.warnInk;
       case PanelStatusTone.neutral:
-        return isLight ? AppColors.slate600 : AppColors.slate300;
+        return p.text2;
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final p = context.palette;
     // 这张卡已经贴着地板：78dp 里有 48dp 是右侧 PopupMenuButton 的点击区，
     // 那 48dp 一动不能动。可削的只有内边距与外边距，合计 −10dp 到头了。
     return AppCard(
@@ -1584,9 +1560,7 @@ class _DepCard extends StatelessWidget {
                         dep.version,
                         style: TextStyle(
                           fontSize: 10,
-                          color: isLight
-                              ? AppColors.slate500
-                              : AppColors.slate400,
+                          color: p.text2,
                           fontFamily: 'monospace',
                         ),
                       ),
@@ -1601,7 +1575,7 @@ class _DepCard extends StatelessWidget {
                         vertical: 1,
                       ),
                       decoration: BoxDecoration(
-                        color: _statusBg(),
+                        color: _statusBg(p),
                         // 9px 微徽章。原值 4，全库这一类共 6 处统一走 sm。
                         borderRadius: BorderRadius.circular(AppRadius.sm),
                       ),
@@ -1610,7 +1584,7 @@ class _DepCard extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 9,
                           fontWeight: FontWeight.w700,
-                          color: _statusFg(),
+                          color: _statusFg(p),
                         ),
                       ),
                     ),
@@ -1620,9 +1594,7 @@ class _DepCard extends StatelessWidget {
                         subtitle,
                         style: TextStyle(
                           fontSize: 10,
-                          color: isLight
-                              ? AppColors.slate400
-                              : AppColors.slate500,
+                          color: p.text2,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -1670,7 +1642,7 @@ class _DepCard extends StatelessWidget {
                   value: 'force_delete',
                   child: Text(
                     '强制卸载',
-                    style: TextStyle(color: AppColors.red500),
+                    style: TextStyle(color: p.errInk),
                   ),
                 ),
             ],
@@ -1758,6 +1730,8 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
       _logBackgroundColor,
       themeBrightness: Theme.of(context).brightness,
     );
+    // 底部完成 / 断线 banner 跟着「日志主题」的明暗走（不是 App 明暗），
+    // 属于日志内容配色，保持原值。
     final doneBannerBackground = logTheme.brightness == Brightness.dark
         ? AppColors.slate800
         : AppColors.slate100;
@@ -1842,29 +1816,30 @@ class _StatusFilterChip extends StatelessWidget {
   final String label;
   final int count;
   final bool selected;
-  final bool isLight;
+
+  /// 选中态的状态色（实色铺淡底、描边和计数徽章），不传为强调蓝。
   final Color? color;
+
+  /// 与 [color] 配对的墨色（选中态的文字），不传为强调蓝的墨色。
+  final Color? ink;
   final VoidCallback onTap;
 
   const _StatusFilterChip({
     required this.label,
     required this.count,
     required this.selected,
-    required this.isLight,
     this.color,
+    this.ink,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final activeColor = color ?? AppColors.primary;
-    final bg = selected
-        ? activeColor.withAlpha(20)
-        : (isLight ? AppColors.slate50 : AppColors.slate900);
-    // 选中态底色是 activeColor 的 alpha=20 淡底，标签再用满强度同色就贴在一起了。
-    final fg = selected
-        ? context.surfaces.tintFg(activeColor)
-        : (isLight ? AppColors.slate600 : AppColors.slate400);
+    final p = context.palette;
+    final activeColor = color ?? p.accent;
+    final bg = selected ? p.tint(activeColor) : p.card;
+    // 选中态底色是 activeColor 的淡底，标签用墨色才看得清。
+    final fg = selected ? (ink ?? p.accentInk) : p.text2;
 
     return GestureDetector(
       onTap: onTap,
@@ -1876,9 +1851,7 @@ class _StatusFilterChip extends StatelessWidget {
           // 它渲染出来一直是胶囊，这里只是改成诚实的写法。
           borderRadius: BorderRadius.circular(AppRadius.pill),
           border: Border.all(
-            color: selected
-                ? activeColor.withAlpha(60)
-                : (isLight ? AppColors.slate200 : AppColors.slate800),
+            color: selected ? activeColor.withAlpha(60) : p.separator,
           ),
         ),
         child: Row(
@@ -1896,9 +1869,7 @@ class _StatusFilterChip extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
               decoration: BoxDecoration(
-                color: selected
-                    ? activeColor
-                    : (isLight ? AppColors.slate200 : AppColors.slate800),
+                color: selected ? activeColor : p.fill,
                 // 同上，零像素变化：计数徽章高约 14，原写的 10 被 clamp 成 7。
                 // 它嵌在上面那个 chip 里，两层都是胶囊，内层半径 7 仍远小于
                 // 外层的 15.5，层级关系不会糊。
@@ -1909,7 +1880,8 @@ class _StatusFilterChip extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w700,
-                  color: selected ? Colors.white : fg,
+                  // 实色徽章上的粗体数字用 onStatus（令牌约定只给粗体短标签）。
+                  color: selected ? p.onStatus : fg,
                 ),
               ),
             ),
@@ -1921,13 +1893,13 @@ class _StatusFilterChip extends StatelessWidget {
 }
 
 class _PythonInstallHint extends StatelessWidget {
-  // 明暗差异已经由 AppNotice 内部的 AppSurfaces 解析，不再需要调用方传 isLight。
+  // 明暗差异已经由 AppNotice 内部解析，不再需要调用方传 isLight。
   const _PythonInstallHint();
 
   @override
   Widget build(BuildContext context) {
-    return const AppNotice(
-      color: AppColors.blue500,
+    return AppNotice(
+      color: context.palette.accent,
       text:
           'Python 多版本说明：二进制部署不会内置三个 Python，只需在服务器安装实际要用的版本；安装 Python 依赖时会同步提交到可用的 Python 3.10、3.11、3.12 环境。',
     );

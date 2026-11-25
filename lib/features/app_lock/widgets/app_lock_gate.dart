@@ -4,10 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/auth/auth_provider.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
-import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_notice.dart';
+import '../../../shared/widgets/app_pill_button.dart';
+import '../../../shared/widgets/app_segmented.dart';
 import '../providers/app_lock_provider.dart';
 import 'pattern_pad.dart';
 
@@ -214,8 +214,7 @@ class _AppLockOverlayState extends State<_AppLockOverlay> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
+    final palette = context.palette;
     final methods = <_UnlockMethod>[
       if (widget.state.hasBiometric) _UnlockMethod.biometric,
       if (widget.state.hasPassword) _UnlockMethod.password,
@@ -223,83 +222,74 @@ class _AppLockOverlayState extends State<_AppLockOverlay> {
     ];
 
     return Material(
-      color: Colors.black.withAlpha(140),
+      // v2.0：遮罩用页面底色半透明 + 模糊（iOS 毛玻璃锁屏），明暗跟着主题走；
+      // 背后的内容糊到看不清，卡片靠和遮罩的明度差浮出来，不再需要描边补偿。
+      color: palette.bg.withValues(alpha: 0.6),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
         child: SafeArea(
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 420),
-              child: AppCard(
+              child: Container(
                 margin: const EdgeInsets.all(20),
-                padding: const EdgeInsets.all(20),
-                // 深色模式的卡面是 slate950（比常规卡片的 slate900 更深，
-                // 用来压住背后的模糊遮罩），必须显式传入。
-                color: isLight ? Colors.white : AppColors.slate950,
-                // 删掉全库最强的那道投影（blur 24 / offset 0,14）之后，这张卡片
-                // 在深色模式下唯一的分隔物就只剩这条 1px 边：卡面 slate950 与它下方
-                // 「黑色 alpha140 遮罩 + 14px 模糊」的背景几乎同色（约 1.0:1），
-                // 原来的 slate800 边对该背景只有约 1.4:1，等于看不见。
-                // 因此边框同步提到 slate700（约 2.0:1）——补边框，不恢复投影。
-                // 这里不能落到 AppCard 默认的 cardBorder（slate800），否则前一个
-                // 提交的补偿会被静默打回原状。
-                borderColor: isLight ? AppColors.slate200 : AppColors.slate700,
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: palette.card,
+                  borderRadius: BorderRadius.circular(AppRadius.card),
+                ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Container(
-                      width: 64,
-                      height: 64,
-                      decoration: BoxDecoration(
-                        color: AppColors.primary.withAlpha(22),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.lock_outline,
-                        size: 30,
-                        color: AppColors.primary,
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Container(
+                        width: 64,
+                        height: 64,
+                        decoration: BoxDecoration(
+                          color: palette.tint(palette.accent),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          Icons.lock_rounded,
+                          size: 30,
+                          color: palette.accent,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 16),
-                    const Text(
+                    Text(
                       '应用已锁定',
-                      style: TextStyle(
-                        fontSize: 22,
+                      style: AppText.section.copyWith(
                         fontWeight: FontWeight.w800,
+                        color: palette.text,
                       ),
                     ),
                     const SizedBox(height: 6),
                     Text(
                       '请完成二次验证后继续使用当前服务器与任务。',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: theme.colorScheme.onSurfaceVariant,
-                        height: 1.45,
-                      ),
+                      style: AppText.caption.copyWith(color: palette.text2),
                     ),
                     if (methods.length > 1) ...[
                       const SizedBox(height: 18),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: methods.map((method) {
-                          final selected = _activeMethod == method;
-                          return ChoiceChip(
-                            label: Text(_methodLabel(method, widget.state)),
-                            selected: selected,
-                            onSelected: (_) {
-                              setState(() {
-                                _activeMethod = method;
-                                _error = null;
-                                _patternPoints = const [];
-                              });
-                              if (method == _UnlockMethod.biometric) {
-                                _tryAutoBiometric();
-                              }
-                            },
-                          );
-                        }).toList(),
+                      // v1.x 是一排 ChoiceChip，v2.0 换成分段控件
+                      AppSegmented<_UnlockMethod>(
+                        segments: [
+                          for (final method in methods)
+                            (method, _methodLabel(method, widget.state)),
+                        ],
+                        value: _activeMethod ?? methods.first,
+                        onChanged: (method) {
+                          setState(() {
+                            _activeMethod = method;
+                            _error = null;
+                            _patternPoints = const [];
+                          });
+                          if (method == _UnlockMethod.biometric) {
+                            _tryAutoBiometric();
+                          }
+                        },
                       ),
                     ],
                     const SizedBox(height: 20),
@@ -312,7 +302,7 @@ class _AppLockOverlayState extends State<_AppLockOverlay> {
                     if (_error != null) ...[
                       const SizedBox(height: 14),
                       AppNotice(
-                        color: AppColors.danger,
+                        color: palette.err,
                         text: _error!,
                         accentText: true,
                         textAlign: TextAlign.center,
@@ -344,10 +334,12 @@ class _AppLockOverlayState extends State<_AppLockOverlay> {
           ),
         ),
         const SizedBox(height: 14),
-        FilledButton.icon(
+        AppPillButton(
+          label: _submitting ? '验证中...' : '解锁',
+          icon: Icons.lock_open_rounded,
+          expand: true,
+          height: 50,
           onPressed: _submitting ? null : _unlockWithPassword,
-          icon: const Icon(Icons.lock_open_outlined, size: 18),
-          label: Text(_submitting ? '验证中...' : '解锁'),
         ),
       ],
     );
@@ -372,64 +364,61 @@ class _AppLockOverlayState extends State<_AppLockOverlay> {
           subtitle: '按顺序点击已设置的图案点位',
         ),
         const SizedBox(height: 14),
-        FilledButton.icon(
+        AppPillButton(
+          label: _submitting ? '验证中...' : '验证图案',
+          icon: Icons.gesture_rounded,
+          expand: true,
+          height: 50,
           onPressed: _submitting ? null : _unlockWithPattern,
-          icon: const Icon(Icons.gesture_outlined, size: 18),
-          label: Text(_submitting ? '验证中...' : '验证图案'),
         ),
       ],
     );
   }
 
   Widget _buildBiometricView(BuildContext context) {
-    final surfaces = AppSurfaces.of(context);
+    final palette = context.palette;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         // 这一块是 42px 大图标 + 居中标题 + 居中描述的竖排主视觉，不是提示条，
-        // 所以不走 AppNotice，直接用 AppCard 配淡底/淡边。
-        AppCard(
+        // 所以不走 AppNotice，直接画强调色浅底。
+        Container(
           padding: const EdgeInsets.all(AppSpacing.lg),
-          radius: AppRadius.md,
-          color: surfaces.tintBg(AppColors.primary),
-          borderColor: surfaces.tintBorder(AppColors.primary),
+          decoration: BoxDecoration(
+            color: palette.tint(palette.accent),
+            borderRadius: BorderRadius.circular(AppRadius.tile),
+          ),
           child: Column(
             children: [
-              // 图标压在同色 alpha=18 淡底上，满强度只有 2.60:1，
-              // 连非文字元素要求的 3:1 都不到，必须走 tintFg。
-              Icon(
-                Icons.fingerprint,
-                size: 42,
-                color: surfaces.tintFg(AppColors.primary),
-              ),
+              // 浅底上的图标用实色（palette 规则：只有「字」才要换墨色）
+              Icon(Icons.fingerprint, size: 42, color: palette.accent),
               const SizedBox(height: 12),
               Text(
                 '使用${widget.state.biometricLabel}解锁',
-                style: const TextStyle(
-                  fontSize: 15,
+                style: AppText.body.copyWith(
                   fontWeight: FontWeight.w700,
+                  color: palette.text,
                 ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 6),
               Text(
                 '系统会调用设备已启用的生物识别能力完成验证。',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+                style: AppText.caption.copyWith(color: palette.text2),
                 textAlign: TextAlign.center,
               ),
             ],
           ),
         ),
         const SizedBox(height: 14),
-        FilledButton.icon(
+        AppPillButton(
+          label: _submitting ? '验证中...' : '重新验证',
+          icon: Icons.verified_user_rounded,
+          expand: true,
+          height: 50,
           onPressed: _submitting
               ? null
               : () => _unlockWithBiometric(showFailureMessage: true),
-          icon: const Icon(Icons.verified_user_outlined, size: 18),
-          label: Text(_submitting ? '验证中...' : '重新验证'),
         ),
       ],
     );

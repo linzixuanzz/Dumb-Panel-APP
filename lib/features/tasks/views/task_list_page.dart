@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 // ScrollDirection 只在 rendering 里导出，material/widgets 都没有转出来。
 // 用它来区分「用户自己拖的」和「恢复流程 jumpTo 出来的」滚动。
@@ -13,7 +14,6 @@ import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/network/sse_client.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/task.dart';
 import '../../../shared/models/task_view.dart';
@@ -21,19 +21,27 @@ import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/panel_enums.dart';
 import '../../../shared/utils/sse_replay_buffer.dart';
 import '../../../shared/utils/task_command.dart';
-import '../../../shared/utils/time_utils.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/log_line_buffer.dart';
-import '../../../shared/widgets/app_circle_add_button.dart';
 import '../../../shared/widgets/app_buttons.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_glass_circle_button.dart';
+import '../../../shared/widgets/app_grouped_list.dart';
+import '../../../shared/widgets/app_icon_tile.dart';
+import '../../../shared/widgets/app_large_title_header.dart';
 import '../../../shared/widgets/app_notice.dart';
+import '../../../shared/widgets/app_pill_button.dart';
+import '../../../shared/widgets/app_sheet.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
 import '../../../shared/widgets/log_view.dart';
+import '../providers/favorite_tasks_provider.dart';
 import '../providers/task_provider.dart';
 import '../providers/task_view_provider.dart';
 import '../utils/task_list_rows.dart';
+// B2 提供：点任务打开详情弹层（第二波组间契约）
+import '../widgets/task_detail_sheet.dart';
+import '../widgets/favorite_task_cards.dart';
 import '../widgets/task_view_sheets.dart';
 
 class TaskListPage extends ConsumerStatefulWidget {
@@ -152,6 +160,26 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   Timer? _scrollSaveDebounce;
   String? _pendingScrollOffset;
 
+  /// 整页共用的「现在」，每秒跳一次，只驱动倒计时那几个字重建（不 setState 整页）。
+  final ValueNotifier<DateTime> _now = ValueNotifier<DateTime>(DateTime.now());
+  Timer? _clock;
+
+  /// APP 进后台（hidden / paused）时停掉 1 秒时钟，回到前台立刻跳一次再接着走。
+  AppLifecycleListener? _lifecycle;
+
+  /// 搜索框默认收起，点页头的放大镜才展开；有搜索词时始终展开。
+  bool _searchOpen = false;
+  final _searchFocus = FocusNode();
+
+  /// 「搜索任务」快捷方式（B8）跳 `/tasks?search=<毫秒时间戳>`：值每次都不同，变了才聚焦一次。
+  ///
+  /// 记在 static 上而不是 State 上：切 Tab 回来、从子页面返回时页面可能被重建，
+  /// 而地址栏里还是那个旧值，记在 State 上会再聚焦一遍。query 不主动清，靠这个去重。
+  static String? _lastHandledSearch;
+
+  /// 监听路由变化用；拿不到（页面不在 GoRouter 下）时为 null。
+  GoRouter? _router;
+
   // 等待 ScrollController attach 的帧数上限。
   // 正常情况下列表挂载当帧就能拿到 clients，这个上限只在「一直卡在加载态 / 错误态」
   // 时才会用到（加载动画会持续产帧），约合 10 秒后放弃恢复、但仍然放开保存闸。
@@ -160,6 +188,28 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   @override
   void initState() {
     super.initState();
+    _clock = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _now.value = DateTime.now(),
+    );
+    _lifecycle = AppLifecycleListener(
+      onHide: () {
+        _clock?.cancel();
+        _clock = null;
+      },
+      onResume: () {
+        // 只拉下通知栏这种 inactive → resumed 没停过时钟，不用处理
+        if (_clock != null) return;
+        _now.value = DateTime.now();
+        _clock = Timer.periodic(
+          const Duration(seconds: 1),
+          (_) => _now.value = DateTime.now(),
+        );
+      },
+    );
+    // taskProvider 是全局的，切走切回时可能还带着上次的搜索词：搜索框要把它显示出来，
+    // 否则列表被筛着、搜索框却是空的。
+    _searchController.text = ref.read(taskProvider).keyword;
     Future.microtask(_bootstrapTaskPage);
     _scrollController.addListener(_onScroll);
     // 恢复滚动位置只能从「首帧之后」起跑：ScrollController 是在 build() 返回、
@@ -168,6 +218,52 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     // 下压根不会有第二次 rebuild，_restoredScrollOffset 会永远是 false，
     // 把下面 _onScroll 里的保存闸永久锁死 —— 滚动位置一个字节都写不进去。
     _scheduleScrollRestore();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 已经停在任务页时再点一次快捷方式，页面不会重建，只能盯着路由变化
+    final router = GoRouter.maybeOf(context);
+    if (router != _router) {
+      _router?.routerDelegate.removeListener(_onRouteChanged);
+      _router = router;
+      _router?.routerDelegate.addListener(_onRouteChanged);
+      // 冷启动 / 从别的 Tab 跳过来：当前地址里可能已经带着 search
+      _onRouteChanged();
+    }
+  }
+
+  /// 地址里带着新的 `search` 值时，展开并聚焦搜索框（不改已有的搜索词）。
+  void _onRouteChanged() {
+    final router = _router;
+    if (router == null || !mounted) {
+      return;
+    }
+    final search =
+        router.routerDelegate.currentConfiguration.uri.queryParameters['search'];
+    if (search == null || search.isEmpty || search == _lastHandledSearch) {
+      return;
+    }
+    _lastHandledSearch = search;
+    // 路由通知可能来自 build 期间，放到帧后再 setState / 抢焦点
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      _openSearchAndFocus();
+    });
+  }
+
+  /// 展开搜索框并聚焦。输入框是这次 setState 之后才建出来的，
+  /// 焦点要等它挂上树（下一帧）再要，否则 requestFocus 落空。
+  void _openSearchAndFocus() {
+    setState(() => _searchOpen = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _searchFocus.requestFocus();
+      }
+    });
   }
 
   /// 进入任务页时的初始化。
@@ -185,6 +281,8 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   /// 否则先发出去的那次不带规则、后发的带规则，两次都会写 `state.tasks`，
   /// 谁后到谁赢，用户会看到「按钮写着视图名、列表却是没筛过的全量」。
   Future<void> _bootstrapTaskPage() async {
+    // 常用任务按面板存：刚切过面板时先换成当前面板那一份（不发请求）
+    ref.read(favoriteTasksProvider.notifier).syncScope();
     await _restoreTaskUiState();
     if (!mounted) {
       return;
@@ -377,7 +475,8 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                   child: FilledButton(
                     onPressed: () => Navigator.pop(dialogContext, true),
                     style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.red500,
+                      backgroundColor: dialogContext.palette.err,
+                      foregroundColor: dialogContext.palette.onStatus,
                     ),
                     child: const Text('删除'),
                   ),
@@ -526,8 +625,8 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                   ),
                   const SizedBox(height: 16),
                   // 面板这条接口只改开关、不碰渠道（与网页端弹窗同一句提示）。
-                  const AppNotice(
-                    color: AppColors.primary,
+                  AppNotice(
+                    color: context.palette.accent,
                     text: '不修改任务绑定的通知渠道；没绑渠道的任务会发到默认推送渠道',
                   ),
                 ],
@@ -656,6 +755,11 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _clock?.cancel();
+    _lifecycle?.dispose();
+    _now.dispose();
+    _searchFocus.dispose();
+    _router?.routerDelegate.removeListener(_onRouteChanged);
     // 滚动位置是防抖写盘的，退出页面时很可能还有一次没落地的最新值。
     // 先 cancel 掉定时器（State 都要没了，回调再跑没有意义），再手动补写一次。
     _scrollSaveDebounce?.cancel();
@@ -932,7 +1036,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                 trailing:
                     ref.watch(taskProvider).labelFilter ==
                         Task.toGroupLabel(group)
-                    ? const Icon(Icons.check, color: AppColors.primary)
+                    ? Icon(Icons.check, color: context.palette.accent)
                     : null,
                 onTap: () => Navigator.pop(sheetContext, group),
               ),
@@ -1035,7 +1139,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
               ListTile(
                 title: Text(_taskQuickSortOptions[i].label),
                 trailing: isCurrent(_taskQuickSortOptions[i])
-                    ? const Icon(Icons.check, color: AppColors.primary)
+                    ? Icon(Icons.check, color: context.palette.accent)
                     : null,
                 onTap: () => Navigator.pop(sheetContext, i),
               ),
@@ -1123,25 +1227,329 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     _persistSelectedView(null);
   }
 
+  /// 页头放大镜：展开 / 收起搜索框。收起时把搜索词一起清掉，
+  /// 否则列表还被筛着、用户却看不到筛的是什么。
+  void _toggleSearch() {
+    final open =
+        _searchOpen ||
+        _searchController.text.isNotEmpty ||
+        ref.read(taskProvider).keyword.isNotEmpty;
+    if (!open) {
+      _openSearchAndFocus();
+      return;
+    }
+    _debounce?.cancel();
+    _searchFocus.unfocus();
+    final hadKeyword =
+        _searchController.text.isNotEmpty ||
+        ref.read(taskProvider).keyword.isNotEmpty;
+    _searchController.clear();
+    setState(() => _searchOpen = false);
+    if (hadKeyword) {
+      ref.read(taskProvider.notifier).setKeyword('');
+    }
+  }
+
+  /// 进 / 出拖拽排序模式。此刻拖了也白拖（快捷排序 / 视图带排序规则 / 有任务在跑）就不进，只说原因；
+  /// 退出不拦：「完成」任何时候都要能点。
+  void _toggleTaskSortMode() {
+    final reason = ref.read(taskProvider).dragSortDisabledReason;
+    if (!_taskSortMode && reason != null) {
+      _showWarning(reason);
+      return;
+    }
+    setState(() {
+      _taskSortMode = !_taskSortMode;
+      if (_taskSortMode) {
+        _groupReorderMode = false;
+      }
+    });
+  }
+
+  /// 页头「…」：批量操作、拖拽排序。原来这两个是页头上的两颗胶囊，
+  /// 新页头只放圆形按钮（搜索 / 更多 / 新建），收进这里，功能不变。
+  Future<void> _showMoreActions() async {
+    final palette = context.palette;
+    final reason = ref.read(taskProvider).dragSortDisabledReason;
+    final action = await showAppSheet<String>(
+      context: context,
+      fullHeight: false,
+      builder: (sheetContext) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+          child: AppGroupedList(
+            children: [
+              AppGroupedRow(
+                leading: AppIconTile(
+                  icon: Icons.done_all_rounded,
+                  color: palette.accent,
+                ),
+                title: '批量操作',
+                subtitle: '多选后批量运行、启停、设置通知或删除',
+                onTap: () => Navigator.pop(sheetContext, 'batch'),
+              ),
+              AppGroupedRow(
+                leading: AppIconTile(
+                  icon: Icons.swap_vert_rounded,
+                  color: palette.purple,
+                ),
+                title: '拖拽排序',
+                // 不能拖的原因提前说，省得点进去再被弹回来
+                subtitle: reason ?? '长按拖动调整任务顺序，松手即保存',
+                onTap: () => Navigator.pop(sheetContext, 'sort'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || action == null) {
+      return;
+    }
+    if (action == 'batch') {
+      _setSelectionMode(true);
+    } else if (action == 'sort') {
+      _toggleTaskSortMode();
+    }
+  }
+
+  /// 任务行长按：加入 / 移出常用、多选。
+  Future<void> _showTaskActions(Task task) async {
+    HapticFeedback.mediumImpact();
+    final palette = context.palette;
+    final favorites = ref.read(favoriteTasksProvider.notifier);
+    final isFavorite = favorites.isFavorite(task.id);
+    final action = await showAppSheet<String>(
+      context: context,
+      fullHeight: false,
+      builder: (sheetContext) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+          child: AppGroupedList(
+            header: task.name,
+            children: [
+              AppGroupedRow(
+                leading: AppIconTile(
+                  icon: isFavorite
+                      ? Icons.star_outline_rounded
+                      : Icons.star_rounded,
+                  color: palette.warn,
+                ),
+                title: isFavorite ? '移出常用' : '加入常用',
+                subtitle: isFavorite
+                    ? null
+                    : '显示在任务页顶部，最多 ${FavoriteTasksNotifier.maxCount} 个',
+                onTap: () => Navigator.pop(sheetContext, 'favorite'),
+              ),
+              AppGroupedRow(
+                leading: AppIconTile(
+                  icon: Icons.done_all_rounded,
+                  color: palette.accent,
+                ),
+                title: '多选',
+                onTap: () => Navigator.pop(sheetContext, 'select'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || action == null) {
+      return;
+    }
+    if (action == 'select') {
+      _toggleTaskSelection(task.id);
+      return;
+    }
+    if (!favorites.toggle(task.id)) {
+      _showWarning('常用任务最多 ${FavoriteTasksNotifier.maxCount} 个，先移出一个再加');
+      return;
+    }
+    _showSuccess(isFavorite ? '已移出常用' : '已加入常用');
+  }
+
+  /// 「所有任务」小标题 + 排序 / 视图 / 分组按钮 + 状态筛选。
+  /// 正常浏览时排在列表里（「常用任务」下面，它只管下面这份列表）；
+  /// 批量 / 拖拽排序时固定在页头下面，方便边操作边切筛选。
+  Widget _buildFilterBar(
+    TaskListState state,
+    TaskViewListState viewState,
+    bool canManageViews,
+  ) {
+    final palette = context.palette;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.pageHorizontal,
+            0,
+            8,
+            4,
+          ),
+          child: Row(
+            children: [
+              Text(
+                '所有任务',
+                style: AppText.section.copyWith(color: palette.text),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '${state.total}',
+                style: AppText.tabular(
+                  AppText.caption.copyWith(color: palette.text2),
+                ),
+              ),
+              // 数量和右边按钮区之间留出间距：按钮区放不下时会从左边裁掉半个字，
+              // 紧贴着数字时看起来就像数量后面跟了个「字」（截图里的「10字」其实是被裁的「默认排序」）。
+              const SizedBox(width: 12),
+              // 这一行最多要摆四个按钮，360dp 的窄屏放不下 ——
+              // 用横向滚动兜住，而不是让 Row 溢出。reverse 保证内容不足一屏时仍然靠右。
+              Expanded(
+                // 左缘 16dp 渐隐：被裁到的半截按钮淡出，而不是硬生生切出半个字。
+                // 放得下时最左边是 TextButton 自带的约 12dp 内边距，渐隐几乎不碰到图标。
+                child: ShaderMask(
+                  blendMode: BlendMode.dstIn,
+                  shaderCallback: (bounds) => LinearGradient(
+                    colors: const [Colors.transparent, Colors.black],
+                    stops: [
+                      0,
+                      bounds.width <= 0
+                          ? 0
+                          : (16 / bounds.width).clamp(0.0, 1.0),
+                    ],
+                  ).createShader(bounds),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    reverse: true,
+                    child: Row(
+                      children: [
+                        // 快捷排序入口（APP #28）。不叫「排序」：「…」里的「拖拽排序」是另一回事。
+                        TextButton.icon(
+                          onPressed: _showQuickSortPicker,
+                          icon: const Icon(Icons.sort, size: 16),
+                          label: _buildFilterButtonLabel(
+                            state.quickSort == null
+                                ? '默认排序'
+                                : '${_quickSortFieldLabels[state.quickSort!.field] ?? '自定义'} '
+                                      '${state.quickSort!.isDescending ? '↓' : '↑'}',
+                          ),
+                        ),
+                        if (_showViewFilterEntry(viewState, canManageViews))
+                          TextButton.icon(
+                            onPressed: _showViewPicker,
+                            icon: const Icon(Icons.filter_alt_outlined, size: 16),
+                            label: _buildFilterButtonLabel(
+                              _selectedViewName(state, viewState) ?? '全部任务',
+                            ),
+                          ),
+                        TextButton.icon(
+                          onPressed: _showGroupPicker,
+                          icon: const Icon(Icons.label_outline, size: 16),
+                          label: _buildFilterButtonLabel(
+                            state.labelFilter?.isNotEmpty == true
+                                // 存的是完整标签 `分组:生产`，显示要去掉前缀。
+                                ? Task.groupNameFromLabel(state.labelFilter!)
+                                : '全部分组',
+                          ),
+                        ),
+                        if (state.statusFilter != null ||
+                            state.labelFilter != null ||
+                            state.selectedViewId != null)
+                          TextButton(
+                            onPressed: _clearTaskFilters,
+                            child: const Text('清除筛选'),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        SizedBox(
+          height: 38,
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.pageHorizontal,
+            ),
+            scrollDirection: Axis.horizontal,
+            itemCount: _taskStatusFilters.length,
+            separatorBuilder: (_, index) => const SizedBox(width: 8),
+            itemBuilder: (_, index) {
+              final filter = _taskStatusFilters[index];
+              final selected = state.statusFilter == filter.value;
+              return ChoiceChip(
+                label: Text(filter.label),
+                selected: selected,
+                showCheckmark: false,
+                onSelected: (_) {
+                  if (_scrollController.hasClients &&
+                      _scrollController.offset > 0) {
+                    _scrollController.jumpTo(0);
+                  }
+                  ref.read(taskProvider.notifier).setStatusFilter(filter.value);
+                },
+                // 白色胶囊，选中是强调色浅底；状态色当文字用 Ink 档
+                backgroundColor: palette.card,
+                selectedColor: palette.tint(palette.accent),
+                side: BorderSide.none,
+                shape: const StadiumBorder(),
+                labelStyle: TextStyle(
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  color: selected ? palette.accentInk : palette.text,
+                ),
+                visualDensity: VisualDensity.compact,
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 12),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(taskProvider);
     final viewState = ref.watch(taskViewProvider);
-    // 任务视图的增删改要 operator，viewer 只能看。
-    final canManageViews = ref.watch(authProvider).user?.isOperator ?? false;
-    final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
+    final user = ref.watch(authProvider).user;
+    // 任务视图的增删改要 operator，viewer 只能看。按住运行同样要 operator。
+    final canManageViews = user?.isOperator ?? false;
+    final canRun = user?.isOperator ?? false;
+    final palette = context.palette;
+    final favoriteNotifier = ref.read(favoriteTasksProvider.notifier);
+    final watchedFavoriteIds = ref.watch(favoriteTasksProvider);
+    // 刚切完面板、常用任务还没换成新面板那份时，先当作没有（同一个 id 在两台面板上是两条任务）
+    final favoriteIds = favoriteNotifier.isCurrentScope
+        ? watchedFavoriteIds
+        : const <int>[];
+    // 列表刷新成功、而且是没加筛选的全量时，顺手剔除已经被删掉的常用任务（组间契约：B1 负责 prune）。
+    // 带筛选的结果不是全量，拿它剔除会把只是被筛掉的常用任务误删。
+    ref.listen<TaskListState>(taskProvider, (previous, next) {
+      if (previous == null || !previous.loading || next.loading) {
+        return;
+      }
+      if (next.error != null || next.hasNarrowingFilters) {
+        return;
+      }
+      favoriteNotifier.prune(next.tasks.map((task) => task.id).toSet());
+    });
     _collectKnownGroups(state.tasks);
     final groupedTasks = sortTaskGroupsByOrder(
       groupTasksByGroupName(state.tasks),
       _groupOrder,
     );
     // 一个分组都没建过（或筛选后只剩「未分组」）时，那条分组头没有任何信息量：
-    // 标题恒为「未分组」、条数与头部的「共 N 个任务」重复、折叠它等于清空整页。
-    // 这种情况直接不渲染，省下 60.9dp——这是任务列表最大的一笔密度收益。
+    // 标题恒为「未分组」、条数与「所有任务」旁的总数重复、折叠它等于清空整页。
+    // 这种情况直接不渲染。
     final onlyUngrouped =
         groupedTasks.length == 1 && groupedTasks.first.key.isEmpty;
-    // 分组头 + 任务卡摊平成一维行列表，交给下面的 ListView.builder 惰性构建。
+    // 分组头 + 任务行摊平成一维行列表，交给下面的 ListView.builder 惰性构建。
     // 全量任务仍然留在 state.tasks 里，所以全选 / 分组下拉 / 拖拽排序语义不变。
     final taskRows = buildTaskListRows(
       groups: groupedTasks,
@@ -1154,264 +1562,155 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     // initState 里已经排过一次，这里是「列表分支从加载态换成真正的 ListView」之后的补触发。
     _scheduleScrollRestore();
 
+    // 常用任务：优先用当前列表里的最新数据；列表带着筛选看不到时用最近一次见过的快照。
+    favoriteNotifier.remember(state.tasks);
+    final taskById = {for (final task in state.tasks) task.id: task};
+    final favoriteTasks = <Task>[
+      for (final id in favoriteIds)
+        ?(taskById[id] ?? favoriteNotifier.snapshotOf(id)),
+    ];
+    final browsing = !_selectionMode && !_taskSortMode && !_groupReorderMode;
+    // 搜索时用户关心的是搜索结果，常用卡片先让开
+    final showFavorites = browsing && state.keyword.isEmpty;
+    final showSearch =
+        _searchOpen ||
+        _searchController.text.isNotEmpty ||
+        state.keyword.isNotEmpty;
+    final listBottom = AppSpacing.listBottomOf(context);
+
+    // 页头：问候 + 一句状态
+    final userName = user?.username.trim() ?? '';
+    final title = userName.isEmpty ? '任务' : 'Hi, $userName!';
+    final String subtitle;
+    if (_selectionMode) {
+      subtitle = '已选 $selectedCount 个任务';
+    } else if (_taskSortMode) {
+      subtitle = '拖拽排序中';
+    } else if (state.loading && state.tasks.isEmpty) {
+      subtitle = '正在加载任务…';
+    } else {
+      final runningCount = state.tasks.where((task) => task.isRunning).length;
+      final failedCount = state.tasks
+          .where((task) => task.lastRunFailed)
+          .length;
+      subtitle = [
+        '${state.total} 个任务',
+        if (runningCount > 0) '$runningCount 个运行中',
+        // 「失败」指上次运行失败（last_run_status == 1），页头放不下更长的说法
+        if (failedCount > 0) '$failedCount 个失败',
+      ].join(' · ');
+    }
+    final List<Widget> headerActions;
+    if (_selectionMode) {
+      headerActions = [
+        AppPillButton(
+          label: '取消',
+          icon: Icons.close_rounded,
+          variant: AppPillVariant.secondary,
+          height: 44,
+          onPressed: () => _setSelectionMode(false),
+        ),
+      ];
+    } else if (_taskSortMode) {
+      headerActions = [
+        // 每次松手已经各自保存过了（见 _buildTaskReorderView），「完成」只是退出排序模式。
+        AppPillButton(
+          label: '完成',
+          icon: Icons.check_rounded,
+          height: 44,
+          onPressed: _toggleTaskSortMode,
+        ),
+      ];
+    } else {
+      headerActions = [
+        AppGlassCircleButton(
+          icon: Icons.search_rounded,
+          tooltip: '搜索任务',
+          onTap: _toggleSearch,
+        ),
+        AppGlassCircleButton(
+          icon: Icons.more_horiz_rounded,
+          tooltip: '更多操作',
+          onTap: _showMoreActions,
+        ),
+        AppGlassCircleButton(
+          icon: Icons.add_rounded,
+          tooltip: '新建任务',
+          onTap: () => context.push('/tasks/new'),
+        ),
+      ];
+    }
+
+    final filterBar = _buildFilterBar(state, viewState, canManageViews);
+    // 正常浏览时排在任务行前面、跟着一起滚的几块
+    final leading = <Widget>[
+      if (showFavorites)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 26),
+          child: FavoriteTaskSection(
+            tasks: favoriteTasks,
+            favoriteCount: favoriteIds.length,
+            canRun: canRun,
+            now: _now,
+            onRun: _runTask,
+            onOpen: (task) => showTaskDetailSheet(context, ref, task),
+            onViewLog: (task) => openLatestTaskLog(context, ref, task),
+          ),
+        ),
+      if (browsing) filterBar,
+    ];
+
     return Scaffold(
       body: Padding(
         padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12),
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  const titleStyle = TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w700,
-                  );
-                  final batchLabel = _selectionMode ? '取消' : '批量';
-                  final sortLabel = _taskSortMode ? '完成' : '排序';
-                  // APP #21 同类排查：360dp 屏、字号放大到 1.3 时「标题 + 批量 + 排序 + ＋」放不下，＋会被挤出屏幕。
-                  // 按当前字号量一下这一态的按钮完整显示要多宽（与下面的显示条件逐项对应），
-                  // 放不下就让胶囊只留图标。＋ 是 44dp 命中区，按钮之间各 8dp；
-                  // 标题与按钮之间不另加间距（与原来的排版逐像素一致）。
-                  var fullWidth = measureTextWidth(context, '定时任务', titleStyle);
-                  if (!_taskSortMode) {
-                    fullWidth += AppChipButton.fullWidth(context, batchLabel);
-                  }
-                  if (!_selectionMode) {
-                    fullWidth += 8 + AppChipButton.fullWidth(context, sortLabel);
-                  }
-                  if (!_selectionMode && !_taskSortMode) {
-                    fullWidth += 8 + AppTapTarget.min;
-                  }
-                  final compact = fullWidth > constraints.maxWidth;
-                  return Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      // 字号再大也只让标题省略，右边的按钮始终完整可点。
-                      const Flexible(
-                        child: Text(
-                          '定时任务',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: titleStyle,
-                        ),
-                      ),
-                      Row(
-                        children: [
-                          if (!_taskSortMode)
-                            AppChipButton(
-                              label: batchLabel,
-                              icon: _selectionMode
-                                  ? Icons.close
-                                  : Icons.done_all,
-                              compact: compact,
-                              onTap: () => _setSelectionMode(!_selectionMode),
-                            ),
-                          if (!_selectionMode) ...[
-                            const SizedBox(width: 8),
-                            AppChipButton(
-                              label: sortLabel,
-                              icon: _taskSortMode
-                                  ? Icons.check
-                                  : Icons.swap_vert,
-                              compact: compact,
-                              // 每次松手已经各自保存过了（见 _buildTaskReorderView），
-                              // 「完成」只是退出排序模式，不再攒到这里统一提交。
-                              onTap: () {
-                                // 此刻拖了也白拖（视图带排序规则 / 有任务在跑），就不进排序模式，只说原因。
-                                // 退出不拦：「完成」任何时候都要能点。
-                                final reason = state.dragSortDisabledReason;
-                                if (!_taskSortMode && reason != null) {
-                                  _showWarning(reason);
-                                  return;
-                                }
-                                setState(() {
-                                  _taskSortMode = !_taskSortMode;
-                                  if (_taskSortMode) {
-                                    _groupReorderMode = false;
-                                  }
-                                });
-                              },
-                            ),
-                          ],
-                          if (!_selectionMode && !_taskSortMode) ...[
-                            const SizedBox(width: 8),
-                            AppCircleAddButton(
-                              onTap: () => context.push('/tasks/new'),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ],
-                  );
-                },
-              ),
+            AppLargeTitleHeader(
+              title: title,
+              subtitle: subtitle,
+              actions: headerActions,
             ),
-            const SizedBox(height: 16),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: TextField(
-                controller: _searchController,
-                decoration: InputDecoration(
-                  hintText: '搜索任务名称或命令...',
-                  prefixIcon: const Icon(
-                    Icons.search,
-                    size: 18,
-                    color: AppColors.slate400,
-                  ),
-                  filled: true,
-                  fillColor: isLight ? Colors.white : AppColors.slate900,
-                  // 逐字复制 app_theme 的三处 OutlineInputBorder：
-                  // 计划裁决只令牌化不删除。三处圆角同值是聚焦动画的硬要求。
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppRadius.md),
-                    borderSide: BorderSide(
-                      color: isLight ? AppColors.slate200 : AppColors.slate800,
-                    ),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppRadius.md),
-                    borderSide: BorderSide(
-                      color: isLight ? AppColors.slate200 : AppColors.slate800,
-                    ),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppRadius.md),
-                    borderSide: const BorderSide(
-                      color: AppColors.primary,
-                      width: 1.5,
-                    ),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                  isDense: true,
-                  suffixIcon: _searchController.text.isNotEmpty
-                      ? IconButton(
-                          icon: const Icon(
-                            Icons.clear,
-                            size: 16,
-                            color: AppColors.slate400,
-                          ),
-                          onPressed: () {
-                            _searchController.clear();
-                            setState(() {});
-                            ref.read(taskProvider.notifier).setKeyword('');
-                          },
-                        )
-                      : null,
+            if (showSearch)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.pageHorizontal,
+                  0,
+                  AppSpacing.pageHorizontal,
+                  12,
                 ),
-                style: const TextStyle(fontSize: 14),
-                onChanged: _onSearchChanged,
-              ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              height: 38,
-              child: ListView.separated(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                scrollDirection: Axis.horizontal,
-                itemCount: _taskStatusFilters.length,
-                separatorBuilder: (_, index) => const SizedBox(width: 8),
-                itemBuilder: (_, index) {
-                  final filter = _taskStatusFilters[index];
-                  final selected = state.statusFilter == filter.value;
-                  return ChoiceChip(
-                    label: Text(filter.label),
-                    selected: selected,
-                    onSelected: (_) {
-                      if (_scrollController.hasClients &&
-                          _scrollController.offset > 0) {
-                        _scrollController.jumpTo(0);
-                      }
-                      ref
-                          .read(taskProvider.notifier)
-                          .setStatusFilter(filter.value);
-                    },
-                    selectedColor: AppColors.primary.withAlpha(18),
-                    side: BorderSide(
-                      color: selected
-                          ? AppColors.primary.withAlpha(90)
-                          : AppColors.slate200,
+                // 灰色填充、无描边的输入框样式由全局主题给（第一波），这里不再逐字抄边框
+                child: TextField(
+                  controller: _searchController,
+                  focusNode: _searchFocus,
+                  decoration: InputDecoration(
+                    hintText: '搜索任务名称或命令...',
+                    prefixIcon: Icon(
+                      Icons.search,
+                      size: 18,
+                      color: palette.text3,
                     ),
-                    labelStyle: TextStyle(
-                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                      // selectedColor 就是同一个 primary 的 alpha=18 淡底，
-                      // 标签再用满强度 primary 会和底色贴在一起。
-                      color: selected
-                          ? context.surfaces.tintFg(AppColors.primary)
-                          : null,
-                    ),
-                    visualDensity: VisualDensity.compact,
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 10),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  Text(
-                    '共 ${state.total} 个任务',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                    isDense: true,
+                    suffixIcon: _searchController.text.isNotEmpty
+                        ? IconButton(
+                            icon: Icon(
+                              Icons.clear,
+                              size: 16,
+                              color: palette.text3,
+                            ),
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() {});
+                              ref.read(taskProvider.notifier).setKeyword('');
+                            },
+                          )
+                        : null,
                   ),
-                  // 这一行现在最多要摆三个按钮，360dp 的窄屏放不下 ——
-                  // 用横向滚动兜住，而不是让 Row 溢出。reverse 保证内容不足一屏时
-                  // 仍然靠右，和改造前的 Spacer 观感一致。
-                  Expanded(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      reverse: true,
-                      child: Row(
-                        children: [
-                          // 快捷排序入口（APP #28）。不叫「排序」：页头的「排序」是拖拽排序模式。
-                          TextButton.icon(
-                            onPressed: _showQuickSortPicker,
-                            icon: const Icon(Icons.sort, size: 16),
-                            label: _buildFilterButtonLabel(
-                              state.quickSort == null
-                                  ? '默认排序'
-                                  : '${_quickSortFieldLabels[state.quickSort!.field] ?? '自定义'} '
-                                        '${state.quickSort!.isDescending ? '↓' : '↑'}',
-                            ),
-                          ),
-                          if (_showViewFilterEntry(viewState, canManageViews))
-                            TextButton.icon(
-                              onPressed: _showViewPicker,
-                              icon: const Icon(
-                                Icons.filter_alt_outlined,
-                                size: 16,
-                              ),
-                              label: _buildFilterButtonLabel(
-                                _selectedViewName(state, viewState) ?? '全部任务',
-                              ),
-                            ),
-                          TextButton.icon(
-                            onPressed: _showGroupPicker,
-                            icon: const Icon(Icons.label_outline, size: 16),
-                            label: _buildFilterButtonLabel(
-                              state.labelFilter?.isNotEmpty == true
-                                  // 存的是完整标签 `分组:生产`，显示要去掉前缀。
-                                  ? Task.groupNameFromLabel(state.labelFilter!)
-                                  : '全部分组',
-                            ),
-                          ),
-                          if (state.statusFilter != null ||
-                              state.labelFilter != null ||
-                              state.selectedViewId != null)
-                            TextButton(
-                              onPressed: _clearTaskFilters,
-                              child: const Text('清除筛选'),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+                  style: const TextStyle(fontSize: 14),
+                  onChanged: _onSearchChanged,
+                ),
               ),
-            ),
+            if (!browsing) filterBar,
             if (_selectionMode) ...[
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
@@ -1422,7 +1721,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       AppTintedActionButton(
                         label: allSelected ? '取消全选' : '全选',
                         icon: allSelected ? Icons.deselect : Icons.select_all,
-                        color: AppColors.slate500,
+                        color: palette.text2,
                         enabled: state.tasks.isNotEmpty,
                         onTap: () => _toggleSelectAllTasks(state.tasks),
                       ),
@@ -1430,7 +1729,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       AppTintedActionButton(
                         label: '批量运行',
                         icon: Icons.play_circle_outline,
-                        color: AppColors.primary,
+                        color: palette.accent,
                         enabled: selectedCount > 0,
                         onTap: () =>
                             _performBatchTaskAction(_TaskBatchAction.run),
@@ -1439,9 +1738,8 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       AppTintedActionButton(
                         label: '批量启用',
                         icon: Icons.toggle_on_outlined,
-                        // 「启用」是 success 绿。原先它和左边的「批量运行」同为
-                        // primary，两个语义完全不同的动作长得一模一样。
-                        color: AppColors.success,
+                        // 「启用」是成功绿，和左边「批量运行」的蓝区分开。
+                        color: palette.ok,
                         enabled: selectedCount > 0,
                         onTap: () =>
                             _performBatchTaskAction(_TaskBatchAction.enable),
@@ -1450,7 +1748,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       AppTintedActionButton(
                         label: '批量禁用',
                         icon: Icons.toggle_off_outlined,
-                        color: AppColors.slate500,
+                        color: palette.text2,
                         enabled: selectedCount > 0,
                         onTap: () =>
                             _performBatchTaskAction(_TaskBatchAction.disable),
@@ -1460,7 +1758,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       AppTintedActionButton(
                         label: '通知设置',
                         icon: Icons.notifications_outlined,
-                        color: AppColors.purple500,
+                        color: palette.purple,
                         enabled: selectedCount > 0,
                         onTap: _performBatchNotify,
                       ),
@@ -1468,7 +1766,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       AppTintedActionButton(
                         label: '批量删除',
                         icon: Icons.delete_outline,
-                        color: AppColors.red500,
+                        color: palette.err,
                         enabled: selectedCount > 0,
                         onTap: () =>
                             _performBatchTaskAction(_TaskBatchAction.delete),
@@ -1479,10 +1777,10 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
               ),
             ],
             if (_taskSortMode) ...[
-              const Padding(
-                padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
                 child: AppNotice(
-                  color: AppColors.primary,
+                  color: palette.accent,
                   icon: Icons.swap_vert,
                   text: '长按拖拽调整任务顺序，松手即保存',
                   accentText: true,
@@ -1491,20 +1789,24 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
             ],
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: palette.accent,
                 onRefresh: () =>
                     ref.read(taskProvider.notifier).load(refresh: true),
+                // 加载 / 失败 / 空态也把筛选条带上：筛出空结果时用户得能切回去。
                 child: state.loading && state.tasks.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [AppLoadingView()],
+                        children: [
+                          if (browsing) filterBar,
+                          const AppLoadingView(),
+                        ],
                       )
-                    // TaskListState 一直有 error 字段，但从来没有被渲染过：
                     // 拿不到数据和真的没有任务是两回事，必须先判 error。
                     : state.error != null && state.tasks.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
                         children: [
+                          if (browsing) filterBar,
                           AppErrorView(
                             title: '任务加载失败',
                             message: state.error!,
@@ -1518,8 +1820,9 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                     : state.tasks.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
-                          AppEmptyView(
+                        children: [
+                          if (browsing) filterBar,
+                          const AppEmptyView(
                             icon: Icons.inbox_outlined,
                             message: '暂无任务',
                             topPadding: 0,
@@ -1530,26 +1833,43 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                     ? _buildTaskReorderView(state.tasks)
                     : _groupReorderMode
                     ? _buildGroupReorderView(groupedTasks)
-                    // 改造前这里是 `ListView(children: 每组一个 Column)`：
-                    // Column 没有惰性布局，N 条任务就是 N 张重卡一次性建完，
-                    // 「未分组」用户更是只有 1 个孩子，sliver 惰性完全失效。
-                    // 换成按摊平后的行 index 构建，只有可见区域会被真正建出来。
+                    // 按摊平后的行 index 构建，只有可见区域会被真正建出来。
+                    // 前面几项是常用任务与筛选条，后面才是任务行。
                     : ListView.builder(
                         controller: _scrollController,
                         physics: const AlwaysScrollableScrollPhysics(),
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
-                        itemCount: taskRows.length,
+                        padding: EdgeInsets.only(bottom: listBottom),
+                        itemCount: leading.length + taskRows.length,
                         itemBuilder: (context, index) {
-                          final row = taskRows[index];
+                          if (index < leading.length) {
+                            return leading[index];
+                          }
+                          final rowIndex = index - leading.length;
+                          final row = taskRows[rowIndex];
                           if (row.isGroupHeader) {
                             return _buildGroupHeader(
                               row.group,
                               key: ValueKey(row.rowKey),
                             );
                           }
+                          // 同一分组的任务行拼成一块白色圆角容器：首行圆上角、末行圆下角
+                          final prev = rowIndex > 0
+                              ? taskRows[rowIndex - 1]
+                              : null;
+                          final next = rowIndex + 1 < taskRows.length
+                              ? taskRows[rowIndex + 1]
+                              : null;
                           return _buildTaskCard(
                             row.task!,
-                            isLight,
+                            isFirst:
+                                prev == null ||
+                                prev.isGroupHeader ||
+                                prev.group.key != row.group.key,
+                            isLast:
+                                next == null ||
+                                next.isGroupHeader ||
+                                next.group.key != row.group.key,
+                            isFavorite: favoriteIds.contains(row.task!.id),
                             key: ValueKey(row.rowKey),
                           );
                         },
@@ -1621,7 +1941,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('确定', style: TextStyle(color: Colors.red)),
+            child: Text('确定', style: TextStyle(color: ctx.palette.errInk)),
           ),
         ],
       ),
@@ -1821,18 +2141,23 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   }
 
   Widget _buildGroupReorderView(List<TaskGroup> groups) {
+    final palette = context.palette;
     return Column(
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
           child: Row(
             children: [
-              const Icon(Icons.swap_vert, size: 18),
+              Icon(Icons.swap_vert, size: 18, color: palette.text2),
               const SizedBox(width: 8),
-              const Expanded(
+              Expanded(
                 child: Text(
                   '长按拖拽调整分组顺序',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: palette.text,
+                  ),
                 ),
               ),
               TextButton(
@@ -1844,7 +2169,12 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
         ),
         Expanded(
           child: ReorderableListView.builder(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+            padding: EdgeInsets.fromLTRB(
+              20,
+              0,
+              20,
+              AppSpacing.listBottomOf(context),
+            ),
             itemCount: groups.length,
             onReorder: (oldIndex, newIndex) {
               setState(() {
@@ -1869,27 +2199,21 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                 ),
                 child: Row(
                   children: [
-                    const Icon(
-                      Icons.drag_handle,
-                      size: 20,
-                      color: AppColors.slate400,
-                    ),
+                    Icon(Icons.drag_handle, size: 20, color: palette.text3),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
                         group.title,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w700,
+                          color: palette.text,
                         ),
                       ),
                     ),
                     Text(
                       '${group.tasks.length} 条',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppColors.slate400,
-                      ),
+                      style: TextStyle(fontSize: 12, color: palette.text2),
                     ),
                   ],
                 ),
@@ -1902,8 +2226,9 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
   }
 
   Widget _buildTaskReorderView(List<Task> tasks) {
+    final palette = context.palette;
     return ReorderableListView.builder(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+      padding: EdgeInsets.fromLTRB(20, 0, 20, AppSpacing.listBottomOf(context)),
       itemCount: tasks.length,
       onReorder: (oldIndex, newIndex) async {
         // 松手即保存，一次拖拽只发一次 PUT /tasks/sort（面板按落点把整桶重编号）。
@@ -1933,11 +2258,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
           child: Row(
             children: [
-              const Icon(
-                Icons.drag_handle,
-                size: 20,
-                color: AppColors.slate400,
-              ),
+              Icon(Icons.drag_handle, size: 20, color: palette.text3),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -1945,9 +2266,10 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                   children: [
                     Text(
                       task.name,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
+                        color: palette.text,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -1957,17 +2279,13 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                       task.groupName?.isNotEmpty == true
                           ? '分组：${task.groupName}'
                           : '未分组',
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: AppColors.slate400,
-                      ),
+                      style: TextStyle(fontSize: 11, color: palette.text2),
                     ),
                   ],
                 ),
               ),
-              // 与详情页那颗徽章（:2566）用同一条判断：不认识的状态按「非活跃」
-              // 渲染。只改文案不改高亮的话，面板新增的状态在排序视图里仍会亮成
-              // 一个活跃态徽章，而我们并不知道那个新状态到底是不是活跃的。
+              // 不认识的状态按「非活跃」渲染：只改文案不改高亮的话，面板新增的状态
+              // 在排序视图里仍会亮成一个活跃态徽章，而我们并不知道它到底是不是活跃的。
               _MetaChip(
                 label: task.statusText,
                 active: task.hasKnownStatus && !task.isDisabled,
@@ -1979,112 +2297,139 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     );
   }
 
-  /// 可折叠的分组头。
+  /// 可折叠的分组头：分组列表上方的小标题行（不再是一张卡）。
   ///
-  /// 只有 `buildTaskListRows` 产出分组头行时才会被调用：
-  /// `groupTasksByGroupName` 永远至少产出一个桶（没设分组的任务全部落进 key 为空的
-  /// 「未分组」桶），所以分组头以前是**无条件**渲染的：一个从来没用过分组功能的
-  /// 用户，屏幕顶部固定被一条 60.9dp 的「未分组 · N 条」占掉，而这条信息与头部
-  /// 已有的「共 N 个任务」完全重复，且折叠它等于把整页任务藏起来，毫无用处。
-  /// 这是任务列表每屏只能完整显示 1 张卡的首要原因，比卡片内边距重要得多。
+  /// 只有 `buildTaskListRows` 产出分组头行时才会被调用：只剩「未分组」一个桶时
+  /// 整张列表不画分组头（那条信息与「所有任务」旁的总数重复，折叠它等于清空整页）。
+  /// 点一下折叠 / 展开，长按进分组排序。
   Widget _buildGroupHeader(TaskGroup group, {Key? key}) {
+    final palette = context.palette;
     final collapsed = _collapsedGroups.contains(group.key);
     final enabledCount = group.tasks.where((task) => task.isEnabled).length;
     final runningCount = group.tasks.where((task) => task.isRunning).length;
     final isUngrouped = group.key.isEmpty;
 
-    return AppCard(
+    return Padding(
       key: key,
-      margin: const EdgeInsets.only(bottom: 6),
-      // 纵向内边距只降到 10：整条分组头就是它自己的点击区，
-      // 再往下压（12→8）会让这个点击目标掉到 44.9dp，低于 48dp 下限。
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      onTap: () {
-        setState(() {
-          if (collapsed) {
-            _collapsedGroups.remove(group.key);
-          } else {
-            _collapsedGroups.add(group.key);
-          }
-        });
-        _persistCollapsedGroups();
-      },
-      onLongPress: () {
-        HapticFeedback.mediumImpact();
-        setState(() => _groupReorderMode = true);
-      },
-      child: Row(
-        children: [
-          Icon(
-            collapsed ? Icons.chevron_right : Icons.expand_more,
-            size: 20,
-            color: AppColors.slate400,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              group.title,
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-            ),
-          ),
-          Text(
-            '${group.tasks.length} 条',
-            style: TextStyle(
-              fontSize: 12,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(width: 10),
-          if (runningCount > 0)
-            _MetaChip(label: '$runningCount 运行中', active: true)
-          else
-            _MetaChip(label: '$enabledCount 已启用', active: enabledCount > 0),
-          const SizedBox(width: 4),
-          _GroupPopupMenu(
-            isUngrouped: isUngrouped,
-            onRename: isUngrouped
-                ? null
-                : () => _renameGroup(group.key, group.tasks),
-            onDelete: isUngrouped
-                ? null
-                : () => _deleteGroup(group.key, group.tasks),
-            onAddTasks: () {
-              final allTasks = ref.read(taskProvider).tasks;
-              final ungrouped = allTasks
-                  .where((t) => (t.groupName ?? '').isEmpty)
-                  .toList();
-              final targetGroup = isUngrouped ? null : group.key;
-              if (targetGroup == null) {
-                _showCreateGroupFromUngrouped(ungrouped);
+      padding: const EdgeInsets.fromLTRB(12, 2, 12, 4),
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppRadius.md),
+          onTap: () {
+            setState(() {
+              if (collapsed) {
+                _collapsedGroups.remove(group.key);
               } else {
-                _addTasksToGroup(targetGroup, ungrouped);
+                _collapsedGroups.add(group.key);
               }
-            },
+            });
+            _persistCollapsedGroups();
+          },
+          onLongPress: () {
+            HapticFeedback.mediumImpact();
+            setState(() => _groupReorderMode = true);
+          },
+          child: ConstrainedBox(
+            // 整条分组头就是它自己的点击区，不低于 44dp
+            constraints: const BoxConstraints(minHeight: AppTapTarget.min),
+            child: Row(
+              children: [
+                const SizedBox(width: 4),
+                Icon(
+                  collapsed
+                      ? Icons.chevron_right_rounded
+                      : Icons.expand_more_rounded,
+                  size: 20,
+                  color: palette.text3,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    group.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppText.body.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: palette.text,
+                    ),
+                  ),
+                ),
+                Text(
+                  '${group.tasks.length} 条',
+                  style: AppText.tabular(
+                    AppText.caption.copyWith(color: palette.text2),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                if (runningCount > 0)
+                  _MetaChip(label: '$runningCount 运行中', active: true)
+                else
+                  _MetaChip(
+                    label: '$enabledCount 已启用',
+                    active: enabledCount > 0,
+                  ),
+                _GroupPopupMenu(
+                  isUngrouped: isUngrouped,
+                  onRename: isUngrouped
+                      ? null
+                      : () => _renameGroup(group.key, group.tasks),
+                  onDelete: isUngrouped
+                      ? null
+                      : () => _deleteGroup(group.key, group.tasks),
+                  onAddTasks: () {
+                    final allTasks = ref.read(taskProvider).tasks;
+                    final ungrouped = allTasks
+                        .where((t) => (t.groupName ?? '').isEmpty)
+                        .toList();
+                    final targetGroup = isUngrouped ? null : group.key;
+                    if (targetGroup == null) {
+                      _showCreateGroupFromUngrouped(ungrouped);
+                    } else {
+                      _addTasksToGroup(targetGroup, ungrouped);
+                    }
+                  },
+                ),
+              ],
+            ),
           ),
-        ],
+        ),
       ),
     );
   }
 
-  /// 单张任务卡。[key] 由摊平行的 `rowKey` 提供（`task-card-<id>`），
+  /// 单个任务行。[key] 由摊平行的 `rowKey` 提供（`task-card-<id>`），
   /// 虚拟化后 Element 会被回收复用，没有这个 key 侧滑展开状态会串到别的任务上。
-  Widget _buildTaskCard(Task task, bool isLight, {Key? key}) {
+  Widget _buildTaskCard(
+    Task task, {
+    required bool isFirst,
+    required bool isLast,
+    required bool isFavorite,
+    Key? key,
+  }) {
     return _TaskCard(
       key: key,
       task: task,
-      isLight: isLight,
+      isFirst: isFirst,
+      isLast: isLast,
+      isFavorite: isFavorite,
+      now: _now,
       selectionMode: _selectionMode,
       selected: _selectedTaskIds.contains(task.id),
-      // 非多选模式下点卡片进任务详情页（issue #20）；原来的「点卡片看最新日志」挪到详情页的「最新日志」行
+      // 非多选模式下点任务行打开详情弹层（v2.0；之前是进详情页，issue #20）
       onTap: () => _selectionMode
           ? _toggleTaskSelection(task.id)
-          : context.push('/tasks/${task.id}/detail', extra: task),
+          : showTaskDetailSheet(context, ref, task),
+      // 多选模式下长按照旧是勾选；平时长按出菜单（加入 / 移出常用、多选）
       onLongPress: () {
-        HapticFeedback.mediumImpact();
-        _toggleTaskSelection(task.id);
+        if (_selectionMode) {
+          HapticFeedback.mediumImpact();
+          _toggleTaskSelection(task.id);
+          return;
+        }
+        _showTaskActions(task);
       },
       onSelectedChanged: () => _toggleTaskSelection(task.id),
-      onRun: () => _runTask(task),
       onStop: () => _stopTask(task),
       onToggleEnabled: () => _toggleTaskEnabled(task),
       onCopy: () => _copyTask(task),
@@ -2154,7 +2499,8 @@ Future<bool> confirmAndDeleteTask(
                   child: FilledButton(
                     onPressed: () => Navigator.pop(dialogContext, true),
                     style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.red500,
+                      backgroundColor: dialogContext.palette.err,
+                      foregroundColor: dialogContext.palette.onStatus,
                     ),
                     child: const Text('删除'),
                   ),
@@ -2228,13 +2574,17 @@ Future<void> openLatestTaskLog(
 
 class _TaskCard extends StatefulWidget {
   final Task task;
-  final bool isLight;
+
+  /// 在所属分组里是不是第一行 / 最后一行：决定圆角画在哪、要不要顶部分隔线。
+  final bool isFirst;
+  final bool isLast;
+  final bool isFavorite;
+  final ValueListenable<DateTime> now;
   final bool selectionMode;
   final bool selected;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
   final VoidCallback onSelectedChanged;
-  final VoidCallback onRun;
   final VoidCallback onStop;
   final VoidCallback onToggleEnabled;
   final VoidCallback onCopy;
@@ -2246,13 +2596,15 @@ class _TaskCard extends StatefulWidget {
   const _TaskCard({
     super.key,
     required this.task,
-    required this.isLight,
+    required this.isFirst,
+    required this.isLast,
+    required this.isFavorite,
+    required this.now,
     required this.selectionMode,
     required this.selected,
     required this.onTap,
     required this.onLongPress,
     required this.onSelectedChanged,
-    required this.onRun,
     required this.onStop,
     required this.onToggleEnabled,
     required this.onCopy,
@@ -2266,6 +2618,12 @@ class _TaskCard extends StatefulWidget {
   State<_TaskCard> createState() => _TaskCardState();
 }
 
+/// 「所有任务」里的一行（v2.0 分组列表样式）：状态色块 + 名称 / 定时与分组 + 右侧下次运行倒计时。
+///
+/// 同一分组的行首尾相接拼成一块白色圆角容器（首行圆上角、末行圆下角、行间缩进分隔线），
+/// 左滑露出 6 个次要操作，这部分手势逻辑与改版前一致。
+/// 改版前每行都有「运行」按钮，口袋里容易误触（方案书现状问题 4），现在运行走详情弹层或常用卡片的「按住运行」；
+/// 运行中的任务仍保留一个「停止」。
 class _TaskCardState extends State<_TaskCard> {
   // 左滑按钮的宽度上限（宽屏时的原尺寸）。
   static const double _actionMaxWidth = 52;
@@ -2274,6 +2632,11 @@ class _TaskCardState extends State<_TaskCard> {
 
   /// 左滑全部展开后，卡片左侧至少还要露出来的宽度：一点都不露，用户看不出这是哪张卡、也没处点「收起」。
   static const double _cardPeekWidth = 16;
+
+  /// 行内边距、前导色块与文字的间距：分隔线缩进按它们算（同 AppGroupedRow）。
+  static const double _hPad = 18;
+  static const double _gap = 14;
+  static const double _tileSize = 36;
 
   double _dragOffset = 0;
   bool _dragging = false;
@@ -2289,91 +2652,29 @@ class _TaskCardState extends State<_TaskCard> {
     }
   }
 
-  // 四态配色：运行中=蓝(info/主色)、排队中=琥珀(warning)、失败=红(danger)、
-  // 已启用=绿(success)、已禁用=灰。改造前「运行中」与「已启用」都取 primary，
-  // 主色换蓝后两者彻底同色，这里把「已启用」还给绿色语义。
-  Color _dotColor() {
-    if (task.isRunning) {
-      return AppColors.info;
+  /// 副标题：定时规则（或任务类型）· 分组 / 标签。
+  String _subtitle() {
+    final String schedule;
+    if (task.taskType == 'cron') {
+      final expressions = task.cronExpressions.isNotEmpty
+          ? task.cronExpressions
+          : [
+              if (task.cronExpression.trim().isNotEmpty)
+                task.cronExpression.trim(),
+            ];
+      schedule = expressions.isEmpty
+          ? '暂无定时规则'
+          : expressions.length > 1
+          ? '${expressions.first} 等 ${expressions.length} 条'
+          : expressions.first;
+    } else {
+      schedule = task.taskType == 'manual' ? '手动触发' : '面板启动时执行';
     }
-    if (task.isQueued) {
-      return AppColors.warning;
-    }
-    // 只有 last_run_status == 1 才是失败。2 是用户主动终止（面板 RunAborted），
-    // 不该亮红点去催人排查一个自己按下的停止键。
-    if (task.lastRunFailed) {
-      return AppColors.danger;
-    }
-    if (task.isEnabled) {
-      return AppColors.success;
-    }
-    return AppColors.slate300;
-  }
-
-  String _statusLabel() => task.statusText;
-
-  Color _statusBg() {
-    if (task.isRunning) {
-      return widget.isLight
-          ? AppColors.infoLight
-          : AppColors.info.withAlpha(25);
-    }
-    if (task.isQueued) {
-      return AppColors.warning.withAlpha(widget.isLight ? 18 : 25);
-    }
-    if (task.isEnabled) {
-      return widget.isLight
-          ? AppColors.successLight
-          : AppColors.success.withAlpha(25);
-    }
-    return widget.isLight ? AppColors.slate100 : AppColors.slate800;
-  }
-
-  Color _statusFg() {
-    if (task.isRunning) {
-      return widget.isLight ? AppColors.infoDark : AppColors.info;
-    }
-    if (task.isQueued) {
-      // 「排队中」是全部徽章里最淡的一个：琥珀色压在自己的 alpha=18 淡底上
-      // 只有 2.04:1。另外三个分支浅色下已经各自用了 *Dark，这里补齐。
-      return (widget.isLight ? AppSurfaces.light : AppSurfaces.dark)
-          .tintFg(AppColors.warning);
-    }
-    if (task.isEnabled) {
-      return widget.isLight ? AppColors.successDark : AppColors.success;
-    }
-    return AppColors.neutral;
-  }
-
-  String _taskTypeLabel() => task.taskTypeText;
-
-  List<String> _scheduleExpressions() {
-    if (task.cronExpressions.isNotEmpty) {
-      return task.cronExpressions;
-    }
-    if (task.cronExpression.trim().isNotEmpty) {
-      return [task.cronExpression.trim()];
-    }
-    return const [];
-  }
-
-  String _bottomText() {
-    if (task.isRunning) {
-      return '点击查看实时日志';
-    }
-    if (task.lastRunFailed && task.lastRunAt != null) {
-      return '上次失败：${formatTimeCn(task.lastRunAt, short: true)}';
-    }
-    if (task.nextRunAt != null) {
-      return '下次运行：${formatTimeCn(task.nextRunAt, short: true)}';
-    }
-    if (task.taskType == 'manual') {
-      return '手动触发';
-    }
-    if (task.taskType == 'startup') {
-      return '面板启动时自动执行';
-    }
-    return '暂无计划';
+    final labels = task.userLabelsForDisplay;
+    final where = task.groupName?.isNotEmpty == true
+        ? task.groupName!
+        : labels.take(2).join('、');
+    return where.isEmpty ? schedule : '$schedule · $where';
   }
 
   void _closeActions() {
@@ -2388,15 +2689,92 @@ class _TaskCardState extends State<_TaskCard> {
     action();
   }
 
+  /// 右侧：运行中 → 「运行中」+ 停止；有下次运行 → 倒计时 + 几点运行；其余 → 类型 / 状态。
+  Widget _buildTrailing(AppPalette palette) {
+    final valueStyle = AppText.tabular(
+      TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: palette.text),
+    );
+    final captionStyle = TextStyle(fontSize: 12, color: palette.text2);
+    if (task.isRunning) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '运行中',
+            style: valueStyle.copyWith(color: palette.accentInk, fontSize: 14),
+          ),
+          if (!widget.selectionMode) ...[
+            const SizedBox(height: 4),
+            _TaskPrimaryActionButton(
+              label: '停止',
+              icon: Icons.stop_rounded,
+              color: palette.err,
+              onTap: widget.onStop,
+            ),
+          ],
+        ],
+      );
+    }
+    final next = task.nextRunAt;
+    if (next != null && task.isSwitchOn) {
+      final local = next.toLocal();
+      final today = DateTime.now();
+      String pad2(int v) => v.toString().padLeft(2, '0');
+      final sameDay =
+          local.year == today.year &&
+          local.month == today.month &&
+          local.day == today.day;
+      final at = sameDay
+          ? '${pad2(local.hour)}:${pad2(local.minute)} 运行'
+          : '${local.month}月${local.day}日 ${pad2(local.hour)}:${pad2(local.minute)}';
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TaskCountdownText(next: next, now: widget.now, style: valueStyle),
+          Text(at, style: AppText.tabular(captionStyle)),
+        ],
+      );
+    }
+    final String value;
+    if (task.taskType == 'manual') {
+      value = '手动';
+    } else if (task.taskType == 'startup') {
+      value = '启动时';
+    } else {
+      value = '—';
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(value, style: valueStyle),
+        Text(
+          task.statusText,
+          style: captionStyle.copyWith(
+            color: task.isQueued ? palette.warnInk : palette.text2,
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final dotColor = _dotColor();
-    final borderColor = widget.isLight
-        ? AppColors.slate200
-        : AppColors.slate800;
-    final labels = task.userLabelsForDisplay;
-    final hasFailure = task.lastRunFailed;
-    final primaryColor = task.isRunning ? AppColors.red500 : AppColors.primary;
+    final palette = context.palette;
+    final (statusIcon, statusColor) = taskStatusVisual(task, palette);
+    const radius = Radius.circular(AppRadius.card);
+    final borderRadius = BorderRadius.vertical(
+      top: widget.isFirst ? radius : Radius.zero,
+      bottom: widget.isLast ? radius : Radius.zero,
+    );
+    // 选中态：在卡片底色上叠一层强调色浅底（叠成不透明色，左滑按钮不会透出来）
+    final rowColor = widget.selected
+        ? Color.alphaBlend(palette.tint(palette.accent), palette.card)
+        : palette.card;
+    final textStart =
+        _hPad + (widget.selectionMode ? 24 + 10 : 0) + _tileSize + _gap;
 
     return PopScope(
       canPop: _dragOffset == 0,
@@ -2408,294 +2786,319 @@ class _TaskCardState extends State<_TaskCard> {
         _closeActions();
       },
       child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // APP #22 评论：左滑加了第 6 个「日志」，6 个 52dp 的按钮在 360dp 屏（卡片约 320dp 宽）上放不下。
-            // 按卡片实际宽度均分：宽屏仍是 52，窄屏收窄但不低于 44dp 命中区；
-            // 拖动上限、吸附阈值都用这同一个总宽，展开距离与按钮总宽始终一致。
-            final actionWidth =
-                ((constraints.maxWidth -
-                            8 -
-                            _actionGap * (_actionCount - 1) -
-                            _cardPeekWidth) /
-                        _actionCount)
-                    .clamp(AppTapTarget.min, _actionMaxWidth)
+        // 同一分组的行首尾相接；一组结束后与下一个分组头隔开
+        margin: EdgeInsets.fromLTRB(
+          AppSpacing.pageHorizontal,
+          0,
+          AppSpacing.pageHorizontal,
+          widget.isLast ? 18 : 0,
+        ),
+        child: ClipRRect(
+          borderRadius: borderRadius,
+          child: ColoredBox(
+            color: palette.card,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // APP #22 评论：左滑 6 个按钮在 360dp 屏（行宽约 320dp）上要放得下。
+                // 按行实际宽度均分：宽屏仍是 52，窄屏收窄但不低于 44dp 命中区；
+                // 拖动上限、吸附阈值都用这同一个总宽，展开距离与按钮总宽始终一致。
+                final actionWidth =
+                    ((constraints.maxWidth -
+                                8 -
+                                _actionGap * (_actionCount - 1) -
+                                _cardPeekWidth) /
+                            _actionCount)
+                        .clamp(AppTapTarget.min, _actionMaxWidth)
+                        .toDouble();
+                final actionsWidth =
+                    actionWidth * _actionCount +
+                    _actionGap * (_actionCount - 1) +
+                    8;
+                // 转屏 / 分屏后总宽可能变小，已展开的偏移不能超出新的总宽。
+                final dragOffset = _dragOffset
+                    .clamp(-actionsWidth, 0.0)
                     .toDouble();
-            final actionsWidth =
-                actionWidth * _actionCount +
-                _actionGap * (_actionCount - 1) +
-                8;
-            // 转屏 / 分屏后总宽可能变小，已展开的偏移不能超出新的总宽。
-            final dragOffset = _dragOffset.clamp(-actionsWidth, 0.0).toDouble();
-            return Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Positioned.fill(
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _TaskSwipeActionButton(
-                          // APP #22 评论：v1.4.2 起点卡片进详情页，看日志多了一层，这里补回一个直达入口。
-                          label: '日志',
-                          icon: Icons.receipt_long_outlined,
-                          color: AppColors.purple500,
-                          width: actionWidth,
-                          onTap: () => _runSwipeAction(widget.onViewLog),
+                return Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Positioned.fill(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _TaskSwipeActionButton(
+                                // APP #22 评论：看日志的直达入口。
+                                label: '日志',
+                                icon: Icons.receipt_long_outlined,
+                                color: palette.purple,
+                                width: actionWidth,
+                                onTap: () =>
+                                    _runSwipeAction(widget.onViewLog),
+                              ),
+                              const SizedBox(width: _actionGap),
+                              _TaskSwipeActionButton(
+                                // 开关位一律看 isSwitchOn，不看 status：禁用任务被手动运行时
+                                // status 是 0.5 / 2，按 isDisabled 判会把它说成开着、按钮写
+                                // 「禁用」（面板 #133 同款）。文案 / 图标 / 颜色三处同一个判断。
+                                label: task.switchActionLabel,
+                                icon: task.isSwitchOn
+                                    ? Icons.pause_circle_outline
+                                    : Icons.play_circle_outline,
+                                // 「启用」是切到已启用态，用成功绿，与行首色块的「已启用」同色。
+                                color: task.isSwitchOn
+                                    ? palette.text2
+                                    : palette.ok,
+                                width: actionWidth,
+                                onTap: () =>
+                                    _runSwipeAction(widget.onToggleEnabled),
+                              ),
+                              const SizedBox(width: _actionGap),
+                              _TaskSwipeActionButton(
+                                label: task.isPinned ? '取消' : '置顶',
+                                icon: task.isPinned
+                                    ? Icons.push_pin_outlined
+                                    : Icons.push_pin,
+                                color: palette.warn,
+                                width: actionWidth,
+                                onTap: () =>
+                                    _runSwipeAction(widget.onTogglePinned),
+                              ),
+                              const SizedBox(width: _actionGap),
+                              _TaskSwipeActionButton(
+                                label: '复制',
+                                icon: Icons.copy_outlined,
+                                color: palette.accent,
+                                width: actionWidth,
+                                onTap: () => _runSwipeAction(widget.onCopy),
+                              ),
+                              const SizedBox(width: _actionGap),
+                              _TaskSwipeActionButton(
+                                label: '编辑',
+                                icon: Icons.edit_outlined,
+                                color: palette.text2,
+                                width: actionWidth,
+                                onTap: () => _runSwipeAction(widget.onEdit),
+                              ),
+                              const SizedBox(width: _actionGap),
+                              _TaskSwipeActionButton(
+                                label: '删除',
+                                icon: Icons.delete_outline,
+                                color: palette.err,
+                                width: actionWidth,
+                                onTap: () => _runSwipeAction(widget.onDelete),
+                              ),
+                            ],
+                          ),
                         ),
-                        const SizedBox(width: _actionGap),
-                        _TaskSwipeActionButton(
-                          // 开关位一律看 isSwitchOn，不看 status：禁用任务被手动运行时
-                          // status 是 0.5 / 2，按 isDisabled 判会把它说成开着、按钮写
-                          // 「禁用」（面板 #133 同款）。文案 / 图标 / 颜色三处同一个判断。
-                          label: task.switchActionLabel,
-                          icon: task.isSwitchOn
-                              ? Icons.pause_circle_outline
-                              : Icons.play_circle_outline,
-                          // 「启用」是把任务切到已启用态，语义是 success 绿，
-                          // 和同卡状态圆点 / 徽章的「已启用」保持同色；
-                          // 原先取 primary，与「运行」类动作撞成同一个蓝。
-                          // 淡底与前景都由 _TaskSwipeActionButton 内部按这个 color
-                          // 推导（含 tintFg），这里改一处即可。
-                          color: task.isSwitchOn
-                              ? AppColors.slate500
-                              : AppColors.success,
-                          width: actionWidth,
-                          onTap: () => _runSwipeAction(widget.onToggleEnabled),
-                        ),
-                        const SizedBox(width: _actionGap),
-                        _TaskSwipeActionButton(
-                          label: task.isPinned ? '取消' : '置顶',
-                          icon: task.isPinned
-                              ? Icons.push_pin_outlined
-                              : Icons.push_pin,
-                          color: AppColors.amber500,
-                          width: actionWidth,
-                          onTap: () => _runSwipeAction(widget.onTogglePinned),
-                        ),
-                        const SizedBox(width: _actionGap),
-                        _TaskSwipeActionButton(
-                          label: '复制',
-                          icon: Icons.copy_outlined,
-                          color: AppColors.blue500,
-                          width: actionWidth,
-                          onTap: () => _runSwipeAction(widget.onCopy),
-                        ),
-                        const SizedBox(width: _actionGap),
-                        _TaskSwipeActionButton(
-                          label: '编辑',
-                          icon: Icons.edit_outlined,
-                          color: AppColors.slate500,
-                          width: actionWidth,
-                          onTap: () => _runSwipeAction(widget.onEdit),
-                        ),
-                        const SizedBox(width: _actionGap),
-                        _TaskSwipeActionButton(
-                          label: '删除',
-                          icon: Icons.delete_outline,
-                          color: AppColors.red500,
-                          width: actionWidth,
-                          onTap: () => _runSwipeAction(widget.onDelete),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                GestureDetector(
-                  onTap: () {
-                    if (_dragOffset != 0) {
-                      _closeActions();
-                      return;
-                    }
-                    widget.onTap();
-                  },
-                  onLongPress: widget.onLongPress,
-                  onHorizontalDragStart: widget.selectionMode
-                      ? null
-                      : (_) => setState(() => _dragging = true),
-                  onHorizontalDragUpdate: widget.selectionMode
-                      ? null
-                      : (details) {
-                          // 左滑露出右侧次要操作；关闭时也限制在卡片内处理，避免和系统返回手势抢动作。
-                          final nextOffset = (_dragOffset + details.delta.dx)
-                              .clamp(-actionsWidth, 0.0)
-                              .toDouble();
-                          if (nextOffset == _dragOffset) {
-                            return;
-                          }
-                          setState(() => _dragOffset = nextOffset);
-                        },
-                  onHorizontalDragCancel: widget.selectionMode
-                      ? null
-                      : () => setState(() => _dragging = false),
-                  onHorizontalDragEnd: widget.selectionMode
-                      ? null
-                      : (_) {
-                          final nextOffset =
-                              _dragOffset.abs() > actionsWidth * 0.42
-                              ? -actionsWidth
-                              : 0.0;
-                          setState(() {
-                            _dragging = false;
-                            _dragOffset = nextOffset;
-                          });
-                          if (nextOffset == -actionsWidth) {
-                            HapticFeedback.selectionClick();
-                          }
-                        },
-                  child: AnimatedContainer(
-                    duration: _dragging
-                        ? Duration.zero
-                        : const Duration(milliseconds: 160),
-                    curve: Curves.easeOutCubic,
-                    transform: Matrix4.translationValues(dragOffset, 0, 0),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: widget.isLight ? Colors.white : AppColors.slate900,
-                      // 列表项卡片。这一处没迁 AppCard（要 AnimatedContainer +
-                      // Matrix4 做左滑），但圆角必须与 AppCard 同档。
-                      borderRadius: BorderRadius.circular(AppRadius.lg),
-                      border: Border.all(
-                        color: widget.selected
-                            ? AppColors.primary
-                            : (hasFailure
-                                  ? AppColors.red500.withAlpha(60)
-                                  : borderColor),
-                        width: widget.selected ? 1.4 : 1,
                       ),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            if (widget.selectionMode) ...[
-                              SizedBox(
-                                width: 24,
-                                height: 24,
-                                child: Checkbox(
-                                  value: widget.selected,
-                                  onChanged: (_) => widget.onSelectedChanged(),
-                                  activeColor: AppColors.primary,
-                                  visualDensity: VisualDensity.compact,
-                                  materialTapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
+                    GestureDetector(
+                      onTap: () {
+                        if (_dragOffset != 0) {
+                          _closeActions();
+                          return;
+                        }
+                        widget.onTap();
+                      },
+                      onLongPress: widget.onLongPress,
+                      onHorizontalDragStart: widget.selectionMode
+                          ? null
+                          : (_) => setState(() => _dragging = true),
+                      onHorizontalDragUpdate: widget.selectionMode
+                          ? null
+                          : (details) {
+                              // 左滑露出右侧次要操作；关闭时也限制在行内处理，避免和系统返回手势抢动作。
+                              final nextOffset =
+                                  (_dragOffset + details.delta.dx)
+                                      .clamp(-actionsWidth, 0.0)
+                                      .toDouble();
+                              if (nextOffset == _dragOffset) {
+                                return;
+                              }
+                              setState(() => _dragOffset = nextOffset);
+                            },
+                      onHorizontalDragCancel: widget.selectionMode
+                          ? null
+                          : () => setState(() => _dragging = false),
+                      onHorizontalDragEnd: widget.selectionMode
+                          ? null
+                          : (_) {
+                              final nextOffset =
+                                  _dragOffset.abs() > actionsWidth * 0.42
+                                  ? -actionsWidth
+                                  : 0.0;
+                              setState(() {
+                                _dragging = false;
+                                _dragOffset = nextOffset;
+                              });
+                              if (nextOffset == -actionsWidth) {
+                                HapticFeedback.selectionClick();
+                              }
+                            },
+                      child: AnimatedContainer(
+                        duration: _dragging
+                            ? Duration.zero
+                            : AppMotion.of(
+                                context,
+                                const Duration(milliseconds: 160),
+                              ),
+                        curve: Curves.easeOutCubic,
+                        transform: Matrix4.translationValues(dragOffset, 0, 0),
+                        decoration: BoxDecoration(
+                          color: rowColor,
+                          // 左滑出去的那一段露出右侧圆角，和按钮区分开
+                          borderRadius: dragOffset < 0
+                              ? BorderRadius.circular(AppRadius.md)
+                              : null,
+                        ),
+                        child: CustomPaint(
+                          // 顶部分隔线：分组首行不画；从文字起点画到最右边（iOS 的缩进分隔线）
+                          foregroundPainter: widget.isFirst
+                              ? null
+                              : _RowSeparatorPainter(
+                                  color: palette.separator,
+                                  start: textStart,
                                 ),
-                              ),
-                              const SizedBox(width: 8),
-                            ],
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: BoxDecoration(
-                                color: dotColor,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                task.name,
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            if (task.isPinned)
-                              const Padding(
-                                padding: EdgeInsets.only(right: 6),
-                                child: Icon(
-                                  Icons.push_pin,
-                                  size: 14,
-                                  color: AppColors.amber500,
-                                ),
-                              ),
-                            Container(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(minHeight: 64),
+                            child: Padding(
                               padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 3,
+                                horizontal: _hPad,
+                                vertical: 12,
                               ),
-                              decoration: BoxDecoration(
-                                color: _statusBg(),
-                                borderRadius: BorderRadius.circular(AppRadius.pill),
-                              ),
-                              child: Text(
-                                _statusLabel(),
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w700,
-                                  color: _statusFg(),
-                                ),
+                              child: Row(
+                                children: [
+                                  if (widget.selectionMode) ...[
+                                    SizedBox(
+                                      width: 24,
+                                      height: 24,
+                                      child: Checkbox(
+                                        value: widget.selected,
+                                        onChanged: (_) =>
+                                            widget.onSelectedChanged(),
+                                        activeColor: palette.accent,
+                                        visualDensity: VisualDensity.compact,
+                                        materialTapTargetSize:
+                                            MaterialTapTargetSize.shrinkWrap,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                  ],
+                                  AppIconTile(
+                                    icon: statusIcon,
+                                    color: statusColor,
+                                    size: _tileSize,
+                                  ),
+                                  const SizedBox(width: _gap),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Flexible(
+                                              child: Text(
+                                                task.name,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: AppText.body.copyWith(
+                                                  fontWeight: FontWeight.w600,
+                                                  color: palette.text,
+                                                ),
+                                              ),
+                                            ),
+                                            if (task.isPinned)
+                                              Padding(
+                                                padding: const EdgeInsets.only(
+                                                  left: 4,
+                                                ),
+                                                child: Icon(
+                                                  Icons.push_pin,
+                                                  size: 14,
+                                                  color: palette.warn,
+                                                ),
+                                              ),
+                                            if (widget.isFavorite)
+                                              Padding(
+                                                padding: const EdgeInsets.only(
+                                                  left: 4,
+                                                ),
+                                                child: Icon(
+                                                  Icons.star_rounded,
+                                                  size: 15,
+                                                  color: palette.warn,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text.rich(
+                                          TextSpan(
+                                            text: _subtitle(),
+                                            children: [
+                                              // 只有 last_run_status == 1 才是失败；2 是用户主动终止，不标红
+                                              if (task.lastRunFailed &&
+                                                  !task.isRunning)
+                                                TextSpan(
+                                                  text: ' · 上次失败',
+                                                  style: TextStyle(
+                                                    color: palette.errInk,
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: AppText.caption.copyWith(
+                                            color: palette.text2,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  _buildTrailing(palette),
+                                ],
                               ),
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        _TaskScheduleSummary(
-                          taskType: task.taskType,
-                          taskTypeLabel: _taskTypeLabel(),
-                          expressions: _scheduleExpressions(),
-                          isLight: widget.isLight,
-                        ),
-                        if (labels.isNotEmpty) ...[
-                          const SizedBox(height: 8),
-                          _TaskSubscriptionSummary(
-                            labels: labels,
-                            isLight: widget.isLight,
                           ),
-                        ],
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                _bottomText(),
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: hasFailure
-                                      ? AppColors.red500
-                                      : (widget.isLight
-                                            ? AppColors.slate400
-                                            : AppColors.slate500),
-                                ),
-                              ),
-                            ),
-                            if (!widget.selectionMode) ...[
-                              _TaskPrimaryActionButton(
-                                label: task.isRunning ? '停止' : '运行',
-                                icon: task.isRunning
-                                    ? Icons.stop_rounded
-                                    : Icons.play_arrow_rounded,
-                                color: primaryColor,
-                                onTap: task.isRunning
-                                    ? widget.onStop
-                                    : widget.onRun,
-                              ),
-                              const SizedBox(width: 8),
-                              const Icon(
-                                Icons.swipe_left_alt_rounded,
-                                size: 18,
-                                color: AppColors.slate400,
-                              ),
-                            ],
-                          ],
                         ),
-                      ],
+                      ),
                     ),
-                  ),
-                ),
-              ],
-            );
-          },
+                  ],
+                );
+              },
+            ),
+          ),
         ),
       ),
     );
   }
+}
+
+/// 任务行顶部的缩进分隔线（同 AppGroupedRow 的画法；那个画笔是私有的）。
+class _RowSeparatorPainter extends CustomPainter {
+  final Color color;
+  final double start;
+
+  const _RowSeparatorPainter({required this.color, required this.start});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 0.5;
+    canvas.drawLine(Offset(start, 0.25), Offset(size.width, 0.25), paint);
+  }
+
+  @override
+  bool shouldRepaint(_RowSeparatorPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.start != start;
 }
 
 class _TaskPrimaryActionButton extends StatelessWidget {
@@ -2713,25 +3116,23 @@ class _TaskPrimaryActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final surfaces = AppSurfaces.of(context);
-    final isLight = surfaces.isLight;
-    // 底色就是同一个 color 的淡底，前景必须加深，否则「运行 / 停止」两个
-    // 主操作按钮在浅色下最高只有 2.6:1。
-    final fg = surfaces.tintFg(color);
+    final palette = context.palette;
+    // 浅底配加深的前景：直接用实色当文字在浅底上对比度不够，取对应的 Ink 档
+    final fg = color == palette.err ? palette.errInk : palette.accentInk;
     return Material(
-      color: color.withAlpha(isLight ? 22 : 34),
+      color: palette.tint(color),
       // 底板与水波纹必须同值，否则波纹会溢出胶囊的两个圆头。
       borderRadius: BorderRadius.circular(AppRadius.pill),
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(AppRadius.pill),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 16, color: fg),
-              const SizedBox(width: 4),
+              Icon(icon, size: 15, color: fg),
+              const SizedBox(width: 3),
               Text(
                 label,
                 style: TextStyle(
@@ -2748,13 +3149,23 @@ class _TaskPrimaryActionButton extends StatelessWidget {
   }
 }
 
+/// 状态色当文字时换成对应的 Ink 档（浅底上对比度够）；不是状态色的（如 text2）原样返回。
+Color _inkOf(AppPalette palette, Color color) {
+  if (color == palette.err) return palette.errInk;
+  if (color == palette.ok) return palette.okInk;
+  if (color == palette.warn) return palette.warnInk;
+  if (color == palette.purple) return palette.purpleInk;
+  if (color == palette.accent) return palette.accentInk;
+  return color;
+}
+
 class _TaskSwipeActionButton extends StatelessWidget {
   final String label;
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
 
-  /// 由卡片按实际宽度算出来（APP #22 评论：6 个按钮要在 360dp 屏放得下）。
+  /// 由行宽算出来（APP #22 评论：6 个按钮要在 360dp 屏放得下）。
   final double width;
 
   const _TaskSwipeActionButton({
@@ -2767,14 +3178,13 @@ class _TaskSwipeActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final surfaces = AppSurfaces.of(context);
-    final isLight = surfaces.isLight;
-    // 侧滑按钮的 10px 文字压在同色淡底上，是全库最小的那一档文字。
-    final fg = surfaces.tintFg(color);
+    final palette = context.palette;
+    // 侧滑按钮的 10px 文字压在同色浅底上，是全库最小的那一档文字，必须用 Ink 档。
+    final fg = _inkOf(palette, color);
     return SizedBox(
       width: width,
       child: Material(
-        color: color.withAlpha(isLight ? 22 : 34),
+        color: palette.tint(color),
         // 左滑露出的操作按钮，走按钮档；底板与水波纹必须同值。
         borderRadius: BorderRadius.circular(AppRadius.md),
         child: InkWell(
@@ -2803,235 +3213,6 @@ class _TaskSwipeActionButton extends StatelessWidget {
   }
 }
 
-class _TaskScheduleSummary extends StatelessWidget {
-  final String taskType;
-  final String taskTypeLabel;
-  final List<String> expressions;
-  final bool isLight;
-
-  const _TaskScheduleSummary({
-    required this.taskType,
-    required this.taskTypeLabel,
-    required this.expressions,
-    required this.isLight,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isCron = taskType == 'cron';
-    final cleanExpressions = expressions
-        .map((item) => item.trim())
-        .where((item) => item.isNotEmpty)
-        .toList();
-    final title = isCron
-        ? (cleanExpressions.length > 1
-              ? 'Cron 定时 · ${cleanExpressions.length} 条'
-              : 'Cron 定时')
-        : taskTypeLabel;
-    final value = isCron
-        ? (cleanExpressions.isEmpty ? '暂无定时规则' : cleanExpressions.first)
-        : (taskType == 'manual' ? '手动触发运行' : '面板启动时自动执行');
-    final icon = isCron
-        ? Icons.schedule_rounded
-        : taskType == 'manual'
-        ? Icons.touch_app_outlined
-        : Icons.power_settings_new_rounded;
-    final color = isCron
-        ? AppColors.primary
-        : taskType == 'manual'
-        ? AppColors.blue500
-        : AppColors.amber500;
-
-    // 这里原本是「带边框的盒子套在带边框的卡片里」：任务卡自己已经有 1px 边框，
-    // 里面再套一层 slate50 底 + slate200 边 + 12 圆角，只为了圈住两行排期文字。
-    // 去掉这层框之后，左侧 28dp 的着色图标块仍然是足够强的分区锚点，
-    // 「标题 + 值」的两级排版也没变，信息一条没少；卡片纵向省下 20dp
-    //（上下各 9dp 内边距 + 2dp 边框），并且图标块从此与上下两行左对齐。
-    return SizedBox(
-      width: double.infinity,
-      child: Row(
-        children: [
-          Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              color: color.withAlpha(isLight ? 22 : 36),
-              // 图标底板一律走 sm，不跟外层任务卡（lg）同档。
-              borderRadius: BorderRadius.circular(AppRadius.sm),
-            ),
-            child: Icon(icon, size: 16, color: color),
-          ),
-          const SizedBox(width: 9),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: isLight ? AppColors.slate600 : AppColors.slate300,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    height: 1.2,
-                    fontWeight: FontWeight.w600,
-                    fontFamily: isCron ? 'monospace' : null,
-                    color: isLight ? AppColors.slate800 : AppColors.slate100,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (cleanExpressions.length > 1) ...[
-            const SizedBox(width: 8),
-            _TaskMiniCountChip(
-              label: '+${cleanExpressions.length - 1}',
-              isLight: isLight,
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _TaskSubscriptionSummary extends StatelessWidget {
-  final List<String> labels;
-  final bool isLight;
-
-  const _TaskSubscriptionSummary({required this.labels, required this.isLight});
-
-  @override
-  Widget build(BuildContext context) {
-    final visibleLabels = labels.take(3).toList();
-
-    // 与上方排期块同一处理：任务卡自身已有 1px 边框，这里原本再套一层
-    // 「白底 + slate200 边」，等于把边框画在同色底上 —— 浅色是白压白、
-    // 深色是 slate900 压 slate900，全靠一条发丝线撑出一个盒子。
-    // 也不能改走 subtle 淡底：里面的订阅标签本身就是 slate50 / slate800 底，
-    // 外层一旦用同一档淡底，标签就会和外层糊成一片，等于把「同色套同色」
-    // 往下挪一层。直接去框，让标签自己完成分组，纵向再省 18dp
-    //（上下各 8dp 内边距 + 2dp 边框），并与排期块左对齐。
-    return SizedBox(
-      width: double.infinity,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            height: 24,
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            decoration: BoxDecoration(
-              color: AppColors.blue500.withAlpha(isLight ? 18 : 30),
-              borderRadius: BorderRadius.circular(AppRadius.pill),
-            ),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.sync_rounded, size: 13, color: AppColors.blue500),
-                SizedBox(width: 4),
-                Text(
-                  '订阅',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.blue500,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                ...visibleLabels.map(
-                  (label) =>
-                      _TaskSubscriptionChip(label: label, isLight: isLight),
-                ),
-                if (labels.length > visibleLabels.length)
-                  _TaskMiniCountChip(
-                    label: '+${labels.length - visibleLabels.length}',
-                    isLight: isLight,
-                  ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TaskSubscriptionChip extends StatelessWidget {
-  final String label;
-  final bool isLight;
-
-  const _TaskSubscriptionChip({required this.label, required this.isLight});
-
-  @override
-  Widget build(BuildContext context) {
-    // 订阅标签只做轻量展示，不再做成大胶囊，避免任务卡片显得拥挤。
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-      decoration: BoxDecoration(
-        color: isLight ? AppColors.slate50 : AppColors.slate800,
-        borderRadius: BorderRadius.circular(AppRadius.pill),
-        border: Border.all(
-          color: isLight ? AppColors.slate200 : AppColors.slate700,
-        ),
-      ),
-      child: Text(
-        label,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-          color: isLight ? AppColors.slate600 : AppColors.slate300,
-        ),
-      ),
-    );
-  }
-}
-
-class _TaskMiniCountChip extends StatelessWidget {
-  final String label;
-  final bool isLight;
-
-  const _TaskMiniCountChip({required this.label, required this.isLight});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: isLight ? AppColors.slate100 : AppColors.slate800,
-        borderRadius: BorderRadius.circular(AppRadius.pill),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.w800,
-          color: isLight ? AppColors.slate500 : AppColors.slate400,
-        ),
-      ),
-    );
-  }
-}
-
 class _MetaChip extends StatelessWidget {
   final String label;
   final bool active;
@@ -3040,36 +3221,20 @@ class _MetaChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
-    final background = active
-        ? (isLight ? AppColors.slate50 : AppColors.slate800)
-        : (isLight ? AppColors.slate100 : AppColors.slate900);
-    final foreground = active
-        ? (isLight ? AppColors.slate700 : AppColors.slate300)
-        : AppColors.slate400;
-
+    final palette = context.palette;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: background,
+        color: active ? palette.card : palette.fill,
         borderRadius: BorderRadius.circular(AppRadius.pill),
-        border: Border.all(
-          color: isLight ? AppColors.slate200 : AppColors.slate800,
-        ),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: foreground,
-            ),
-          ),
-        ],
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: active ? palette.text : palette.text3,
+        ),
       ),
     );
   }
@@ -3421,9 +3586,12 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
       _logBackgroundColor,
       themeBrightness: Theme.of(context).brightness,
     );
-    final chipBackground = logTheme.brightness == Brightness.dark
-        ? AppColors.slate800
-        : AppColors.slate100;
+    // 日志底色是用户自选的，跟 APP 明暗无关：按日志底色的明暗取对应那套色板的灰
+    final chipBackground =
+        (logTheme.brightness == Brightness.dark
+                ? AppPalette.dark
+                : AppPalette.light)
+            .fill;
 
     return Scaffold(
       backgroundColor: logTheme.background,
@@ -3480,8 +3648,8 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
       body: Container(
         color: logTheme.background,
         child: _loading && _log.isEmpty
-            ? const Center(
-                child: CircularProgressIndicator(color: AppColors.primary),
+            ? Center(
+                child: CircularProgressIndicator(color: context.palette.accent),
               )
             : _log.isEmpty
             ? Center(
@@ -3527,7 +3695,7 @@ class _GroupPopupMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return PopupMenuButton<String>(
-      icon: Icon(Icons.more_vert, size: 18, color: AppColors.slate400),
+      icon: Icon(Icons.more_vert, size: 18, color: context.palette.text3),
       padding: EdgeInsets.zero,
       // 这里原本是 `const BoxConstraints()` —— 空约束会把 IconButton 默认的
       // 48×48 直接取消掉，实际命中区退化成那个 18dp 图标，是全库最小的几处之一。

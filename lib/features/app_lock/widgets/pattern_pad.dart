@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 
 class PatternPad extends StatelessWidget {
@@ -23,8 +22,7 @@ class PatternPad extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
+    final palette = context.palette;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -33,17 +31,17 @@ class PatternPad extends StatelessWidget {
         if (title != null)
           Text(
             title!,
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+            style: AppText.body.copyWith(
+              fontWeight: FontWeight.w700,
+              color: palette.text,
+            ),
             textAlign: TextAlign.center,
           ),
         if (subtitle != null) ...[
           const SizedBox(height: 4),
           Text(
             subtitle!,
-            style: TextStyle(
-              fontSize: 12,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
+            style: AppText.caption.copyWith(color: palette.text2),
             textAlign: TextAlign.center,
           ),
         ],
@@ -70,23 +68,25 @@ class PatternPad extends StatelessWidget {
                 child: Container(
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
+                    // 未选中：灰色填充点；选中：强调色浅底 + 强调色描边
                     color: isSelected
-                        ? AppColors.primary.withAlpha(isLight ? 26 : 48)
-                        : (isLight ? AppColors.slate50 : AppColors.slate900),
+                        ? palette.tint(palette.accent)
+                        : palette.fill,
                     border: Border.all(
-                      color: isSelected
-                          ? AppColors.primary
-                          : (isLight ? AppColors.slate300 : AppColors.slate700),
+                      color: isSelected ? palette.accent : palette.separator,
                       width: isSelected ? 2 : 1.2,
                     ),
                   ),
                   child: Center(
                     child: Text(
                       isSelected ? '${selectedIndex + 1}' : '',
-                      style: const TextStyle(
-                        color: AppColors.primary,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
+                      // 浅底上的数字是「字」，用墨色
+                      style: AppText.tabular(
+                        TextStyle(
+                          color: palette.accentInk,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                   ),

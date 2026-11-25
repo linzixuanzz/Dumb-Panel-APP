@@ -12,7 +12,6 @@ import 'package:re_editor/re_editor.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/storage/secure_storage.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/ansi_text.dart';
@@ -20,6 +19,8 @@ import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_large_title_header.dart';
+import '../../../shared/widgets/app_pill_button.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
 import '../../tasks/views/task_form_page.dart';
@@ -757,7 +758,9 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(scriptProvider);
-    final isLight = Theme.of(context).brightness == Brightness.light;
+    final p = context.palette;
+    // 二级页面没有悬浮底栏，这里读到的是系统安全区 + 16。
+    final listBottom = AppSpacing.listBottomOf(context);
     // 先按最新的整棵树校一遍展开记录（注意传的是 state.tree 而不是下面那棵搜索过滤后的树），
     // 再决定这一帧画什么。
     _syncExpandedDirs(state.tree);
@@ -768,89 +771,70 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
         padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12),
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  const AppBackButton(),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      '脚本管理',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
+            // 返回头 + 大标题（v2.0 次级页面统一写法）
+            AppLargeTitleHeader(
+              title: '脚本管理',
+              leading: const AppBackButton(),
+              padding: const EdgeInsets.fromLTRB(8, 0, 16, 16),
+              actions: [
+                GestureDetector(
+                  onTap: () => ref.read(scriptProvider.notifier).loadTree(),
+                  child: const Padding(
+                    padding: EdgeInsets.all(4),
+                    child: Icon(Icons.refresh, size: 22),
+                  ),
+                ),
+                PopupMenuButton<_ScriptAction>(
+                  onSelected: (action) => _handleAction(action, state),
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(
+                      value: _ScriptAction.upload,
+                      child: ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.upload_file_outlined, size: 20),
+                        title: Text('上传脚本'),
                       ),
                     ),
-                  ),
-                  GestureDetector(
-                    onTap: () => ref.read(scriptProvider.notifier).loadTree(),
-                    child: const Padding(
-                      padding: EdgeInsets.all(4),
-                      child: Icon(Icons.refresh, size: 22),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  PopupMenuButton<_ScriptAction>(
-                    onSelected: (action) => _handleAction(action, state),
-                    itemBuilder: (context) => const [
-                      PopupMenuItem(
-                        value: _ScriptAction.upload,
-                        child: ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: Icon(Icons.upload_file_outlined, size: 20),
-                          title: Text('上传脚本'),
-                        ),
-                      ),
-                      PopupMenuItem(
-                        value: _ScriptAction.createFile,
-                        child: ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: Icon(Icons.note_add_outlined, size: 20),
-                          title: Text('新建脚本'),
-                        ),
-                      ),
-                      PopupMenuItem(
-                        value: _ScriptAction.createDirectory,
-                        child: ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: Icon(
-                            Icons.create_new_folder_outlined,
-                            size: 20,
-                          ),
-                          title: Text('新建文件夹'),
-                        ),
-                      ),
-                    ],
-                    child: Container(
-                      width: 32,
-                      height: 32,
-                      decoration: const BoxDecoration(
-                        color: AppColors.primary,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.add,
-                        size: 20,
-                        color: Colors.white,
+                    PopupMenuItem(
+                      value: _ScriptAction.createFile,
+                      child: ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.note_add_outlined, size: 20),
+                        title: Text('新建脚本'),
                       ),
                     ),
+                    PopupMenuItem(
+                      value: _ScriptAction.createDirectory,
+                      child: ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(
+                          Icons.create_new_folder_outlined,
+                          size: 20,
+                        ),
+                        title: Text('新建文件夹'),
+                      ),
+                    ),
+                  ],
+                  // v2.0：主操作一律黑色圆（深色模式白色），与 AppCircleAddButton 同一对颜色。
+                  child: Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: p.primaryBtnBg,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(Icons.add, size: 20, color: p.primaryBtnFg),
+                    ),
                   ),
-                ],
-              ),
+              ],
             ),
-            const SizedBox(height: 16),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: TextField(
                 controller: _searchController,
                 decoration: InputDecoration(
                   hintText: '搜索脚本名称或路径...',
-                  prefixIcon: const Icon(
-                    Icons.search,
-                    size: 18,
-                    color: AppColors.slate400,
-                  ),
+                  prefixIcon: Icon(Icons.search, size: 18, color: p.text3),
                   suffixIcon: _searchController.text.trim().isEmpty
                       ? null
                       : IconButton(
@@ -871,15 +855,11 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
             const SizedBox(height: 12),
             Expanded(
               child: state.loading
-                  ? const Center(
-                      child: CircularProgressIndicator(
-                        color: AppColors.primary,
-                      ),
-                    )
+                  ? Center(child: CircularProgressIndicator(color: p.accent))
                   // 拿不到数据和真的没有脚本是两回事，必须先判 error。
                   : state.error != null && state.tree.isEmpty
                   ? RefreshIndicator(
-                      color: AppColors.primary,
+                      color: p.accent,
                       onRefresh: () =>
                           ref.read(scriptProvider.notifier).loadTree(),
                       child: ListView(
@@ -897,16 +877,15 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                   : visibleTree.isEmpty
                   ? _buildEmpty(state)
                   : RefreshIndicator(
-                      color: AppColors.primary,
+                      color: p.accent,
                       onRefresh: () =>
                           ref.read(scriptProvider.notifier).loadTree(),
                       child: ListView(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                        padding: EdgeInsets.fromLTRB(20, 0, 20, listBottom),
                         children: visibleTree
                             .map(
                               (file) => _FileTreeItem(
                                 file: file,
-                                isLight: isLight,
                                 depth: 0,
                                 expandedDirs: _expandedDirs,
                                 onTap: (path) => _openScript(path),
@@ -926,6 +905,7 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
   }
 
   Widget _buildEmpty(ScriptState state) {
+    final p = context.palette;
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -933,10 +913,10 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
           Icon(
             Icons.folder_off,
             size: 56,
-            color: AppColors.slate400.withAlpha(120),
+            color: p.text3,
           ),
           const SizedBox(height: 12),
-          const Text('暂无脚本', style: TextStyle(color: AppColors.slate400)),
+          Text('暂无脚本', style: TextStyle(color: p.text2)),
           const SizedBox(height: 16),
           Wrap(
             spacing: 8,
@@ -1091,13 +1071,13 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                         Navigator.pop(sheetContext, _ScriptEntryAction.rename),
                   ),
                   ListTile(
-                    leading: const Icon(
+                    leading: Icon(
                       Icons.delete_outline,
-                      color: AppColors.red500,
+                      color: sheetContext.palette.err,
                     ),
-                    title: const Text(
+                    title: Text(
                       '删除',
-                      style: TextStyle(color: AppColors.red500),
+                      style: TextStyle(color: sheetContext.palette.errInk),
                     ),
                     onTap: () =>
                         Navigator.pop(sheetContext, _ScriptEntryAction.delete),
@@ -1197,9 +1177,9 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
               if (parent.isNotEmpty) ...[
                 Text(
                   '所在目录：$parent',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
-                    color: AppColors.slate500,
+                    color: context.palette.text2,
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -1264,10 +1244,11 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
             onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('取消'),
           ),
-          FilledButton(
+          AppPillButton(
+            label: '删除',
+            variant: AppPillVariant.danger,
+            height: 40,
             onPressed: () => Navigator.pop(dialogContext, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.red500),
-            child: const Text('删除'),
           ),
         ],
       ),
@@ -1336,9 +1317,9 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
               children: [
                 Text(
                   '当前路径：${file.path}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
-                    color: AppColors.slate500,
+                    color: context.palette.text2,
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -1411,9 +1392,9 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                 children: [
                   Text(
                     '来源：${file.path}',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12,
-                      color: AppColors.slate500,
+                      color: context.palette.text2,
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -1736,12 +1717,9 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
                       // 列表自带滚动内边距，卡片不再补一层。
                       padding: EdgeInsets.zero,
                       radius: AppRadius.md,
-                      // 弹窗里的次级块：浅色是 slate50、深色是 slate900，
-                      // 两边都无描边，必须显式传入。
+                      // 弹窗里的次级块：卡片里再嵌一层的实色浅底，无描边，必须显式传入。
                       bordered: false,
-                      color: Theme.of(context).brightness == Brightness.light
-                          ? AppColors.slate50
-                          : AppColors.slate900,
+                      color: context.palette.card2,
                       child: ListView.separated(
                         shrinkWrap: true,
                         padding: const EdgeInsets.symmetric(
@@ -1830,7 +1808,6 @@ class _ScriptListPageState extends ConsumerState<ScriptListPage> {
 /// 清零 —— issue #9「上传一个脚本就折叠回主目录」就是这么来的。
 class _FileTreeItem extends StatelessWidget {
   final ScriptFile file;
-  final bool isLight;
   final int depth;
 
   /// 页面级的展开记录。子节点要靠它解析自己的展开状态，所以整份传下去，
@@ -1842,7 +1819,6 @@ class _FileTreeItem extends StatelessWidget {
 
   const _FileTreeItem({
     required this.file,
-    required this.isLight,
     required this.depth,
     required this.expandedDirs,
     required this.onTap,
@@ -1855,6 +1831,7 @@ class _FileTreeItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final indent = depth * 16.0;
+    final p = context.palette;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1879,9 +1856,8 @@ class _FileTreeItem extends StatelessWidget {
             bottom: 6,
           ),
           radius: AppRadius.sm,
-          // 文件树是嵌在卡片里的密集列表，浅色描边比常规卡片淡一档
-          // （slate100 而不是 slate200），必须显式传入。
-          borderColor: isLight ? AppColors.slate100 : AppColors.slate800,
+          // 文件树是密集列表，用发丝分隔线色做描边，必须显式传入。
+          borderColor: p.separator,
           child: Row(
             children: [
               Icon(
@@ -1889,9 +1865,7 @@ class _FileTreeItem extends StatelessWidget {
                     ? (_expanded ? Icons.folder_open : Icons.folder)
                     : Icons.description_outlined,
                 size: 18,
-                color: file.isDirectory
-                    ? AppColors.amber500
-                    : AppColors.slate400,
+                color: file.isDirectory ? p.warn : p.text3,
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -1911,7 +1885,7 @@ class _FileTreeItem extends StatelessWidget {
                 Icon(
                   _expanded ? Icons.expand_less : Icons.expand_more,
                   size: 18,
-                  color: AppColors.slate400,
+                  color: p.text3,
                 ),
               IconButton(
                 onPressed: () => onAction(file),
@@ -1919,7 +1893,7 @@ class _FileTreeItem extends StatelessWidget {
                 // compact 是 -2 档，把 48 压到 40。取 -1 档的 44：过线，
                 // 又不像直接删掉那样让每个文件行都长高 8dp。
                 visualDensity: const VisualDensity(horizontal: -1, vertical: -1),
-                color: AppColors.slate400,
+                color: p.text3,
                 splashRadius: 18,
               ),
             ],
@@ -1929,7 +1903,6 @@ class _FileTreeItem extends StatelessWidget {
           ...file.children.map(
             (child) => _FileTreeItem(
               file: child,
-              isLight: isLight,
               depth: depth + 1,
               expandedDirs: expandedDirs,
               onTap: onTap,
@@ -2398,6 +2371,8 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
     // 因为那条路径不预加载，窗口就是一次 GET 的时长。
     final editable = !loadingContent && !isBinary && contentError == null;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    // 编辑器兜底底色属于代码编辑器的功能色（与面板 Web 的编辑器一致），
+    // 不跟界面令牌走，保持原值。
     final editorBackground =
         _editorBackgroundColor ??
         (isDark ? const Color(0xFF1E1E1E) : Colors.white);
@@ -2492,8 +2467,8 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
         ],
       ),
       body: loadingContent
-          ? const Center(
-              child: CircularProgressIndicator(color: AppColors.primary),
+          ? Center(
+              child: CircularProgressIndicator(color: context.palette.accent),
             )
           : contentError != null
           ? SingleChildScrollView(
@@ -2622,9 +2597,15 @@ class _ScriptVersionSheetState extends ConsumerState<_ScriptVersionSheet> {
             onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('取消'),
           ),
+          // 回滚是「警告」语义：警告色淡底 + 墨色字（与危险胶囊同一种做法）。
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.amber500),
+            style: FilledButton.styleFrom(
+              backgroundColor: dialogContext.palette.tint(
+                dialogContext.palette.warn,
+              ),
+              foregroundColor: dialogContext.palette.warnInk,
+            ),
             child: const Text('回滚'),
           ),
         ],
@@ -2681,16 +2662,16 @@ class _ScriptVersionSheetState extends ConsumerState<_ScriptVersionSheet> {
               const SizedBox(height: 16),
               Expanded(
                 child: _loading
-                    ? const Center(
+                    ? Center(
                         child: CircularProgressIndicator(
-                          color: AppColors.primary,
+                          color: context.palette.accent,
                         ),
                       )
                     : _versions.isEmpty
-                    ? const Center(
+                    ? Center(
                         child: Text(
                           '暂无版本历史',
-                          style: TextStyle(color: AppColors.slate400),
+                          style: TextStyle(color: context.palette.text2),
                         ),
                       )
                     : ListView.separated(
@@ -2715,7 +2696,9 @@ class _ScriptVersionSheetState extends ConsumerState<_ScriptVersionSheet> {
                                         vertical: 4,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: AppColors.primary.withAlpha(18),
+                                        color: context.palette.tint(
+                                          context.palette.accent,
+                                        ),
                                         borderRadius: BorderRadius.circular(
                                           AppRadius.pill,
                                         ),
@@ -2723,10 +2706,8 @@ class _ScriptVersionSheetState extends ConsumerState<_ScriptVersionSheet> {
                                       child: Text(
                                         'v${version.version}',
                                         style: TextStyle(
-                                          // 底色是 primary 的 alpha=18 淡底。
-                                          color: context.surfaces.tintFg(
-                                            AppColors.primary,
-                                          ),
+                                          // 淡底上的字用墨色。
+                                          color: context.palette.accentInk,
                                           fontWeight: FontWeight.w700,
                                         ),
                                       ),
@@ -3088,7 +3069,7 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
                             await Clipboard.setData(
                               ClipboardData(text: _logs.join('\n')),
                             );
-                            if (!mounted) return;
+                            if (!context.mounted) return;
                             AppSnack.success(context, '已复制调试日志');
                           },
                     icon: const Icon(Icons.copy_all_outlined),
@@ -3121,9 +3102,9 @@ class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
                   bordered: false,
                   color: logTheme.background,
                   child: _loading
-                      ? const Center(
+                      ? Center(
                           child: CircularProgressIndicator(
-                            color: AppColors.primary,
+                            color: context.palette.accent,
                           ),
                         )
                       : _logs.isEmpty

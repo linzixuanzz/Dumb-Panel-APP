@@ -8,17 +8,23 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/env_var.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
-import '../../../shared/widgets/app_circle_add_button.dart';
 import '../../../shared/widgets/app_buttons.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_glass_circle_button.dart';
+import '../../../shared/widgets/app_icon_tile.dart';
+import '../../../shared/widgets/app_large_title_header.dart';
 import '../../../shared/widgets/app_notice.dart';
+import '../../../shared/widgets/app_pill_button.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
+// 应用锁只 import 不改（归 B6）：设备做不了系统验证时，按应用锁的密码 / 图案兜底。
+import '../../app_lock/providers/app_lock_provider.dart';
+import '../../app_lock/widgets/pattern_pad.dart';
+import '../utils/env_secret.dart';
 import '../utils/env_transfer.dart';
 
 final envListProvider = StateNotifierProvider<EnvListNotifier, EnvListState>((
@@ -550,6 +556,113 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
   /// 拖拽途中列表被重拉成另一种顺序时，松手给的下标就对不上了，靠它核对（APP #16 ① 的 G5）。
   int? _draggingEnvId;
 
+  /// 已经点「查看」揭开的敏感变量（A6）。只活在这一次页面停留里：
+  /// 下拉刷新时收回（同网页「一刷新就全部收回遮蔽」），离开页面 State 销毁也就没了。
+  final Set<int> _revealedIds = <int>{};
+
+  /// 最近一次验证通过的时间。60 秒内再查看 / 复制不再问（A6）。
+  DateTime? _revealAuthAt;
+
+  /// 系统验证弹窗还开着：连点两下眼睛时不叠第二个验证。
+  bool _revealAuthBusy = false;
+
+  static const Duration _revealAuthWindow = Duration(seconds: 60);
+
+  /// 查看 / 复制敏感值前的验证（A6）。通过返回 true。
+  ///
+  /// 0. 应用锁没开启 → 直接放行（用户决定：开了应用锁才验证；值照样默认遮住，点「查看」就显示）；
+  /// 1. 60 秒内验证过 → 直接放行；
+  /// 2. 先走系统验证：指纹 / 面容 / 设备密码（[envDeviceAuthProvider]）；
+  /// 3. 设备做不了系统验证（没设锁屏密码、没硬件）时，照应用锁现有的降级策略：
+  ///    应用锁设了密码或图案 → 用它验证（与锁屏共用输错冷却）；
+  ///    应用锁也没有任何验证方式 → 放行。应用锁自己的规则就是「没有验证方式就不上锁」，
+  ///    这台设备上本来就没有能拿来验证的东西，硬拦只会让用户永远看不到自己的变量。
+  Future<bool> _ensureRevealAuth() async {
+    // 应用锁没开（含开了但一个验证方式都没有，见 AppLockState.isEnabled）：不验证。
+    // 应用锁状态由根部的 AppLockGate 在启动时读好，这里只读不改。
+    if (!ref.read(appLockProvider).isEnabled) {
+      return true;
+    }
+    final last = _revealAuthAt;
+    if (last != null && DateTime.now().difference(last) < _revealAuthWindow) {
+      return true;
+    }
+    if (_revealAuthBusy) {
+      return false;
+    }
+    _revealAuthBusy = true;
+    try {
+      final result = await ref.read(envDeviceAuthProvider)();
+      if (!mounted) {
+        return false;
+      }
+      var passed = false;
+      switch (result.outcome) {
+        case EnvAuthOutcome.passed:
+          passed = true;
+          break;
+        case EnvAuthOutcome.failed:
+          if (result.message != null) {
+            AppSnack.warn(context, result.message!);
+          }
+          break;
+        case EnvAuthOutcome.unavailable:
+          final lock = ref.read(appLockProvider);
+          if (lock.hasPassword || lock.hasPattern) {
+            passed = await _verifyWithAppLock(lock);
+          } else {
+            passed = true;
+          }
+          break;
+      }
+      if (passed) {
+        _revealAuthAt = DateTime.now();
+      }
+      return passed;
+    } finally {
+      _revealAuthBusy = false;
+    }
+  }
+
+  /// 设备做不了系统验证时的兜底：用应用锁的密码（优先）或图案验证一次，见 [_AppLockVerifyDialog]。
+  Future<bool> _verifyWithAppLock(AppLockState lock) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => _AppLockVerifyDialog(
+        usePassword: lock.hasPassword,
+        controller: ref.read(appLockProvider.notifier),
+      ),
+    );
+    return ok == true;
+  }
+
+  /// 列表行 / 详情弹层的「查看」：验证通过后揭开这一条。
+  Future<bool> _revealEnv(EnvVar env) async {
+    if (!await _ensureRevealAuth() || !mounted) {
+      return false;
+    }
+    setState(() => _revealedIds.add(env.id));
+    return true;
+  }
+
+  /// 复制变量值：敏感值先验证（60 秒内验证过就不再问），普通值直接复制。
+  /// [toastContext] 传弹层自己的 context 时提示落在弹层上方。
+  Future<void> _copyEnvValue(
+    EnvVar env,
+    String value, {
+    BuildContext? toastContext,
+  }) async {
+    if (shouldMaskEnvValue(env.name, env.value) && !await _ensureRevealAuth()) {
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: value));
+    final target = toastContext ?? context;
+    if (!target.mounted) {
+      return;
+    }
+    AppSnack.success(target, '已复制值');
+  }
+
   Widget _buildGroupAutocomplete({
     required TextEditingController controller,
     required List<String> options,
@@ -592,10 +705,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
             // 注意 shape 与 borderRadius 互斥（同时传会在运行时 assert），
             // 所以原来那行 borderRadius 已删除，圆角改由 shape 承载。
             elevation: 0,
-            color: context.surfaces.card,
+            color: context.palette.card,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(AppRadius.md),
-              side: BorderSide(color: context.surfaces.cardBorder),
+              side: BorderSide(color: context.palette.separator),
             ),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 220, maxWidth: 280),
@@ -725,7 +838,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                   child: FilledButton(
                     onPressed: () => Navigator.of(dialogCtx).pop(true),
                     style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.red500,
+                      backgroundColor: dialogCtx.palette.err,
                     ),
                     // 按钮上写明实际删几个，免得用户以为选中的全删了。
                     child: Text(skipped > 0 ? '删除 $count 个' : '删除'),
@@ -774,7 +887,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                   child: FilledButton(
                     onPressed: () => Navigator.of(dialogCtx).pop(true),
                     style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.red500,
+                      backgroundColor: dialogCtx.palette.err,
                     ),
                     child: Text(important ? '仍要删除' : '删除'),
                   ),
@@ -1075,68 +1188,82 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     if (_selectionMode) {
       _setSelectionMode(false);
     }
+    // 刷新就把揭开的敏感值全部收回（同网页 #127）；60 秒验证窗口不动，再点眼睛不用重新验证。
+    if (_revealedIds.isNotEmpty) {
+      setState(_revealedIds.clear);
+    }
     await ref.read(envListProvider.notifier).load();
   }
 
-  /// 导入 / 导出入口。
+  /// 大标题右边的「⋯」菜单：批量、排序、导出、导入（v2.0 换装前它们是页头的一排胶囊）。
   ///
-  /// 做成弹出菜单而不是再加两个 chip：页头这一行在 360dp 宽的机器上已经排到边，
-  /// 多两个 56dp 的 chip 会直接 RenderFlex overflow。
-  Widget _buildTransferMenu() {
-    final surfaces = context.surfaces;
-    return PopupMenuButton<String>(
-      tooltip: '导入导出',
-      onSelected: (value) {
-        if (value == 'export') {
-          _showExportSheet();
-          return;
-        }
-        _showImportSheet();
-      },
-      itemBuilder: (_) => const [
-        PopupMenuItem<String>(
-          value: 'export',
-          child: Row(
-            children: [
-              Icon(Icons.ios_share, size: 18, color: AppColors.slate400),
-              SizedBox(width: AppSpacing.sm),
-              Text('导出变量'),
-            ],
-          ),
+  /// 页头只留「⋯」和「＋」两个圆形玻璃按钮：360dp 屏上四个胶囊放不下（APP #21），
+  /// 收进菜单后窄屏、大字号都不会把「＋」挤出屏幕。多选态只给导出 / 导入（导出可以只导选中的）。
+  /// [anchorContext] 是按钮自己的 context，菜单贴着按钮弹出。
+  Future<void> _showMoreMenu(BuildContext anchorContext) async {
+    final palette = context.palette;
+    final button = anchorContext.findRenderObject() as RenderBox?;
+    final overlay =
+        Navigator.of(context).overlay?.context.findRenderObject() as RenderBox?;
+    if (button == null || overlay == null) {
+      return;
+    }
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(
+          button.size.bottomLeft(Offset.zero),
+          ancestor: overlay,
         ),
-        PopupMenuItem<String>(
-          value: 'import',
-          child: Row(
-            children: [
-              Icon(
-                Icons.file_download_outlined,
-                size: 18,
-                color: AppColors.slate400,
-              ),
-              SizedBox(width: AppSpacing.sm),
-              Text('导入变量'),
-            ],
-          ),
-        ),
-      ],
-      child: Container(
-        width: 32,
-        height: 32,
-        decoration: BoxDecoration(
-          color: surfaces.card,
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: surfaces.cardBorder,
-            width: AppBorderWidth.hairline,
-          ),
-        ),
-        child: const Icon(
-          Icons.more_horiz,
-          size: 18,
-          color: AppColors.slate400,
+        button.localToGlobal(
+          button.size.bottomRight(Offset.zero),
+          ancestor: overlay,
         ),
       ),
+      Offset.zero & overlay.size,
     );
+
+    PopupMenuItem<String> item(String value, IconData icon, String label) {
+      return PopupMenuItem<String>(
+        value: value,
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: palette.text2),
+            const SizedBox(width: AppSpacing.sm),
+            Text(label),
+          ],
+        ),
+      );
+    }
+
+    final value = await showMenu<String>(
+      context: context,
+      position: position,
+      items: [
+        if (!_selectionMode) ...[
+          item('batch', Icons.checklist_rounded, '批量'),
+          item('sort', Icons.swap_vert_rounded, '排序'),
+        ],
+        item('export', Icons.ios_share, '导出变量'),
+        item('import', Icons.file_download_outlined, '导入变量'),
+      ],
+    );
+    if (!mounted || value == null) {
+      return;
+    }
+    switch (value) {
+      case 'batch':
+        _setSelectionMode(true);
+        break;
+      case 'sort':
+        setState(() => _sortMode = true);
+        break;
+      case 'export':
+        _showExportSheet();
+        break;
+      case 'import':
+        _showImportSheet();
+        break;
+    }
   }
 
   Future<void> _showExportSheet() async {
@@ -1208,107 +1335,69 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(envListProvider);
-    final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
+    final palette = context.palette;
     final selectedCount = _selectedIds.length;
     final allSelected = _isAllSelected(state.envs);
+    // 底部留白按底栏实际高度算（AppSpacing.listBottomOf），在 ListView 外面读好再传进去。
+    final listBottom = AppSpacing.listBottomOf(context);
+    // 搜索框与分组筛选是同一行、同为 44 高的一对灰色胶囊。
+    final searchBorder = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(AppRadius.pill),
+      borderSide: BorderSide.none,
+    );
 
     return Scaffold(
+      backgroundColor: palette.bg,
       body: Padding(
-        padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12),
+        padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 8),
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  const titleStyle = TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w700,
-                  );
-                  final batchLabel = _selectionMode ? '取消' : '批量';
-                  final sortLabel = _sortMode ? '完成' : '排序';
-                  // APP #21：360dp 屏上「标题 + 批量 + 排序 + ⋯ + ＋」一行放不下，＋被挤出屏幕、点了没反应。
-                  // 按当前字号量一下这一态的按钮完整显示要多宽（与下面的显示条件逐项对应），
-                  // 放不下就让胶囊只留图标；只剩一个「完成」时放得下，照常带字。
-                  // ⋯ 菜单是 32dp 的圆，＋ 是 44dp 命中区，按钮之间各 8dp；
-                  // 标题与按钮之间不另加间距（与原来的排版逐像素一致，384dp 屏仍然带字）。
-                  var fullWidth = measureTextWidth(context, '环境变量', titleStyle);
-                  if (!_sortMode) {
-                    fullWidth += AppChipButton.fullWidth(context, batchLabel);
-                  }
-                  if (!_selectionMode) {
-                    fullWidth += 8 + AppChipButton.fullWidth(context, sortLabel);
-                  }
-                  if (!_sortMode) {
-                    fullWidth += 8 + 32;
-                  }
-                  if (!_selectionMode && !_sortMode) {
-                    fullWidth += 8 + AppTapTarget.min;
-                  }
-                  final compact = fullWidth > constraints.maxWidth;
-                  // 只留图标时按钮间距收到 4：每个按钮自带 44dp 命中区，视觉上仍分得开，
-                  // 省下的 12dp 让 360dp 屏在字号 1.3 时标题也不用省略。
-                  final gap = compact ? 4.0 : 8.0;
-                  return Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      // 字号再大也只让标题省略，右边的按钮始终完整可点。
-                      const Flexible(
-                        child: Text(
-                          '环境变量',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: titleStyle,
-                        ),
-                      ),
-                      Row(
-                        children: [
-                          if (!_sortMode)
-                            AppChipButton(
-                              label: batchLabel,
-                              icon: _selectionMode
-                                  ? Icons.close
-                                  : Icons.done_all,
-                              compact: compact,
-                              onTap: () => _setSelectionMode(!_selectionMode),
-                            ),
-                          if (!_selectionMode) ...[
-                            SizedBox(width: gap),
-                            AppChipButton(
-                              label: sortLabel,
-                              icon: _sortMode ? Icons.check : Icons.swap_vert,
-                              compact: compact,
-                              // 每次松手已经各自保存过了（见 _moveEnv），
-                              // 「完成」只是退出排序模式，不再攒到这里统一提交。
-                              onTap: () => setState(() {
-                                _sortMode = !_sortMode;
-                                if (!_sortMode) {
-                                  _draggingEnvId = null;
-                                }
-                              }),
-                            ),
-                          ],
-                          if (!_sortMode) ...[
-                            SizedBox(width: gap),
-                            _buildTransferMenu(),
-                          ],
-                          if (!_selectionMode && !_sortMode) ...[
-                            SizedBox(width: gap),
-                            AppCircleAddButton(
-                              onTap: () => _showCreateDialog(),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ],
-                  );
-                },
-              ),
+            // 大标题头（v2.0）：普通态「⋯」「＋」，多选态「⋯」「取消」，排序态只剩「完成」。
+            // 批量 / 排序 / 导入导出收进「⋯」菜单（见 _showMoreMenu），窄屏不再挤掉「＋」（APP #21）。
+            AppLargeTitleHeader(
+              title: '变量',
+              actions: [
+                if (_sortMode)
+                  AppPillButton(
+                    label: '完成',
+                    icon: Icons.check_rounded,
+                    height: 40,
+                    // 每次松手已经各自保存过了（见 _moveEnv），
+                    // 「完成」只是退出排序模式，不再攒到这里统一提交。
+                    onPressed: () => setState(() {
+                      _sortMode = false;
+                      _draggingEnvId = null;
+                    }),
+                  )
+                else ...[
+                  // 包一层 Builder 拿按钮自己的 context，菜单贴着按钮弹出。
+                  Builder(
+                    builder: (buttonCtx) => AppGlassCircleButton(
+                      icon: Icons.more_horiz_rounded,
+                      tooltip: '更多',
+                      onTap: () => _showMoreMenu(buttonCtx),
+                    ),
+                  ),
+                  if (_selectionMode)
+                    AppPillButton(
+                      label: '取消',
+                      variant: AppPillVariant.secondary,
+                      height: 40,
+                      onPressed: () => _setSelectionMode(false),
+                    )
+                  else
+                    AppGlassCircleButton(
+                      icon: Icons.add_rounded,
+                      tooltip: '新建变量',
+                      onTap: _showCreateDialog,
+                    ),
+                ],
+              ],
             ),
-            const SizedBox(height: 16),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.pageHorizontal,
+              ),
               child: Row(
                 children: [
                   Expanded(
@@ -1317,51 +1406,28 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                       child: TextField(
                         controller: _searchController,
                         decoration: InputDecoration(
-                          hintText: '搜索变量...',
-                          prefixIcon: const Icon(
-                            Icons.search,
-                            size: 18,
-                            color: AppColors.slate400,
+                          hintText: '搜索变量',
+                          prefixIcon: Icon(
+                            Icons.search_rounded,
+                            size: 20,
+                            color: palette.text2,
                           ),
                           filled: true,
-                          fillColor: isLight
-                              ? Colors.white
-                              : AppColors.slate900,
-                          // 逐字复制 app_theme 的三处 OutlineInputBorder：
-                          // 计划裁决只令牌化不删除。三处圆角同值是聚焦动画的硬要求。
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(AppRadius.md),
-                            borderSide: BorderSide(
-                              color: isLight
-                                  ? AppColors.slate200
-                                  : AppColors.slate800,
-                            ),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(AppRadius.md),
-                            borderSide: BorderSide(
-                              color: isLight
-                                  ? AppColors.slate200
-                                  : AppColors.slate800,
-                            ),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(AppRadius.md),
-                            borderSide: const BorderSide(
-                              color: AppColors.primary,
-                              width: 1.5,
-                            ),
-                          ),
+                          fillColor: palette.fill,
+                          // 灰色填充胶囊、无描边：三种状态同一个 border，聚焦时不跳线。
+                          border: searchBorder,
+                          enabledBorder: searchBorder,
+                          focusedBorder: searchBorder,
                           contentPadding: const EdgeInsets.symmetric(
                             vertical: 12,
                           ),
                           isDense: true,
                           suffixIcon: _searchController.text.isNotEmpty
                               ? IconButton(
-                                  icon: const Icon(
+                                  icon: Icon(
                                     Icons.clear,
                                     size: 16,
-                                    color: AppColors.slate400,
+                                    color: palette.text2,
                                   ),
                                   onPressed: () {
                                     // APP issue #18：必须先掐掉还没触发的搜索防抖。
@@ -1382,7 +1448,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                 )
                               : null,
                         ),
-                        style: const TextStyle(fontSize: 14),
+                        style: AppText.body.copyWith(color: palette.text),
                         onChanged: (v) {
                           setState(() {});
                           if (_selectionMode) {
@@ -1436,40 +1502,40 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                     ],
                     child: Container(
                       height: 44,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
                       decoration: BoxDecoration(
-                        color: isLight ? Colors.white : AppColors.slate900,
-                        // 与左边同一行、同为 44 高的搜索框成对，必须同档。
-                        borderRadius: BorderRadius.circular(AppRadius.md),
-                        border: Border.all(
-                          color: isLight
-                              ? AppColors.slate200
-                              : AppColors.slate800,
-                        ),
+                        color: palette.fill,
+                        borderRadius: BorderRadius.circular(AppRadius.pill),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(
+                          Icon(
                             Icons.label_outline,
                             size: 18,
-                            color: AppColors.slate400,
+                            color: palette.text2,
                           ),
                           const SizedBox(width: 6),
-                          Text(
-                            state.selectedGroups.isEmpty
-                                ? '全部'
-                                : state.selectedGroups.join(' / '),
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: theme.colorScheme.onSurface,
+                          // 选了好几个分组时名字会很长：限宽省略，不把搜索框挤没。
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 110),
+                            child: Text(
+                              state.selectedGroups.isEmpty
+                                  ? '全部'
+                                  : state.selectedGroups.join(' / '),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: palette.text,
+                              ),
                             ),
                           ),
-                          const SizedBox(width: 4),
-                          const Icon(
+                          const SizedBox(width: 2),
+                          Icon(
                             Icons.expand_more,
                             size: 18,
-                            color: AppColors.slate400,
+                            color: palette.text2,
                           ),
                         ],
                       ),
@@ -1481,10 +1547,16 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
             if (_selectionMode) ...[
               const SizedBox(height: 12),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: AppCard(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.pageHorizontal,
+                ),
+                child: Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(AppSpacing.md),
+                  decoration: BoxDecoration(
+                    color: palette.card,
+                    borderRadius: BorderRadius.circular(AppRadius.lg),
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -1492,9 +1564,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         children: [
                           Text(
                             '已选择 $selectedCount 项',
-                            style: const TextStyle(
-                              fontSize: 13,
+                            style: TextStyle(
+                              fontSize: 14,
                               fontWeight: FontWeight.w600,
+                              color: palette.text,
                             ),
                           ),
                           const Spacer(),
@@ -1511,17 +1584,15 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                           AppTintedActionButton(
                             label: '批量分组',
                             icon: Icons.label_outline,
-                            color: AppColors.blue500,
+                            color: palette.accent,
                             enabled: selectedCount > 0,
                             onTap: () => _showBatchGroupDialog(state.groups),
                           ),
                           AppTintedActionButton(
                             label: '批量启用',
                             icon: Icons.play_circle_outline,
-                            // 「启用」是 success 绿，与状态圆点/徽章同语义；
-                            // 原先是 primary，和「批量分组」的 blue500 同属蓝族，
-                            // 一条操作栏里两个蓝按钮分不清。
-                            color: AppColors.success,
+                            // 「启用」是成功绿，与「批量分组」的蓝分得开。
+                            color: palette.ok,
                             enabled: selectedCount > 0,
                             onTap: () =>
                                 _performBatchAction(_EnvBatchAction.enable),
@@ -1529,7 +1600,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                           AppTintedActionButton(
                             label: '批量禁用',
                             icon: Icons.pause_circle_outline,
-                            color: AppColors.slate500,
+                            color: palette.text2,
                             enabled: selectedCount > 0,
                             onTap: () =>
                                 _performBatchAction(_EnvBatchAction.disable),
@@ -1537,7 +1608,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                           AppTintedActionButton(
                             label: '批量删除',
                             icon: Icons.delete_outline,
-                            color: AppColors.red500,
+                            color: palette.err,
                             enabled: selectedCount > 0,
                             onTap: () =>
                                 _performBatchAction(_EnvBatchAction.delete),
@@ -1550,11 +1621,13 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
               ),
             ],
             if (_sortMode) ...[
-              const SizedBox(height: 8),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 20),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.pageHorizontal,
+                ),
                 child: AppNotice(
-                  color: AppColors.primary,
+                  color: palette.accent,
                   icon: Icons.swap_vert,
                   text: '长按拖拽调整顺序，松手即保存',
                   accentText: true,
@@ -1564,7 +1637,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
             const SizedBox(height: 12),
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: palette.accent,
                 onRefresh: _refresh,
                 child: state.loading && state.envs.isEmpty
                     ? ListView(
@@ -1594,8 +1667,15 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         ],
                       )
                     : _sortMode
+                    // 排序态保持「一条一张卡」的平铺列表：拖拽排序按服务端顺序算锚点，
+                    // 不能按分组重排（见 EnvListNotifier.moveEnv）。
                     ? ReorderableListView.builder(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
+                        padding: EdgeInsets.fromLTRB(
+                          AppSpacing.pageHorizontal,
+                          0,
+                          AppSpacing.pageHorizontal,
+                          listBottom,
+                        ),
                         itemCount: state.envs.length,
                         // 拖起时记下是哪一条：拖拽途中列表可能被重拉成同条数、另一种顺序，
                         // 松手时 _moveEnv 拿它核对下标（G5）。只是记一下，不影响界面，不用 setState。
@@ -1609,22 +1689,26 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         itemBuilder: (_, i) {
                           final env = state.envs[i];
                           // ⚠️ key 必须挂在 ReorderableListView 的直接子 widget
-                          // 上（这里就是 AppCard 自己），挂到它的 child 上会在
+                          // 上（这里就是这个 Container），挂到它的 child 上会在
                           // 拖拽时抛「Every item of ReorderableListView must
                           // have a key」。
-                          return AppCard(
+                          return Container(
                             key: ValueKey(env.id),
                             margin: const EdgeInsets.only(bottom: 8),
                             padding: const EdgeInsets.symmetric(
                               horizontal: 14,
-                              vertical: 14,
+                              vertical: 12,
+                            ),
+                            decoration: BoxDecoration(
+                              color: palette.card,
+                              borderRadius: BorderRadius.circular(AppRadius.lg),
                             ),
                             child: Row(
                               children: [
-                                const Icon(
+                                Icon(
                                   Icons.drag_handle,
                                   size: 20,
-                                  color: AppColors.slate400,
+                                  color: palette.text3,
                                 ),
                                 const SizedBox(width: 12),
                                 Expanded(
@@ -1640,9 +1724,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                           Flexible(
                                             child: Text(
                                               env.name,
-                                              style: const TextStyle(
-                                                fontSize: 14,
+                                              style: TextStyle(
+                                                fontSize: 15,
                                                 fontWeight: FontWeight.w600,
+                                                color: palette.text,
                                               ),
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
@@ -1650,10 +1735,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                           ),
                                           if (env.isPinned) ...[
                                             const SizedBox(width: 4),
-                                            const Icon(
+                                            Icon(
                                               Icons.push_pin,
                                               size: 14,
-                                              color: AppColors.amber500,
+                                              color: palette.warn,
                                               semanticLabel: '已置顶',
                                             ),
                                           ],
@@ -1667,8 +1752,8 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                         Text(
                                           env.remarks,
                                           style: TextStyle(
-                                            fontSize: 12,
-                                            color: AppColors.slate400,
+                                            fontSize: 12.5,
+                                            color: palette.text2,
                                           ),
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
@@ -1676,15 +1761,14 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                     ],
                                   ),
                                 ),
-                                // 详情页圆点：「已启用」= success 绿。必须与列表卡
-                                // 圆点一起改，否则两个界面对同一个状态各说各话。
+                                // 启用状态圆点：已启用 = 绿，已禁用 = 弱化灰。
                                 Container(
                                   width: 8,
                                   height: 8,
                                   decoration: BoxDecoration(
                                     color: env.enabled
-                                        ? AppColors.success
-                                        : AppColors.slate300,
+                                        ? palette.ok
+                                        : palette.text3,
                                     shape: BoxShape.circle,
                                   ),
                                 ),
@@ -1693,37 +1777,122 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                           );
                         },
                       )
-                    : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
-                        itemCount: state.envs.length,
-                        itemBuilder: (_, i) {
-                          final env = state.envs[i];
-                          return _EnvCard(
-                            env: env,
-                            isLight: isLight,
-                            selectionMode: _selectionMode,
-                            selected: _isSelected(env.id),
-                            onTap: () {
-                              if (_selectionMode) {
-                                _toggleSelection(env.id);
-                              } else {
-                                _showDetailSheet(env);
+                    : Builder(
+                        builder: (context) {
+                          // 普通态按分组排成分组列表（v2.0）：置顶 → 各分组（按第一次出现的
+                          // 顺序）→ 未分组 → 已禁用。每组内部保持服务端顺序。
+                          // 属于多个分组的变量只放进它的第一个分组：同一条出现两次会让多选、
+                          // 左滑都对不上号。置顶的变量不论分组、启用与否都留在置顶组。
+                          final pinned = <EnvVar>[];
+                          final byGroup = <String, List<EnvVar>>{};
+                          final ungrouped = <EnvVar>[];
+                          final disabled = <EnvVar>[];
+                          for (final env in state.envs) {
+                            if (env.isPinned) {
+                              pinned.add(env);
+                            } else if (!env.enabled) {
+                              disabled.add(env);
+                            } else if (env.groups.isEmpty) {
+                              ungrouped.add(env);
+                            } else {
+                              byGroup
+                                  .putIfAbsent(env.groups.first, () => [])
+                                  .add(env);
+                            }
+                          }
+                          final sections = <(String, List<EnvVar>)>[
+                            ('置顶', pinned),
+                            for (final entry in byGroup.entries)
+                              (entry.key, entry.value),
+                            // 只有这一组时叫「全部」，旁边有别的分组时才叫「未分组」。
+                            (
+                              byGroup.isEmpty && pinned.isEmpty
+                                  ? '全部'
+                                  : '未分组',
+                              ungrouped,
+                            ),
+                            ('已禁用', disabled),
+                          ];
+                          // 摊平成「组头 + 行」一维列表，ListView.builder 懒加载
+                          // （面板最多一次给 5000 条，不能整组一次建出来）。
+                          // 每一项：(组头文字, 变量, 是不是组内第一行, 是不是组内最后一行)。
+                          final entries = <(String?, EnvVar?, bool, bool)>[];
+                          for (final (title, envs) in sections) {
+                            if (envs.isEmpty) {
+                              continue;
+                            }
+                            entries.add(('$title · ${envs.length}', null, false, false));
+                            for (var j = 0; j < envs.length; j++) {
+                              entries.add((
+                                null,
+                                envs[j],
+                                j == 0,
+                                j == envs.length - 1,
+                              ));
+                            }
+                          }
+                          return ListView.builder(
+                            padding: EdgeInsets.fromLTRB(
+                              AppSpacing.pageHorizontal,
+                              0,
+                              AppSpacing.pageHorizontal,
+                              listBottom,
+                            ),
+                            itemCount: entries.length,
+                            itemBuilder: (_, i) {
+                              final (header, env, first, last) = entries[i];
+                              if (env == null) {
+                                // 组头：同 AppGroupedList 的 header（说明字号、次要色），
+                                // 第一组上面不多留空。
+                                return Padding(
+                                  padding: EdgeInsets.fromLTRB(
+                                    20,
+                                    i == 0 ? 4 : 22,
+                                    20,
+                                    8,
+                                  ),
+                                  child: Text(
+                                    header!,
+                                    style: AppText.caption.copyWith(
+                                      color: palette.text2,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                );
                               }
+                              final masked =
+                                  shouldMaskEnvValue(env.name, env.value) &&
+                                  !_revealedIds.contains(env.id);
+                              return _EnvCard(
+                                key: ValueKey(env.id),
+                                env: env,
+                                first: first,
+                                last: last,
+                                masked: masked,
+                                selectionMode: _selectionMode,
+                                selected: _isSelected(env.id),
+                                onTap: () {
+                                  if (_selectionMode) {
+                                    _toggleSelection(env.id);
+                                  } else {
+                                    _showDetailSheet(env);
+                                  }
+                                },
+                                onLongPress: () {
+                                  if (!_selectionMode) {
+                                    HapticFeedback.mediumImpact();
+                                    setState(() => _sortMode = true);
+                                  }
+                                },
+                                onSelectedChanged: () =>
+                                    _toggleSelection(env.id),
+                                onReveal: () => _revealEnv(env),
+                                onCopy: () => _copyEnvValue(env, env.value),
+                                onEnable: () => _setEnvEnabled(env, true),
+                                onDisable: () => _setEnvEnabled(env, false),
+                                onDelete: () => _deleteEnv(env),
+                              );
                             },
-                            onLongPress: () {
-                              if (!_selectionMode) {
-                                HapticFeedback.mediumImpact();
-                                setState(() => _sortMode = true);
-                              }
-                            },
-                            onSelectedChanged: () => _toggleSelection(env.id),
-                            onCopy: () {
-                              Clipboard.setData(ClipboardData(text: env.value));
-                              AppSnack.success(context, '已复制值');
-                            },
-                            onEnable: () => _setEnvEnabled(env, true),
-                            onDisable: () => _setEnvEnabled(env, false),
-                            onDelete: () => _deleteEnv(env),
                           );
                         },
                       ),
@@ -1746,6 +1915,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
     // （v1.3.5 实测过几何），弹层不关时原因必须写回弹层里；SnackBar 照旧发，弹层关掉后才露出来。
     // 新建弹层的 nameError 是同一个道理。
     String? sheetError;
+    // A6：敏感值在弹层里同样先遮住，点「查看」验证后才换成可编辑的输入框。
+    // 列表上已经揭开过的，进来直接是明文。没揭开时不动 valueC，保存照旧带原值。
+    final sensitive = shouldMaskEnvValue(env.name, env.value);
+    var sheetRevealed = !sensitive || _revealedIds.contains(env.id);
 
     showModalBottomSheet(
       context: context,
@@ -1755,6 +1928,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) {
           final theme = Theme.of(ctx);
+          final palette = ctx.palette;
           final navigator = Navigator.of(ctx);
           if (valueEditorOpen) {
             return _EnvValueSheetEditor(
@@ -1763,13 +1937,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
               onDone: () => setSheetState(() => valueEditorOpen = false),
             );
           }
-          // 置顶按钮走任务页图钉的琥珀色。按钮文字和描边直接压在弹层白底上，
-          // 浅色模式要加深（tintFg），理由同下面的「启用」按钮。
-          final pinColor = AppSurfaces.of(ctx).tintFg(AppColors.amber500);
-          // 「重要」按钮与列表卡上的「重要」标记同一套紫：浅色 purple600、深色 purple500。
-          final importantColor = AppSurfaces.of(ctx).isLight
-              ? AppColors.purple600
-              : AppColors.purple500;
+          // 置顶按钮走图钉的橙色；按钮文字和描边直接压在弹层白底上，用墨色才够看。
+          final pinColor = palette.warnInk;
+          // 「重要」按钮与列表上的「重要」标记同一套紫。
+          final importantColor = palette.purpleInk;
           // 内容最后包一层 SingleChildScrollView（见本 builder 末尾）：新面板下头部三个按钮
           // 在手机宽度会折成两行，键盘弹起时（「保存」失败多半就在这时）内容会顶出弹层底部。
           final sheetContent = Padding(
@@ -1790,14 +1961,11 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         horizontal: 10,
                         vertical: 5,
                       ),
-                      // 「当前已启用」= success 绿。底色和前景是一对，必须同时改，
-                      // 只改一个就会变成绿字配蓝底（或反过来）。
+                      // 「当前已启用」= 绿色淡底配绿色墨字；禁用 = 灰色填充配次要色字。
                       decoration: BoxDecoration(
-                        color:
-                            (env.enabled
-                                    ? AppColors.success
-                                    : AppColors.slate400)
-                                .withAlpha(18),
+                        color: env.enabled
+                            ? palette.tint(palette.ok)
+                            : palette.fill,
                         borderRadius: BorderRadius.circular(AppRadius.pill),
                       ),
                       child: Text(
@@ -1805,11 +1973,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
-                          // 底色就是这个色的 alpha=18 淡底，前景必须加深。
-                          // 禁用态本来就换了 slate500，不属于同色叠同色。
-                          color: env.enabled
-                              ? AppSurfaces.of(ctx).tintFg(AppColors.success)
-                              : AppColors.slate500,
+                          color: env.enabled ? palette.okInk : palette.text2,
                         ),
                       ),
                     ),
@@ -1978,23 +2142,16 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                               size: 16,
                             ),
                             label: Text(env.enabled ? '禁用' : '启用'),
-                            // 「启用」动作走 success 绿。这里用 tintFg 而不是满强度
-                            // success：按钮文字和描边直接压在弹层白底上，满强度 success
-                            // 只有 2.13:1，比换掉的 primary（2.78:1）还差 —— 换语义不能
-                            // 顺带把可读性换没了。tintFg 浅色下正好等于 successDark，
-                            // 与上方徽章同一族绿；深色下原样返回。
+                            // 「启用」动作走绿色墨色：按钮文字和描边直接压在弹层白底上，
+                            // 满强度绿只有约 2.2:1，墨色才过 4.5:1。「禁用」是中性次要色。
                             style: OutlinedButton.styleFrom(
                               foregroundColor: env.enabled
-                                  ? AppColors.slate600
-                                  : AppSurfaces.of(
-                                      ctx,
-                                    ).tintFg(AppColors.success),
+                                  ? palette.text2
+                                  : palette.okInk,
                               side: BorderSide(
                                 color: env.enabled
-                                    ? AppColors.slate300
-                                    : AppSurfaces.of(
-                                        ctx,
-                                      ).tintFg(AppColors.success),
+                                    ? palette.separator
+                                    : palette.okInk,
                               ),
                             ),
                           ),
@@ -2006,7 +2163,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                 if (sheetError != null) ...[
                   const SizedBox(height: 12),
                   AppNotice(
-                    color: AppColors.danger,
+                    color: palette.err,
                     icon: Icons.error_outline,
                     text: sheetError!,
                     accentText: true,
@@ -2023,10 +2180,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                 const SizedBox(height: 4),
                 Text(
                   '更新于 ${formatTimeCn(env.updatedAt)} · 创建于 ${formatTimeCn(env.createdAt)}',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppColors.slate400,
-                  ),
+                  style: TextStyle(fontSize: 12, color: palette.text2),
                 ),
                 const SizedBox(height: 16),
                 TextField(
@@ -2034,21 +2188,50 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                   decoration: const InputDecoration(labelText: '变量名'),
                 ),
                 const SizedBox(height: 12),
-                TextField(
-                  controller: valueC,
-                  decoration: InputDecoration(
-                    labelText: '值',
-                    suffixIcon: IconButton(
-                      // 变量值较长时切到弹窗内的大输入区，不再新开页面，避免回填丢失。
-                      icon: const Icon(Icons.open_in_full, size: 18),
-                      tooltip: '放大编辑变量值',
-                      onPressed: () =>
-                          setSheetState(() => valueEditorOpen = true),
+                if (sheetRevealed)
+                  TextField(
+                    controller: valueC,
+                    decoration: InputDecoration(
+                      labelText: '值',
+                      suffixIcon: IconButton(
+                        // 变量值较长时切到弹窗内的大输入区，不再新开页面，避免回填丢失。
+                        icon: const Icon(Icons.open_in_full, size: 18),
+                        tooltip: '放大编辑变量值',
+                        onPressed: () =>
+                            setSheetState(() => valueEditorOpen = true),
+                      ),
+                    ),
+                    maxLines: 4,
+                    minLines: 2,
+                  )
+                else
+                  // A6：遮住的值只给一个只读的「输入框外观」，点眼睛验证后换成真正的输入框。
+                  // 不用 obscureText：它只支持单行，长 Cookie 换成单行就没法编辑了。
+                  InputDecorator(
+                    decoration: InputDecoration(
+                      labelText: '值',
+                      helperText: '敏感值已遮住，验证后可查看和编辑',
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.visibility_outlined, size: 20),
+                        tooltip: '查看',
+                        onPressed: () async {
+                          final ok = await _revealEnv(env);
+                          if (ok && ctx.mounted) {
+                            setSheetState(() => sheetRevealed = true);
+                          }
+                        },
+                      ),
+                    ),
+                    child: Text(
+                      maskEnvValue(env.value),
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 15,
+                        letterSpacing: 1.5,
+                        color: palette.text2,
+                      ),
                     ),
                   ),
-                  maxLines: 4,
-                  minLines: 2,
-                ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: remarksC,
@@ -2072,15 +2255,17 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () {
-                          Clipboard.setData(ClipboardData(text: valueC.text));
-                          AppSnack.success(ctx, '已复制值');
-                        },
+                        // A6：敏感值先验证（与「查看」共用 60 秒窗口），复制的是输入框里的当前内容。
+                        onPressed: () => _copyEnvValue(
+                          env,
+                          valueC.text,
+                          toastContext: ctx,
+                        ),
                         icon: const Icon(Icons.copy, size: 16),
                         label: const Text('复制'),
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: AppColors.blue500,
-                          side: const BorderSide(color: AppColors.blue500),
+                          foregroundColor: palette.accentInk,
+                          side: BorderSide(color: palette.accentInk),
                           minimumSize: const Size(0, 44),
                         ),
                       ),
@@ -2326,6 +2511,153 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
   }
 }
 
+/// 设备做不了系统验证（没设锁屏密码、没硬件）时，用应用锁的密码（优先）或图案验证一次（A6 降级）。
+///
+/// 直接调应用锁控制器的 unlockWithPassword / unlockWithPattern：输错次数与锁屏共用一套冷却，
+/// 不能借这里绕过锁屏的「连续输错过多」限制。成功时它顺带执行一次 unlockSession，
+/// 能走到这里说明应用本来就没锁着，没有副作用。
+///
+/// 做成 StatefulWidget 而不是 showDialog 里的 StatefulBuilder：输入框控制器得活到弹窗退场动画结束，
+/// 在 showDialog 返回后立刻 dispose 会在退场的那几帧里报「控制器已销毁」。
+class _AppLockVerifyDialog extends StatefulWidget {
+  const _AppLockVerifyDialog({
+    required this.usePassword,
+    required this.controller,
+  });
+
+  final bool usePassword;
+  final AppLockController controller;
+
+  @override
+  State<_AppLockVerifyDialog> createState() => _AppLockVerifyDialogState();
+}
+
+class _AppLockVerifyDialogState extends State<_AppLockVerifyDialog> {
+  final _passwordC = TextEditingController();
+  List<int> _pattern = const [];
+  String? _error;
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _passwordC.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_submitting) {
+      return;
+    }
+    final usePassword = widget.usePassword;
+    if (usePassword && _passwordC.text.trim().isEmpty) {
+      setState(() => _error = '请输入应用锁密码');
+      return;
+    }
+    if (!usePassword && _pattern.length < 4) {
+      setState(() => _error = '请至少选择 4 个点');
+      return;
+    }
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    final passed = usePassword
+        ? await widget.controller.unlockWithPassword(_passwordC.text.trim())
+        : await widget.controller.unlockWithPattern(_pattern);
+    if (!mounted) {
+      return;
+    }
+    if (passed) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+    setState(() {
+      _submitting = false;
+      _error =
+          widget.controller.getUnlockNotice() ??
+          (usePassword ? '密码不正确' : '图案不正确');
+      _pattern = const [];
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final usePassword = widget.usePassword;
+    return AlertDialog(
+      title: const Text('验证身份'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              '这台设备没有可用的指纹、面容或锁屏密码，'
+              '请用应用锁的${usePassword ? '密码' : '图案'}验证后查看变量值。',
+              style: AppText.caption.copyWith(color: palette.text2),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            if (usePassword)
+              TextField(
+                controller: _passwordC,
+                obscureText: true,
+                autofocus: true,
+                enabled: !_submitting,
+                onSubmitted: (_) => _submit(),
+                decoration: const InputDecoration(
+                  labelText: '应用锁密码',
+                  prefixIcon: Icon(Icons.password_outlined),
+                ),
+              )
+            else
+              PatternPad(
+                selectedPoints: _pattern,
+                onPointTap: (point) {
+                  if (_pattern.contains(point)) {
+                    return;
+                  }
+                  setState(() {
+                    _pattern = [..._pattern, point];
+                    _error = null;
+                  });
+                },
+                onClear: () => setState(() => _pattern = const []),
+                onBackspace: () => setState(() {
+                  if (_pattern.isNotEmpty) {
+                    _pattern = _pattern.sublist(0, _pattern.length - 1);
+                  }
+                }),
+                title: '图案验证',
+                subtitle: '按顺序点击已设置的图案点位',
+              ),
+            if (_error != null) ...[
+              const SizedBox(height: AppSpacing.md),
+              AppNotice(
+                color: palette.err,
+                icon: Icons.error_outline,
+                text: _error!,
+                accentText: true,
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _submitting
+              ? null
+              : () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: _submitting ? null : _submit,
+          child: Text(_submitting ? '验证中…' : '验证'),
+        ),
+      ],
+    );
+  }
+}
+
 class _EnvValueSheetEditor extends StatelessWidget {
   final String title;
   final TextEditingController controller;
@@ -2339,7 +2671,7 @@ class _EnvValueSheetEditor extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isLight = Theme.of(context).brightness == Brightness.light;
+    final palette = context.palette;
     final screenHeight = MediaQuery.of(context).size.height;
     final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
     final editorHeight = (screenHeight - keyboardHeight - 72)
@@ -2365,20 +2697,7 @@ class _EnvValueSheetEditor extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: AppColors.primary.withAlpha(isLight ? 20 : 34),
-                        // 图标底板一律走 sm，不跟外层容器同档。
-                        borderRadius: BorderRadius.circular(AppRadius.sm),
-                      ),
-                      child: const Icon(
-                        Icons.open_in_full,
-                        size: 18,
-                        color: AppColors.primary,
-                      ),
-                    ),
+                    AppIconTile(icon: Icons.open_in_full, color: palette.accent),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
@@ -2397,9 +2716,9 @@ class _EnvValueSheetEditor extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 8),
-                const Text(
+                Text(
                   '这里直接编辑原表单里的值，点完成后会回到新建/编辑窗口，不会丢输入。',
-                  style: TextStyle(fontSize: 12, color: AppColors.slate500),
+                  style: TextStyle(fontSize: 12, color: palette.text2),
                 ),
                 const SizedBox(height: 12),
                 Expanded(
@@ -2415,9 +2734,10 @@ class _EnvValueSheetEditor extends StatelessWidget {
                       hintText: '在这里编辑完整变量值',
                       alignLabelWithHint: true,
                       filled: true,
-                      fillColor: isLight ? Colors.white : AppColors.slate900,
+                      fillColor: palette.fill,
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(AppRadius.md),
+                        borderSide: BorderSide.none,
                       ),
                     ),
                   ),
@@ -2433,7 +2753,7 @@ class _EnvValueSheetEditor extends StatelessWidget {
                         icon: const Icon(Icons.cleaning_services, size: 16),
                         label: const Text('清空'),
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: AppColors.slate500,
+                          foregroundColor: palette.text2,
                           minimumSize: const Size(0, 44),
                         ),
                       ),
@@ -2603,7 +2923,7 @@ class _EnvExportSheetState extends State<_EnvExportSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final surfaces = context.surfaces;
+    final palette = context.palette;
     final canExport = !_loading && _error == null && _count > 0;
 
     return Padding(
@@ -2624,8 +2944,8 @@ class _EnvExportSheetState extends State<_EnvExportSheet> {
             ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: AppSpacing.md),
-          const AppNotice(
-            color: AppColors.warning,
+          AppNotice(
+            color: palette.warn,
             icon: Icons.warning_amber_rounded,
             text:
                 '导出内容是 Cookie / Token 的明文。复制到剪贴板后其他应用可能读到，'
@@ -2665,7 +2985,7 @@ class _EnvExportSheetState extends State<_EnvExportSheet> {
             )
           else if (_error != null)
             AppNotice(
-              color: AppColors.danger,
+              color: palette.err,
               icon: Icons.error_outline,
               text: _error!,
               accentText: true,
@@ -2673,8 +2993,8 @@ class _EnvExportSheetState extends State<_EnvExportSheet> {
           else
             AppCard(
               radius: AppRadius.md,
-              color: surfaces.subtle,
-              borderColor: surfaces.subtleBorder,
+              color: palette.card2,
+              borderColor: palette.separator,
               padding: const EdgeInsets.all(AppSpacing.md),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -2693,7 +3013,7 @@ class _EnvExportSheetState extends State<_EnvExportSheet> {
                     style: TextStyle(
                       fontSize: 12,
                       height: 1.5,
-                      color: surfaces.mutedText,
+                      color: palette.text2,
                     ),
                   ),
                 ],
@@ -2894,7 +3214,7 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
                   child: FilledButton(
                     onPressed: () => Navigator.of(dialogCtx).pop(true),
                     style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.danger,
+                      backgroundColor: dialogCtx.palette.err,
                     ),
                     child: const Text('清空并导入'),
                   ),
@@ -2954,12 +3274,12 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
     }
   }
 
-  List<Widget> _buildCheckWidgets(AppSurfaces surfaces) {
+  List<Widget> _buildCheckWidgets(AppPalette palette) {
     final parseError = _parsed.error;
     if (parseError != null) {
       return [
         AppNotice(
-          color: AppColors.danger,
+          color: palette.err,
           icon: Icons.error_outline,
           text: parseError,
           accentText: true,
@@ -2970,8 +3290,8 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
     final preflight = _preflight;
     if (preflight == null) {
       return [
-        const AppNotice(
-          color: AppColors.primary,
+        AppNotice(
+          color: palette.accent,
           icon: Icons.info_outline,
           text:
               '粘贴「导出变量」得到的 JSON，或从文件载入。格式与面板 Web 的「导出 JSON / 导入」一致，'
@@ -2983,8 +3303,8 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
     final widgets = <Widget>[
       AppCard(
         radius: AppRadius.md,
-        color: surfaces.subtle,
-        borderColor: surfaces.subtleBorder,
+        color: palette.card2,
+        borderColor: palette.separator,
         padding: const EdgeInsets.all(AppSpacing.md),
         child: Text(
           '解析出 ${preflight.total} 条 · ${_formatTransferSize(preflight.payloadBytes)}',
@@ -2996,7 +3316,7 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
     if (_parsed.skipped > 0) {
       widgets.add(
         AppNotice(
-          color: AppColors.warning,
+          color: palette.warn,
           icon: Icons.warning_amber_rounded,
           text: '有 ${_parsed.skipped} 项不是对象，已跳过。',
           accentText: true,
@@ -3007,7 +3327,7 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
     if (preflight.oversized) {
       widgets.add(
         AppNotice(
-          color: AppColors.danger,
+          color: palette.err,
           icon: Icons.error_outline,
           text:
               '内容 ${_formatTransferSize(preflight.payloadBytes)} '
@@ -3020,7 +3340,7 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
     if (preflight.collapsedIdentities.isNotEmpty) {
       widgets.add(
         AppNotice(
-          color: AppColors.danger,
+          color: palette.err,
           icon: Icons.error_outline,
           text:
               '合并模式按「变量名 + 备注」认领记录，'
@@ -3035,7 +3355,7 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
     if (preflight.ambiguousIdentities.isNotEmpty) {
       widgets.add(
         AppNotice(
-          color: AppColors.warning,
+          color: palette.warn,
           icon: Icons.warning_amber_rounded,
           text:
               '面板上已有多条同名同备注的记录（'
@@ -3049,7 +3369,7 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
     if (preflight.invalidNames.isNotEmpty) {
       widgets.add(
         AppNotice(
-          color: AppColors.warning,
+          color: palette.warn,
           icon: Icons.warning_amber_rounded,
           text:
               '这些变量名不符合面板规则（只能字母或下划线开头，后接字母数字下划线），'
@@ -3061,8 +3381,8 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
 
     if (_mode == EnvImportMode.replace) {
       widgets.add(
-        const AppNotice(
-          color: AppColors.danger,
+        AppNotice(
+          color: palette.err,
           icon: Icons.delete_forever,
           text: '替换会先清空面板上的全部环境变量，再写入上面这些。这一步不可撤销。',
           accentText: true,
@@ -3075,13 +3395,13 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final surfaces = context.surfaces;
+    final palette = context.palette;
     final media = MediaQuery.of(context);
     final preflight = _preflight;
     final canSubmit =
         !_submitting && preflight != null && !preflight.blocked;
 
-    final checkWidgets = _buildCheckWidgets(surfaces);
+    final checkWidgets = _buildCheckWidgets(palette);
 
     return ConstrainedBox(
       constraints: BoxConstraints(maxHeight: media.size.height * 0.86),
@@ -3140,7 +3460,7 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
                       style: TextStyle(
                         fontSize: 12,
                         height: 1.5,
-                        color: surfaces.mutedText,
+                        color: palette.text2,
                       ),
                     ),
                     const SizedBox(height: AppSpacing.md),
@@ -3196,7 +3516,7 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
                     style: FilledButton.styleFrom(
                       minimumSize: const Size(0, 44),
                       backgroundColor: _mode == EnvImportMode.replace
-                          ? AppColors.danger
+                          ? palette.err
                           : null,
                     ),
                   ),
@@ -3210,27 +3530,42 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
   }
 }
 
+/// 变量列表里的一行（v2.0 分组列表）。
+///
+/// 外观对齐 `AppGroupedRow`：左右内边距 18、36dp 的 [AppIconTile]、缩进到文字起点的发丝分隔线；
+/// 一组的第一行带上圆角、最后一行带下圆角（[first] / [last]），连起来就是一张白色大圆角卡片。
+/// 不直接用 `AppGroupedRow`：它的标题只能是一段字（这里要跟图钉和「重要」标记），
+/// 也没有左滑露出启用 / 删除 / 禁用；而且页面要懒加载（最多 5000 条），不能整组包进 `AppGroupedList`。
 class _EnvCard extends StatefulWidget {
   final EnvVar env;
-  final bool isLight;
+  final bool first;
+  final bool last;
+
+  /// 值要不要遮住（敏感变量、还没揭开）。遮住时右侧是「查看」，否则是「复制」。
+  final bool masked;
   final bool selectionMode;
   final bool selected;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
   final VoidCallback onSelectedChanged;
+  final VoidCallback onReveal;
   final VoidCallback onCopy;
   final VoidCallback onEnable;
   final VoidCallback onDisable;
   final VoidCallback onDelete;
 
   const _EnvCard({
+    super.key,
     required this.env,
-    required this.isLight,
+    required this.first,
+    required this.last,
+    required this.masked,
     required this.selectionMode,
     required this.selected,
     required this.onTap,
     required this.onLongPress,
     required this.onSelectedChanged,
+    required this.onReveal,
     required this.onCopy,
     required this.onEnable,
     required this.onDisable,
@@ -3244,10 +3579,20 @@ class _EnvCard extends StatefulWidget {
 class _EnvCardState extends State<_EnvCard> {
   static const double _actionWidth = 64;
   static const double _actionGap = 6;
-  static const double _actionsWidth = _actionWidth * 3 + _actionGap * 2 + 8;
+
+  /// 三个按钮 + 两道间隔 + 左右各 8 的留白。
+  static const double _actionsWidth = _actionWidth * 3 + _actionGap * 2 + 16;
+
+  /// 与 AppGroupedRow 同一套尺寸：分隔线从文字起点画起。
+  static const double _hPad = 18;
+  static const double _leadingSize = 36;
+  static const double _leadingGap = 14;
 
   double _dragOffset = 0;
   bool _dragging = false;
+
+  /// 按下时整行变灰（主题去掉了水波纹，同 AppGroupedRow 的按压反馈）。
+  bool _pressed = false;
 
   @override
   void didUpdateWidget(covariant _EnvCard oldWidget) {
@@ -3270,8 +3615,30 @@ class _EnvCardState extends State<_EnvCard> {
     action();
   }
 
+  void _setPressed(bool value) {
+    if (_pressed != value) {
+      setState(() => _pressed = value);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final palette = context.palette;
+    final env = widget.env;
+    const radius = Radius.circular(AppRadius.card);
+    // 多选时文字起点右移了一个复选框的宽度，分隔线跟着缩进。
+    final textStart =
+        _hPad +
+        (widget.selectionMode ? 34 : 0) +
+        _leadingSize +
+        _leadingGap;
+    // 选中 = 强调色淡底；按下 = 灰色填充；都叠在卡片白底上（淡底本身是半透明的）。
+    final rowColor = widget.selected
+        ? Color.alphaBlend(palette.tint(palette.accent), palette.card)
+        : _pressed
+        ? Color.alphaBlend(palette.fill, palette.card)
+        : palette.card;
+
     return PopScope(
       canPop: _dragOffset == 0,
       onPopInvokedWithResult: (didPop, _) {
@@ -3281,283 +3648,343 @@ class _EnvCardState extends State<_EnvCard> {
         // 侧滑按钮展开时，系统返回先收起按钮，避免用户回滑时误退出 APP。
         _closeActions();
       },
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 6),
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            Positioned.fill(
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _SwipeActionButton(
-                      label: '启用',
-                      icon: Icons.play_arrow_rounded,
-                      // 「启用」动作走 success 绿；淡底和前景（含 tintFg）都由
-                      // _SwipeActionButton 内部按这个 color 推导，改一处即可。
-                      color: AppColors.success,
-                      enabled: !widget.env.enabled,
-                      onTap: () => _runSwipeAction(widget.onEnable),
+      child: ClipRRect(
+        borderRadius: BorderRadius.vertical(
+          top: widget.first ? radius : Radius.zero,
+          bottom: widget.last ? radius : Radius.zero,
+        ),
+        child: ColoredBox(
+          color: palette.card,
+          child: Stack(
+            children: [
+              // 左滑露出的操作按钮，垫在这一行的下面。
+              Positioned.fill(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 8,
                     ),
-                    const SizedBox(width: _actionGap),
-                    _SwipeActionButton(
-                      label: '删除',
-                      icon: Icons.delete_outline,
-                      color: AppColors.red500,
-                      enabled: true,
-                      onTap: () => _runSwipeAction(widget.onDelete),
-                    ),
-                    const SizedBox(width: _actionGap),
-                    _SwipeActionButton(
-                      label: '禁用',
-                      icon: Icons.pause_rounded,
-                      color: AppColors.slate500,
-                      enabled: widget.env.enabled,
-                      onTap: () => _runSwipeAction(widget.onDisable),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            GestureDetector(
-              onTap: () {
-                if (_dragOffset != 0) {
-                  _closeActions();
-                  return;
-                }
-                widget.onTap();
-              },
-              onLongPress: widget.onLongPress,
-              onHorizontalDragStart: widget.selectionMode
-                  ? null
-                  : (_) => setState(() => _dragging = true),
-              onHorizontalDragUpdate: widget.selectionMode
-                  ? null
-                  : (details) {
-                      // 左滑露出右侧操作按钮；关闭时也限制在卡片内处理，避免和系统返回手势抢动作。
-                      final nextOffset = (_dragOffset + details.delta.dx)
-                          .clamp(-_actionsWidth, 0.0)
-                          .toDouble();
-                      if (nextOffset == _dragOffset) {
-                        return;
-                      }
-                      setState(() => _dragOffset = nextOffset);
-                    },
-              onHorizontalDragCancel: widget.selectionMode
-                  ? null
-                  : () => setState(() => _dragging = false),
-              onHorizontalDragEnd: widget.selectionMode
-                  ? null
-                  : (_) {
-                      final nextOffset =
-                          _dragOffset.abs() > _actionsWidth * 0.42
-                          ? -_actionsWidth
-                          : 0.0;
-                      setState(() {
-                        _dragging = false;
-                        _dragOffset = nextOffset;
-                      });
-                      if (nextOffset == -_actionsWidth) {
-                        HapticFeedback.selectionClick();
-                      }
-                    },
-              child: AnimatedContainer(
-                duration: _dragging
-                    ? Duration.zero
-                    : const Duration(milliseconds: 160),
-                curve: Curves.easeOutCubic,
-                transform: Matrix4.translationValues(_dragOffset, 0, 0),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: widget.isLight ? Colors.white : AppColors.slate900,
-                  // 列表项卡片。这一处没迁 AppCard（要 AnimatedContainer +
-                  // Matrix4 做左滑），但圆角必须与 AppCard 同档。
-                  borderRadius: BorderRadius.circular(AppRadius.lg),
-                  border: Border.all(
-                    color: widget.selected
-                        ? AppColors.primary
-                        : (widget.isLight
-                              ? AppColors.slate200
-                              : AppColors.slate800),
-                    width: widget.selected ? 1.4 : 1,
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (widget.selectionMode) ...[
-                          SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: Checkbox(
-                              value: widget.selected,
-                              onChanged: (_) => widget.onSelectedChanged(),
-                              activeColor: AppColors.primary,
-                              visualDensity: VisualDensity.compact,
-                              materialTapTargetSize:
-                                  MaterialTapTargetSize.shrinkWrap,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                        ],
-                        // 列表卡圆点：「已启用」= success 绿。必须与详情页的
-                        // 同义圆点一起改，否则同一个环境变量在两个界面是两种颜色。
-                        Container(
-                          width: 6,
-                          height: 6,
-                          decoration: BoxDecoration(
-                            color: widget.env.enabled
-                                ? AppColors.success
-                                : AppColors.slate300,
-                            shape: BoxShape.circle,
-                          ),
+                        _SwipeActionButton(
+                          label: '启用',
+                          icon: Icons.play_arrow_rounded,
+                          color: palette.ok,
+                          ink: palette.okInk,
+                          enabled: !env.enabled,
+                          onTap: () => _runSwipeAction(widget.onEnable),
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          // 置顶图钉与「重要」标记紧跟名字（APP #16）。名字放 Flexible：
-                          // 名字长时名字先省略，标记不会被挤掉。
-                          child: Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  widget.env.name,
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w700,
-                                    color: widget.isLight
-                                        ? AppColors.blue600
-                                        : AppColors.blue500,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              // 同任务卡的置顶图钉。不学网页加左缘色条：
-                              // 这张卡的边框已经用来表示「多选选中」。
-                              if (widget.env.isPinned) ...[
-                                const SizedBox(width: 4),
-                                const Icon(
-                                  Icons.push_pin,
-                                  size: 14,
-                                  color: AppColors.amber500,
-                                  semanticLabel: '已置顶',
-                                ),
-                              ],
-                              if (widget.env.isImportant) ...[
-                                const SizedBox(width: 4),
-                                const _EnvImportantBadge(),
-                              ],
-                            ],
-                          ),
+                        const SizedBox(width: _actionGap),
+                        _SwipeActionButton(
+                          label: '删除',
+                          icon: Icons.delete_outline,
+                          color: palette.err,
+                          ink: palette.errInk,
+                          enabled: true,
+                          onTap: () => _runSwipeAction(widget.onDelete),
                         ),
-                        if (!widget.selectionMode) ...[
-                          _MiniBtn(
-                            icon: Icons.copy_outlined,
-                            onTap: widget.onCopy,
-                          ),
-                          const SizedBox(width: 4),
-                          const Icon(
-                            Icons.swipe_left_alt_rounded,
-                            size: 18,
-                            color: AppColors.slate400,
-                          ),
-                        ],
+                        const SizedBox(width: _actionGap),
+                        _SwipeActionButton(
+                          label: '禁用',
+                          icon: Icons.pause_rounded,
+                          color: palette.text2,
+                          ink: palette.text2,
+                          enabled: env.enabled,
+                          onTap: () => _runSwipeAction(widget.onDisable),
+                        ),
                       ],
                     ),
-                    Padding(
-                      padding: EdgeInsets.only(
-                        left: widget.selectionMode ? 32 : 14,
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SizedBox(height: 2),
-                          Text(
-                            widget.env.value.replaceAll('\n', ' '),
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontFamily: 'monospace',
-                              color: widget.isLight
-                                  ? AppColors.slate500
-                                  : AppColors.slate400,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          // 备注与「更新于」同一行（APP #27）：备注占左边剩余宽度、长了照常省略，
-                          // 时间靠右不折行，卡片不因为多了时间而变高。没有备注时这一行只剩时间。
-                          // updated_at 在面板改值 / 启用 / 禁用时都会刷新，用户靠它看「什么时候动过」。
-                          const SizedBox(height: 2),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: widget.env.remarks.isNotEmpty
-                                    ? Text(
-                                        widget.env.remarks,
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          color: widget.isLight
-                                              ? AppColors.slate400
-                                              : AppColors.slate500,
-                                          fontStyle: FontStyle.italic,
-                                        ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      )
-                                    : const SizedBox.shrink(),
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                '更新于 ${formatTimeCn(widget.env.updatedAt, short: true)}',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  color: widget.isLight
-                                      ? AppColors.slate400
-                                      : AppColors.slate500,
-                                ),
-                                maxLines: 1,
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
-            ),
-          ],
+              GestureDetector(
+                onTap: () {
+                  if (_dragOffset != 0) {
+                    _closeActions();
+                    return;
+                  }
+                  widget.onTap();
+                },
+                onTapDown: (_) => _setPressed(true),
+                onTapUp: (_) => _setPressed(false),
+                onTapCancel: () => _setPressed(false),
+                onLongPress: widget.onLongPress,
+                onHorizontalDragStart: widget.selectionMode
+                    ? null
+                    : (_) => setState(() => _dragging = true),
+                onHorizontalDragUpdate: widget.selectionMode
+                    ? null
+                    : (details) {
+                        // 左滑露出右侧操作按钮；关闭时也限制在行内处理，避免和系统返回手势抢动作。
+                        final nextOffset = (_dragOffset + details.delta.dx)
+                            .clamp(-_actionsWidth, 0.0)
+                            .toDouble();
+                        if (nextOffset == _dragOffset) {
+                          return;
+                        }
+                        setState(() => _dragOffset = nextOffset);
+                      },
+                onHorizontalDragCancel: widget.selectionMode
+                    ? null
+                    : () => setState(() => _dragging = false),
+                onHorizontalDragEnd: widget.selectionMode
+                    ? null
+                    : (_) {
+                        final nextOffset =
+                            _dragOffset.abs() > _actionsWidth * 0.42
+                            ? -_actionsWidth
+                            : 0.0;
+                        setState(() {
+                          _dragging = false;
+                          _dragOffset = nextOffset;
+                        });
+                        if (nextOffset == -_actionsWidth) {
+                          HapticFeedback.selectionClick();
+                        }
+                      },
+                child: AnimatedContainer(
+                  duration: _dragging
+                      ? Duration.zero
+                      : AppMotion.of(context, const Duration(milliseconds: 160)),
+                  curve: Curves.easeOutCubic,
+                  transform: Matrix4.translationValues(_dragOffset, 0, 0),
+                  color: rowColor,
+                  child: CustomPaint(
+                    // 顶部发丝分隔线：组内第一行不画，从文字起点画到最右边。
+                    foregroundPainter: widget.first
+                        ? null
+                        : _EnvRowSeparatorPainter(
+                            color: palette.separator,
+                            start: textStart,
+                          ),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(_hPad, 12, 10, 12),
+                      // 已禁用的变量整行变淡（演示稿：已禁用单独一组、变淡）。
+                      child: Opacity(
+                        opacity: env.enabled ? 1 : 0.55,
+                        child: Row(
+                          children: [
+                            if (widget.selectionMode) ...[
+                              SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: Checkbox(
+                                  value: widget.selected,
+                                  onChanged: (_) => widget.onSelectedChanged(),
+                                  activeColor: palette.accent,
+                                  visualDensity: VisualDensity.compact,
+                                  materialTapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                            ],
+                            // 置顶 = 橙（同图钉），已禁用 = 紫（演示稿），其余 = 蓝。
+                            AppIconTile(
+                              icon: Icons.key_rounded,
+                              color: env.isPinned
+                                  ? palette.warn
+                                  : (env.enabled
+                                        ? palette.accent
+                                        : palette.purple),
+                            ),
+                            const SizedBox(width: _leadingGap),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // 置顶图钉与「重要」标记紧跟名字（APP #16）。名字放 Flexible：
+                                  // 名字长时名字先省略，标记不会被挤掉。
+                                  Row(
+                                    children: [
+                                      Flexible(
+                                        child: Text(
+                                          env.name,
+                                          style: TextStyle(
+                                            fontFamily: 'monospace',
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w700,
+                                            color: palette.text,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      if (env.isPinned) ...[
+                                        const SizedBox(width: 4),
+                                        Icon(
+                                          Icons.push_pin,
+                                          size: 14,
+                                          color: palette.warn,
+                                          semanticLabel: '已置顶',
+                                        ),
+                                      ],
+                                      if (env.isImportant) ...[
+                                        const SizedBox(width: 4),
+                                        const _EnvImportantBadge(),
+                                      ],
+                                    ],
+                                  ),
+                                  const SizedBox(height: 2),
+                                  // A6：敏感值默认遮住，只显示定长遮罩（猜不出原值长度）。
+                                  Text(
+                                    widget.masked
+                                        ? maskEnvValue(env.value)
+                                        : env.value.replaceAll('\n', ' '),
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontFamily: 'monospace',
+                                      letterSpacing: widget.masked ? 1.2 : 0,
+                                      color: palette.text2,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  // 备注与「更新于」同一行（APP #27）：备注占左边剩余宽度、长了照常省略，
+                                  // 时间靠右不折行，行不因为多了时间而变高。没有备注时这一行只剩时间。
+                                  // updated_at 在面板改值 / 启用 / 禁用时都会刷新，用户靠它看「什么时候动过」。
+                                  // 分组列表的行比旧卡片多了前导图标，窄屏 + 大字号时一行放不下
+                                  // 「时间 + 几个字的备注」：这时时间换到备注下面一行，整句照常显示。
+                                  const SizedBox(height: 2),
+                                  LayoutBuilder(
+                                    builder: (context, constraints) {
+                                      final timeText =
+                                          '更新于 ${formatTimeCn(env.updatedAt, short: true)}';
+                                      final timeStyle = AppText.tabular(
+                                        TextStyle(
+                                          fontSize: 12,
+                                          color: palette.text2,
+                                        ),
+                                      );
+                                      final remarks = env.remarks.isNotEmpty
+                                          ? Text(
+                                              env.remarks,
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: palette.text2,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            )
+                                          : null;
+                                      final time = Text(
+                                        timeText,
+                                        style: timeStyle,
+                                        maxLines: 1,
+                                      );
+                                      // 有备注时至少给备注留 56（约 4 个字）。
+                                      final oneLine =
+                                          measureTextWidth(
+                                                context,
+                                                timeText,
+                                                timeStyle,
+                                              ) +
+                                              8 +
+                                              (remarks == null ? 0 : 56) <=
+                                          constraints.maxWidth;
+                                      if (oneLine) {
+                                        return Row(
+                                          children: [
+                                            Expanded(
+                                              child:
+                                                  remarks ??
+                                                  const SizedBox.shrink(),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            time,
+                                          ],
+                                        );
+                                      }
+                                      return Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          ?remarks,
+                                          // 极窄时连单独一行都放不下：整体缩小，不截断、不溢出。
+                                          FittedBox(
+                                            fit: BoxFit.scaleDown,
+                                            alignment: Alignment.centerLeft,
+                                            child: time,
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (!widget.selectionMode) ...[
+                              const SizedBox(width: 4),
+                              // 遮住时是「查看」（验证后揭开），否则是「复制」（敏感值同样先验证）。
+                              IconButton(
+                                tooltip: widget.masked ? '查看' : '复制',
+                                onPressed: widget.masked
+                                    ? widget.onReveal
+                                    : widget.onCopy,
+                                visualDensity: VisualDensity.compact,
+                                icon: Icon(
+                                  widget.masked
+                                      ? Icons.visibility_outlined
+                                      : Icons.copy_rounded,
+                                  size: 20,
+                                  color: palette.accent,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-/// 「重要」标记（APP #16 ②），列表卡与排序卡共用。
+/// 行顶部的缩进分隔线（同 AppGroupedRow 的画法：0.5 宽、从文字起点画到最右边）。
+class _EnvRowSeparatorPainter extends CustomPainter {
+  final Color color;
+  final double start;
+
+  const _EnvRowSeparatorPainter({required this.color, required this.start});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 0.5;
+    canvas.drawLine(Offset(start, 0.25), Offset(size.width, 0.25), paint);
+  }
+
+  @override
+  bool shouldRepaint(_EnvRowSeparatorPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.start != start;
+}
+
+/// 「重要」标记（APP #16 ②），列表行与排序卡共用。
 ///
-/// 紫色是环境变量页还没用过的颜色（红 = 删除 / 禁用圆点，琥珀 = 置顶，蓝 = 变量名），
-/// 与仪表盘磁盘卡同一套紫（dashboard_page 的 _StatCard）。颜色之外还有锁图标和「重要」二字，
-/// 不只靠颜色区分。
+/// 紫色是变量页没给别的语义用过的颜色（红 = 删除，橙 = 置顶，蓝 = 可点的图标），
+/// 颜色之外还有锁图标和「重要」二字，不只靠颜色区分。
 class _EnvImportantBadge extends StatelessWidget {
   const _EnvImportantBadge();
 
   @override
   Widget build(BuildContext context) {
-    final isLight = AppSurfaces.of(context).isLight;
-    final foreground = isLight ? AppColors.purple600 : AppColors.purple500;
+    final palette = context.palette;
+    // 淡底上放字，用墨色。
+    final foreground = palette.purpleInk;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: isLight
-            ? AppColors.purple100
-            : AppColors.purple500.withAlpha(25),
+        color: palette.tint(palette.purple),
         borderRadius: BorderRadius.circular(AppRadius.pill),
       ),
       child: Row(
@@ -3582,7 +4009,12 @@ class _EnvImportantBadge extends StatelessWidget {
 class _SwipeActionButton extends StatelessWidget {
   final String label;
   final IconData icon;
+
+  /// 淡底用的实色。
   final Color color;
+
+  /// 淡底上的图标和文字用墨色（浅色模式下实色当字不够看）。
+  final Color ink;
   final bool enabled;
   final VoidCallback onTap;
 
@@ -3590,27 +4022,22 @@ class _SwipeActionButton extends StatelessWidget {
     required this.label,
     required this.icon,
     required this.color,
+    required this.ink,
     required this.enabled,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final surfaces = AppSurfaces.of(context);
-    final isLight = surfaces.isLight;
-    final backgroundColor = enabled
-        ? (isLight ? color.withAlpha(24) : color.withAlpha(34))
-        : (isLight ? AppColors.slate50 : AppColors.slate800);
-    // 底色是同色淡底，前景走 tintFg 才够看；禁用态另有中性灰，不受影响。
-    final foregroundColor = enabled
-        ? surfaces.tintFg(color)
-        : AppColors.slate400;
+    final palette = context.palette;
+    final backgroundColor = enabled ? palette.tint(color) : palette.fill;
+    final foregroundColor = enabled ? ink : palette.text3;
 
     return SizedBox(
       width: _EnvCardState._actionWidth,
       child: Material(
         color: backgroundColor,
-        // 左滑露出的操作按钮，走按钮档；底板与水波纹必须同值。
+        // 左滑露出的操作按钮，走按钮档；底板与按压反馈必须同值。
         borderRadius: BorderRadius.circular(AppRadius.md),
         child: InkWell(
           onTap: enabled ? onTap : null,
@@ -3633,29 +4060,6 @@ class _SwipeActionButton extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _MiniBtn extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-
-  const _MiniBtn({required this.icon, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final isLight = Theme.of(context).brightness == Brightness.light;
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(6),
-        decoration: BoxDecoration(
-          color: isLight ? AppColors.slate50 : AppColors.slate800,
-          borderRadius: BorderRadius.circular(AppRadius.sm),
-        ),
-        child: Icon(icon, size: 14, color: AppColors.slate400),
       ),
     );
   }

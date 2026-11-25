@@ -1,20 +1,27 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:dio/dio.dart';
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
+import '../../../core/auth/auth_provider.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/task_log.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/panel_enums.dart';
-import '../../../shared/utils/time_utils.dart';
-import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_glass_circle_button.dart';
+import '../../../shared/widgets/app_grouped_list.dart';
+import '../../../shared/widgets/app_icon_tile.dart';
+import '../../../shared/widgets/app_large_title_header.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
+import '../utils/log_error_line.dart';
+import '../utils/log_trend.dart';
 
 final logListProvider = StateNotifierProvider<LogListNotifier, LogListState>((
   ref,
@@ -34,6 +41,10 @@ class LogListState {
   /// 「面板里真的一条日志都没有」和「压根没拿到数据」。
   final String? error;
 
+  /// 顶部「今天的摘要 + 执行趋势」。null = 还没拿到或面板不给，页面上直接不画那两块。
+  /// 只有底部「日志」标签页会加载它；单任务日志页（taskId 模式）一直是 null。
+  final LogSummary? summary;
+
   const LogListState({
     this.logs = const [],
     this.total = 0,
@@ -42,6 +53,7 @@ class LogListState {
     this.taskIdFilter = '',
     this.statusFilter,
     this.error,
+    this.summary,
   });
 
   LogListState copyWith({
@@ -53,6 +65,7 @@ class LogListState {
     int? statusFilter,
     bool resetStatusFilter = false,
     String? error,
+    LogSummary? summary,
   }) {
     return LogListState(
       logs: logs ?? this.logs,
@@ -69,6 +82,8 @@ class LogListState {
       // 仓库里 AuthState 用哨兵保留旧值，是相反的语义；本 State 明确选前者。
       // 改成 `??` 会让错误提示一旦出现就再也消不掉。
       error: error,
+      // 摘要和列表是两个独立请求，列表刷新时不能把摘要抹掉。
+      summary: summary ?? this.summary,
     );
   }
 }
@@ -125,6 +140,29 @@ class LogListNotifier extends StateNotifier<LogListState> {
     }
   }
 
+  /// 加载顶部摘要与趋势（`GET /api/system/dashboard`，与旧首页趋势图同一个数据源）。
+  ///
+  /// 只在进页面和下拉刷新时调用，**不跟 5 秒自动刷新**：dashboard 要按天逐日计数，
+  /// 区间越长越贵（面板 #153）。失败一律吞掉 —— 摘要只是锦上添花，
+  /// 不能因为它把整个日志页打成「加载失败」。
+  Future<void> loadSummary() async {
+    // 标题写的是「本月」，趋势就从 1 号画到今天；月初不足 7 天时补满 7 天，免得只有一两个点。
+    final range = DateTime.now().day.clamp(7, 31);
+    try {
+      final response = await _dio.get(
+        ApiEndpoints.dashboard,
+        queryParameters: {'range': range},
+      );
+      final summary = LogSummary.fromDashboard(extractData(response.data));
+      if (summary != null) {
+        // copyWith 不传 error 会清空错误，这里要原样带上列表那边的错误。
+        state = state.copyWith(summary: summary, error: state.error);
+      }
+    } catch (_) {
+      // 吞掉：保留上一次的摘要（或继续不显示）。
+    }
+  }
+
   Future<void> loadMore() async {
     if (state.loading || state.logs.length >= state.total) return;
     _page++;
@@ -152,6 +190,22 @@ class LogListNotifier extends StateNotifier<LogListState> {
   Future<void> deleteLog(int id) async {
     await _dio.delete(ApiEndpoints.logById(id));
     await load(refresh: true);
+  }
+
+  /// 左滑删除成功后，从当前列表里摘掉这一条。
+  ///
+  /// 正常情况下 [deleteLog] 之后的刷新已经把它拿掉了，这里什么都不会变；
+  /// 但刷新本身失败时列表还留着旧数据，被滑走的那一行若还在树上，
+  /// Dismissible 会直接断言报错，所以要在本地补一刀。
+  void removeLocally(int id) {
+    if (!state.logs.any((log) => log.id == id)) {
+      return;
+    }
+    state = state.copyWith(
+      logs: state.logs.where((log) => log.id != id).toList(),
+      total: state.total > 0 ? state.total - 1 : 0,
+      error: state.error,
+    );
   }
 
   Future<void> batchDelete(List<int> ids) async {
@@ -227,11 +281,37 @@ class _LogListPageState extends ConsumerState<LogListPage> {
   Timer? _refreshTimer;
   Timer? _debounce;
   bool _selectionMode = false;
+
+  /// APP 在后台（hidden / paused）：5 秒刷新停掉，回到前台再恢复。
+  bool _inBackground = false;
+  AppLifecycleListener? _lifecycle;
   final Set<int> _selectedIds = <int>{};
+
+  /// 失败行的错误行缓存（日志 id → 错误行，null 表示取不到）。
+  /// 已结束日志的正文不会再变，解压一次就够；5 秒自动刷新时不用重复解压。
+  final Map<int, String?> _errorLineCache = <int, String?>{};
 
   @override
   void initState() {
     super.initState();
+    _lifecycle = AppLifecycleListener(
+      onHide: () {
+        _inBackground = true;
+        _refreshTimer?.cancel();
+        _refreshTimer = null;
+      },
+      onResume: () {
+        // 只拉下通知栏这种 inactive → resumed 没进过后台，不用处理
+        if (!_inBackground) return;
+        _inBackground = false;
+        final state = ref.read(logListProvider);
+        // 进后台前有任务在跑：后台这段时间没刷新，先立刻补拉一次，再接着每 5 秒刷新
+        if (state.logs.any((log) => log.isRunning)) {
+          ref.read(logListProvider.notifier).load(refresh: true);
+        }
+        _syncAutoRefresh(state);
+      },
+    );
     Future.microtask(() {
       final taskId = widget.taskId;
       if (taskId != null) {
@@ -239,6 +319,8 @@ class _LogListPageState extends ConsumerState<LogListPage> {
         ref.read(logListProvider.notifier).setTaskIdFilter('$taskId');
       } else {
         ref.read(logListProvider.notifier).load(refresh: true);
+        // 摘要和趋势是全部任务的统计，只在「日志」标签页加载；单任务日志页不画。
+        ref.read(logListProvider.notifier).loadSummary();
       }
     });
     _scrollController.addListener(() {
@@ -253,6 +335,7 @@ class _LogListPageState extends ConsumerState<LogListPage> {
   void dispose() {
     _debounce?.cancel();
     _refreshTimer?.cancel();
+    _lifecycle?.dispose();
     _searchController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -260,7 +343,8 @@ class _LogListPageState extends ConsumerState<LogListPage> {
 
   void _syncAutoRefresh(LogListState state) {
     final hasRunning = state.logs.any((log) => log.isRunning);
-    if (hasRunning) {
+    // 在后台时不开定时器（后台途中有请求回来也会走到这里），回到前台由 onResume 恢复
+    if (hasRunning && !_inBackground) {
       _refreshTimer ??= Timer.periodic(const Duration(seconds: 5), (_) {
         ref.read(logListProvider.notifier).load(refresh: true);
       });
@@ -340,7 +424,9 @@ class _LogListPageState extends ConsumerState<LogListPage> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.red500),
+            style: FilledButton.styleFrom(
+              backgroundColor: context.palette.err,
+            ),
             child: const Text('删除'),
           ),
         ],
@@ -378,7 +464,10 @@ class _LogListPageState extends ConsumerState<LogListPage> {
           ),
           SimpleDialogOption(
             onPressed: () => Navigator.pop(ctx, 0),
-            child: const Text('清理全部日志', style: TextStyle(color: Colors.red)),
+            child: Text(
+              '清理全部日志',
+              style: TextStyle(color: context.palette.errInk),
+            ),
           ),
         ],
       ),
@@ -401,7 +490,9 @@ class _LogListPageState extends ConsumerState<LogListPage> {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              style: FilledButton.styleFrom(backgroundColor: AppColors.red500),
+              style: FilledButton.styleFrom(
+                backgroundColor: context.palette.err,
+              ),
               child: const Text('清理'),
             ),
           ],
@@ -435,7 +526,8 @@ class _LogListPageState extends ConsumerState<LogListPage> {
     }
   }
 
-  Future<void> _handleDelete(TaskLog log) async {
+  /// 删除单条日志（左滑触发）。返回 true 表示真的删掉了，左滑的那一行据此决定是否弹回。
+  Future<bool> _handleDelete(TaskLog log) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogCtx) => AlertDialog(
@@ -448,22 +540,27 @@ class _LogListPageState extends ConsumerState<LogListPage> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(dialogCtx, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.red500),
+            style: FilledButton.styleFrom(
+              backgroundColor: context.palette.err,
+            ),
             child: const Text('删除'),
           ),
         ],
       ),
     );
     if (confirmed != true) {
-      return;
+      return false;
     }
     try {
       await ref.read(logListProvider.notifier).deleteLog(log.id);
       _showSuccess('日志已删除');
+      return true;
     } catch (error) {
       _showError(_extractError(error, '删除失败'));
+      return false;
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -471,492 +568,733 @@ class _LogListPageState extends ConsumerState<LogListPage> {
       _syncAutoRefresh(next);
     });
     final state = ref.watch(logListProvider);
-    final isLight = Theme.of(context).brightness == Brightness.light;
+    final palette = context.palette;
+    final isTaskMode = widget.taskId != null;
+    // 删除单条 / 批量删除 / 清理在面板侧都要 operator（server/handler/log.go 的 RegisterRoutes），
+    // viewer 不给入口，免得左滑、确认之后才吃一个 403。与日志详情页「编辑对应脚本」同一个判断。
+    final canDelete = ref.watch(authProvider).user?.isOperator ?? false;
+    // 底部留白要在滚动视图外面读：它等于悬浮底栏实际盖住的高度 + 16。
+    final bottomPadding = AppSpacing.listBottomOf(context);
+    final summary = state.summary;
 
     return Scaffold(
-      body: Padding(
-        padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12),
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  // 单任务日志页是压栈打开的，要有返回键；标签页没有
-                  if (widget.taskId != null && !_selectionMode)
-                    const BackButton(),
-                  Expanded(
-                    child: _selectionMode
-                        ? Text(
-                            '已选 ${_selectedIds.length} 条',
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          )
-                        : Text(
-                            widget.taskId != null
-                                ? '${widget.taskName ?? '任务 #${widget.taskId}'} 的日志'
-                                : '运行日志',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: widget.taskId != null ? 18 : 24,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                  ),
-                  if (_selectionMode) ...[
-                    IconButton(
-                      icon: Icon(
-                        _selectedIds.length == state.logs.length
-                            ? Icons.deselect
-                            : Icons.select_all,
-                        size: 20,
-                      ),
-                      onPressed: () => _toggleSelectAll(state.logs),
-                      tooltip: _selectedIds.length == state.logs.length
-                          ? '取消全选'
-                          : '全选',
-                    ),
-                    IconButton(
-                      icon: const Icon(
-                        Icons.delete_outline,
-                        size: 20,
-                        color: AppColors.red500,
-                      ),
-                      onPressed: _batchDeleteSelected,
-                      tooltip: '批量删除',
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 20),
-                      onPressed: _exitSelectionMode,
-                      tooltip: '取消',
-                    ),
-                  ] else if (widget.taskId == null) ...[
-                    // 「清理日志」按天数清的是全部任务的日志，单任务页里不给，免得误会
-                    IconButton(
-                      icon: const Icon(
-                        Icons.cleaning_services_outlined,
-                        size: 20,
-                      ),
-                      onPressed: _showCleanDialog,
-                      tooltip: '清理日志',
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: TextField(
-                controller: _searchController,
-                decoration: InputDecoration(
-                  hintText: '搜索任务名称...',
-                  prefixIcon: const Icon(
-                    Icons.search,
-                    size: 18,
-                    color: AppColors.slate400,
-                  ),
-                  filled: true,
-                  fillColor: isLight ? Colors.white : AppColors.slate900,
-                  // 这三处逐字复制了 app_theme 的 OutlineInputBorder，
-                  // 只有 borderSide 可能与 theme 有别。计划裁决**只令牌化不删除**：
-                  // 「theme 已经供了同色」没有实证，删掉若颜色变了，排查成本
-                  // 远高于留着这几行。三处圆角同值是聚焦动画的硬要求。
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppRadius.md),
-                    borderSide: BorderSide(
-                      color: isLight ? AppColors.slate200 : AppColors.slate800,
-                    ),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppRadius.md),
-                    borderSide: BorderSide(
-                      color: isLight ? AppColors.slate200 : AppColors.slate800,
-                    ),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(AppRadius.md),
-                    borderSide: const BorderSide(
-                      color: AppColors.primary,
-                      width: 1.5,
-                    ),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                  isDense: true,
-                  suffixIcon: _searchController.text.isNotEmpty
-                      ? IconButton(
-                          icon: const Icon(
-                            Icons.clear,
-                            size: 16,
-                            color: AppColors.slate400,
-                          ),
-                          onPressed: () {
-                            _searchController.clear();
-                            setState(() {});
-                            ref.read(logListProvider.notifier).setKeyword('');
-                          },
-                        )
-                      : null,
-                ),
-                style: const TextStyle(fontSize: 14),
-                onChanged: (value) {
-                  setState(() {});
-                  _debounce?.cancel();
-                  _debounce = Timer(const Duration(milliseconds: 300), () {
-                    _resetScroll();
-                    ref.read(logListProvider.notifier).setKeyword(value);
-                  });
-                },
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    _StatusFilterChip(
-                      label: '全部',
-                      selected: state.statusFilter == null,
-                      onTap: () {
-                        _resetScroll();
-                        ref
-                            .read(logListProvider.notifier)
-                            .setStatusFilter(null);
-                      },
-                    ),
-                    _StatusFilterChip(
-                      label: '成功',
-                      selected: state.statusFilter == kLogStatusSuccess,
-                      onTap: () {
-                        _resetScroll();
-                        ref
-                            .read(logListProvider.notifier)
-                            .setStatusFilter(kLogStatusSuccess);
-                      },
-                      selectedColor: AppColors.success,
-                    ),
-                    _StatusFilterChip(
-                      label: '失败',
-                      selected: state.statusFilter == kLogStatusFailed,
-                      onTap: () {
-                        _resetScroll();
-                        ref
-                            .read(logListProvider.notifier)
-                            .setStatusFilter(kLogStatusFailed);
-                      },
-                      selectedColor: AppColors.danger,
-                    ),
-                    _StatusFilterChip(
-                      label: '运行中',
-                      selected: state.statusFilter == kLogStatusRunning,
-                      onTap: () {
-                        _resetScroll();
-                        ref
-                            .read(logListProvider.notifier)
-                            .setStatusFilter(kLogStatusRunning);
-                      },
-                      selectedColor: AppColors.info,
-                    ),
-                    // 面板 v3 起日志状态是四个（server/model/task_log.go:7-12），
-                    // 「已终止」是手动停止 / 定时停止留下的独立状态，不再混进失败。
-                    // 面板 Web 的筛选栏（views/logs/index.vue:589）早就有这一项，
-                    // APP 缺它 = 用户在手机上永远筛不出自己停掉的那些任务。
-                    _StatusFilterChip(
-                      label: '已终止',
-                      selected: state.statusFilter == kLogStatusAborted,
-                      onTap: () {
-                        _resetScroll();
-                        ref
-                            .read(logListProvider.notifier)
-                            .setStatusFilter(kLogStatusAborted);
-                      },
-                      selectedColor: AppColors.warning,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            Expanded(
-              child: RefreshIndicator(
-                color: AppColors.primary,
-                onRefresh: () =>
-                    ref.read(logListProvider.notifier).load(refresh: true),
-                child: state.loading && state.logs.isEmpty
-                    ? ListView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [AppLoadingView()],
-                      )
-                    // 拿不到数据和真的没有数据是两回事，必须先判 error。
-                    : state.error != null && state.logs.isEmpty
-                    ? ListView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        children: [
-                          AppErrorView(
-                            title: '日志加载失败',
-                            message: state.error!,
-                            onRetry: () => ref
-                                .read(logListProvider.notifier)
-                                .load(refresh: true),
-                          ),
-                        ],
-                      )
-                    : state.logs.isEmpty
-                    ? ListView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
-                          AppEmptyView(
-                            icon: Icons.article_outlined,
-                            message: '暂无日志',
-                          ),
-                        ],
-                      )
-                    : ListView.builder(
-                        controller: _scrollController,
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
-                        itemCount: state.logs.length,
-                        itemBuilder: (_, i) {
-                          final log = state.logs[i];
-                          return _LogItem(
-                            log: log,
-                            isLight: isLight,
-                            selectionMode: _selectionMode,
-                            selected: _selectedIds.contains(log.id),
-                            onView: () {
-                              if (_selectionMode) {
-                                _toggleSelection(log.id);
-                              } else {
-                                context.push('/logs/${log.id}/stream');
-                              }
-                            },
-                            onLongPress: () {
-                              if (!_selectionMode) {
-                                _enterSelectionModeWith(log.id);
-                              }
-                            },
-                            onDelete: () => _handleDelete(log),
-                          );
-                        },
-                      ),
-              ),
-            ),
-          ],
+      body: SafeArea(
+        bottom: false,
+        child: RefreshIndicator(
+          color: palette.accent,
+          onRefresh: () async {
+            final notifier = ref.read(logListProvider.notifier);
+            await Future.wait([
+              notifier.load(refresh: true),
+              if (!isTaskMode) notifier.loadSummary(),
+            ]);
+          },
+          // 头部、筛选方块、趋势图和日志列表放进同一个滚动视图，一起滚走，
+          // 小屏上不会被顶部固定区域吃掉半屏。
+          child: CustomScrollView(
+            controller: _scrollController,
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              SliverToBoxAdapter(child: _buildHeader(state, canDelete)),
+              SliverToBoxAdapter(child: _buildSearchField()),
+              SliverToBoxAdapter(child: _buildFilterCard(state)),
+              // 趋势是全部任务的统计，只在「日志」标签页画；单任务日志页不画。
+              if (!isTaskMode && summary != null && summary.days.isNotEmpty)
+                SliverToBoxAdapter(child: _buildTrendCard(summary)),
+              ..._buildListSlivers(state, canDelete),
+              SliverToBoxAdapter(child: SizedBox(height: bottomPadding)),
+            ],
+          ),
         ),
       ),
     );
   }
-}
 
-class _LogItem extends StatelessWidget {
-  final TaskLog log;
-  final bool isLight;
-  final VoidCallback onView;
-  final VoidCallback onDelete;
-  final VoidCallback? onLongPress;
-  final bool selectionMode;
-  final bool selected;
-
-  const _LogItem({
-    required this.log,
-    required this.isLight,
-    required this.onView,
-    required this.onDelete,
-    this.onLongPress,
-    this.selectionMode = false,
-    this.selected = false,
-  });
-
-  // 日志列表最主要的状态区分就靠这个圆点：
-  // 成功=绿、失败=红、运行中=蓝、已终止=琥珀、未知=灰。
-  // 改造前成功取 primary(#409EFF)、运行中取 blue500(#3B82F6)，主色换蓝后
-  // 两者都是蓝、肉眼分不出。
-  //
-  // 「已终止」和「未知」这两档是本次补的。改造前是 `if 成功 绿; if 失败 红; 蓝`，
-  // 面板 v3 新增的 status=3（主动终止）会亮成蓝色，与「还在跑」完全同色 ——
-  // 用户会以为任务卡住了，跑去列表里等一个永远不会结束的运行。
-  Color _statusColor() {
-    switch (log.statusTone) {
-      case PanelStatusTone.success:
-        return AppColors.success;
-      case PanelStatusTone.danger:
-        return AppColors.danger;
-      case PanelStatusTone.running:
-        return AppColors.info;
-      case PanelStatusTone.warning:
-        return AppColors.warning;
-      case PanelStatusTone.neutral:
-        return AppColors.neutral;
+  /// 顶部大标题：标签页写月份 + 一句话总结；单任务日志页是返回键 + 任务名；多选时换成已选条数。
+  Widget _buildHeader(LogListState state, bool canDelete) {
+    if (_selectionMode) {
+      final allSelected = _selectedIds.length == state.logs.length;
+      return AppLargeTitleHeader(
+        title: '已选 ${_selectedIds.length} 条',
+        actions: [
+          AppGlassCircleButton(
+            icon: allSelected ? Icons.deselect : Icons.select_all,
+            tooltip: allSelected ? '取消全选' : '全选',
+            onTap: () => _toggleSelectAll(state.logs),
+          ),
+          AppGlassCircleButton(
+            icon: Icons.delete_outline_rounded,
+            tooltip: '批量删除',
+            onTap: _batchDeleteSelected,
+          ),
+          AppGlassCircleButton(
+            icon: Icons.close_rounded,
+            tooltip: '取消',
+            onTap: _exitSelectionMode,
+          ),
+        ],
+      );
     }
+    if (widget.taskId != null) {
+      // 单任务日志页是压栈打开的，要有返回键；标签页没有
+      return AppLargeTitleHeader(
+        leading: AppGlassCircleButton(
+          icon: Icons.arrow_back_ios_new_rounded,
+          tooltip: '返回',
+          onTap: () => Navigator.of(context).maybePop(),
+        ),
+        title: '${widget.taskName ?? '任务 #${widget.taskId}'} 的日志',
+        subtitle: state.total > 0 ? '共 ${state.total} 条' : null,
+      );
+    }
+    return AppLargeTitleHeader(
+      title: '${DateTime.now().month} 月',
+      // 摘要还没回来或面板不给时，退回页面名，标题下不留空。
+      subtitle: state.summary?.sentence ?? '运行日志',
+      actions: [
+        // 「清理日志」按天数清的是全部任务的日志，单任务页里不给，免得误会
+        if (canDelete)
+          AppGlassCircleButton(
+            icon: Icons.cleaning_services_outlined,
+            tooltip: '清理日志',
+            onTap: _showCleanDialog,
+          ),
+      ],
+    );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final color = _statusColor();
-    // 外层只接管长按（进入多选），点击进详情仍由内层 InkWell 负责 ——
-    // 两者是不同动作，不能折叠成同一个 onTap：内层的点击区只覆盖标题那一段，
-    // 提到外层会让「删除」按钮旁边的空白也变成进详情的热区。
-    return AppCard(
-      onLongPress: onLongPress,
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      color: selected
-          ? (isLight
-                ? AppColors.primary.withAlpha(12)
-                : AppColors.primary.withAlpha(20))
-          : null,
-      borderColor: selected ? AppColors.primary.withAlpha(80) : null,
+  Widget _buildSearchField() {
+    final palette = context.palette;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        0,
+        AppSpacing.lg,
+        AppSpacing.md,
+      ),
+      // 灰色填充、无描边由全局 inputDecorationTheme 提供，这里只放图标和提示。
+      child: TextField(
+        controller: _searchController,
+        decoration: InputDecoration(
+          hintText: '搜索任务名称',
+          prefixIcon: Icon(
+            Icons.search_rounded,
+            size: 20,
+            color: palette.text2,
+          ),
+          contentPadding: const EdgeInsets.symmetric(vertical: 12),
+          isDense: true,
+          suffixIcon: _searchController.text.isNotEmpty
+              ? IconButton(
+                  icon: Icon(
+                    Icons.cancel_rounded,
+                    size: 18,
+                    color: palette.text3,
+                  ),
+                  tooltip: '清空',
+                  onPressed: () {
+                    _searchController.clear();
+                    setState(() {});
+                    ref.read(logListProvider.notifier).setKeyword('');
+                  },
+                )
+              : null,
+        ),
+        style: const TextStyle(fontSize: 15),
+        onChanged: (value) {
+          setState(() {});
+          _debounce?.cancel();
+          _debounce = Timer(const Duration(milliseconds: 300), () {
+            _resetScroll();
+            ref.read(logListProvider.notifier).setKeyword(value);
+          });
+        },
+      ),
+    );
+  }
+
+  /// 四色筛选方块：成功 / 失败 / 运行中 / 已终止。
+  ///
+  /// 点一下按这个状态筛选，再点一下同一个取消（回到全部），接的还是原来的 status 参数。
+  /// 面板 v3 起日志状态是四个（server/model/task_log.go:7-12），「已终止」是手动停止 /
+  /// 定时停止留下的独立状态，不混进失败。
+  /// 方块下的数字是**今天**的次数（来自摘要）；单任务页、老面板拿不到摘要时不显示数字。
+  Widget _buildFilterCard(LogListState state) {
+    final palette = context.palette;
+    final summary = state.summary;
+    final items = <(int, String, IconData, Color, int?)>[
+      (
+        kLogStatusSuccess,
+        '成功',
+        Icons.check_rounded,
+        palette.ok,
+        summary?.success,
+      ),
+      (
+        kLogStatusFailed,
+        '失败',
+        Icons.close_rounded,
+        palette.err,
+        summary?.failed,
+      ),
+      (
+        kLogStatusRunning,
+        '运行中',
+        Icons.autorenew_rounded,
+        palette.accent,
+        summary?.running,
+      ),
+      (
+        kLogStatusAborted,
+        '已终止',
+        Icons.stop_rounded,
+        palette.warn,
+        summary?.aborted,
+      ),
+    ];
+    return Container(
+      margin: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        0,
+        AppSpacing.lg,
+        AppSpacing.md,
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 14),
+      decoration: BoxDecoration(
+        color: palette.card,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+      ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (selectionMode) ...[
-            SizedBox(
-              width: 24,
-              height: 24,
-              child: Checkbox(
-                value: selected,
-                onChanged: (_) => onView(),
-                activeColor: AppColors.primary,
-                // 圆角已由 checkboxTheme 统一供给（AppRadius.control，同为 4）。
+          for (final (status, label, icon, color, count) in items)
+            Expanded(
+              child: _StatusFilterTile(
+                label: label,
+                icon: icon,
+                color: color,
+                count: count,
+                selected: state.statusFilter == status,
+                onTap: () {
+                  _resetScroll();
+                  ref
+                      .read(logListProvider.notifier)
+                      .setStatusFilter(
+                        state.statusFilter == status ? null : status,
+                      );
+                },
               ),
             ),
-            const SizedBox(width: 10),
-          ] else ...[
-            Container(
-              width: 12,
-              height: 12,
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-            ),
-          ],
-          const SizedBox(width: 12),
-          Expanded(
-            child: InkWell(
-              onTap: onView,
-              borderRadius: BorderRadius.circular(AppRadius.md),
-              // 卡片的纵向内边距搬到这里来：整行的高度本来就由这个 InkWell 决定，
-              // 内边距放在外面时它白白撑高卡片，放进来则同时成为点击区。
-              // 结果是卡片矮了 20dp，而「点进日志详情」的点击目标反而
-              // 从 43.3dp 长到 55.3dp，越过了 48dp 下限。
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
+        ],
+      ),
+    );
+  }
+
+  /// 执行趋势细线图。数据与旧首页趋势图同源（dashboard 的 daily_stats），画的是每天的总次数。
+  ///
+  /// 今天还没过完：今天这一点按「已过时长占全天的比例」折算成全天预估（[projectTodayTotal]），
+  /// 并且昨天到今天这一段画成虚线、今天的点画成空心圆，表示「这是估的」。
+  /// 不折算的话每天最后一个点都会断崖式下跌，像是出了故障。
+  Widget _buildTrendCard(LogSummary summary) {
+    final palette = context.palette;
+    final days = summary.days;
+    final last = days.length - 1;
+    final todayActual = days[last].total;
+    final projected = projectTodayTotal(todayActual, DateTime.now());
+    final average = averageDailyTotal(days, projected);
+
+    // 实线：已经过完的那些天；虚线：昨天 → 今天（预估）。
+    final solidSpots = [
+      for (var i = 0; i < last; i++)
+        FlSpot(i.toDouble(), days[i].total.toDouble()),
+    ];
+    final dashedSpots = [
+      if (last > 0)
+        FlSpot((last - 1).toDouble(), days[last - 1].total.toDouble()),
+      FlSpot(last.toDouble(), projected),
+    ];
+    final dashedBarIndex = solidSpots.isEmpty ? 0 : 1;
+
+    // 纵轴固定 3 格，格距取整，网格线和刻度都落在整数上。
+    var maxValue = projected;
+    for (final day in days) {
+      maxValue = math.max(maxValue, day.total.toDouble());
+    }
+    final interval = math.max(1, (maxValue / 3).ceil()).toDouble();
+    final axisStyle = AppText.tabular(
+      AppText.caption.copyWith(fontSize: 10.5, color: palette.text2),
+    );
+
+    LineChartBarData bar(List<FlSpot> spots, {bool dashed = false}) {
+      return LineChartBarData(
+        spots: spots,
+        // 不做样条平滑：每个点是「某天执行了几次」的整数计数，两天之间没有中间值。
+        isCurved: false,
+        color: palette.warn,
+        barWidth: 2.5,
+        isStrokeCapRound: true,
+        dashArray: dashed ? const [5, 4] : null,
+        // 只在今天（预估）那一点画个空心圆，其余点不画。
+        dotData: FlDotData(
+          show: dashed,
+          checkToShowDot: (spot, _) => spot.x == last,
+          getDotPainter: (spot, percent, barData, index) => FlDotCirclePainter(
+            radius: 4.5,
+            color: palette.card,
+            strokeWidth: 2.5,
+            strokeColor: palette.warn,
+          ),
+        ),
+        belowBarData: BarAreaData(show: false),
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        0,
+        AppSpacing.lg,
+        AppSpacing.md,
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+      decoration: BoxDecoration(
+        color: palette.card,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      log.taskName ?? '任务 #${log.taskId}',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: Theme.of(context).colorScheme.onSurface,
-                        height: 1.2,
+                      '执行趋势',
+                      style: AppText.cardTitle.copyWith(
+                        fontSize: 19,
+                        color: palette.text,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 2),
                     Text(
-                      '运行时间 ${formatTimeCn(log.startedAt)} · ${log.durationText}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: isLight
-                            ? AppColors.slate500
-                            : AppColors.slate400,
-                      ),
+                      '近 ${days.length} 天',
+                      style: AppText.caption.copyWith(color: palette.text2),
                     ),
                   ],
                 ),
               ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '每日平均',
+                    style: AppText.caption.copyWith(color: palette.text2),
+                  ),
+                  Text(
+                    '${average.round()} 次',
+                    style: AppText.tabular(
+                      AppText.cardTitle.copyWith(color: palette.warnInk),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            height: 150,
+            child: LineChart(
+              duration: AppMotion.of(context, AppMotion.normal),
+              LineChartData(
+                minX: 0,
+                // 只有一天的数据时横轴宽度不能是 0
+                maxX: math.max(last, 1).toDouble(),
+                minY: 0,
+                maxY: interval * 3,
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: false,
+                  horizontalInterval: interval,
+                  // 网格线用发丝线，只做参照，不抢折线的视线
+                  getDrawingHorizontalLine: (_) =>
+                      FlLine(color: palette.separator, strokeWidth: 0.5),
+                ),
+                titlesData: FlTitlesData(
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 30,
+                      interval: interval,
+                      getTitlesWidget: (value, meta) =>
+                          Text(value.toInt().toString(), style: axisStyle),
+                    ),
+                  ),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 24,
+                      interval: (days.length / 5).ceilToDouble().clamp(
+                        1,
+                        double.infinity,
+                      ),
+                      getTitlesWidget: (value, meta) {
+                        final index = value.toInt();
+                        if (index < 0 || index > last) {
+                          return const SizedBox.shrink();
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            index == last ? '今天' : days[index].dayLabel,
+                            style: axisStyle,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  topTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                ),
+                borderData: FlBorderData(show: false),
+                lineTouchData: LineTouchData(
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipColor: (_) => palette.card2,
+                    getTooltipItems: (touched) {
+                      final style = AppText.tabular(
+                        TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: palette.text,
+                        ),
+                      );
+                      return touched.map((spot) {
+                        final index = spot.x.toInt();
+                        // 昨天那一点实线、虚线各有一个，只让实线那条出提示，免得重复
+                        if (spot.barIndex == dashedBarIndex && index != last) {
+                          return null;
+                        }
+                        if (index == last) {
+                          return LineTooltipItem(
+                            '今天已执行 $todayActual 次\n预估全天 ${projected.round()} 次',
+                            style,
+                          );
+                        }
+                        return LineTooltipItem(
+                          '${days[index].date}  ${days[index].total} 次',
+                          style,
+                        );
+                      }).toList();
+                    },
+                  ),
+                ),
+                lineBarsData: [
+                  if (solidSpots.isNotEmpty) bar(solidSpots),
+                  bar(dashedSpots, dashed: true),
+                ],
+              ),
             ),
           ),
-          const SizedBox(width: 8),
-          IconButton(
-            tooltip: '删除日志',
-            onPressed: onDelete,
-            // compact 是 -2 档，把 IconButton 的 48 压到 40。改成 -1 档取 44：
-            // 既过了 44dp 这条线，又不像直接删掉那样让每行都长高 8dp、一屏少显示条数。
-            visualDensity: const VisualDensity(horizontal: -1, vertical: -1),
-            splashRadius: 20,
-            icon: const Icon(Icons.delete_outline, size: 20),
-            color: AppColors.red500,
+          const SizedBox(height: 10),
+          Text(
+            '虚线是今天按已过时长折算的全天预估。按住图表查看每天的次数。',
+            style: AppText.caption.copyWith(
+              fontSize: 12.5,
+              color: palette.text2,
+            ),
           ),
         ],
       ),
     );
   }
+
+  /// 日志列表：按天分组的圆角卡片（iOS 分组列表样式），组头是「今天 / 昨天 / 11月23日」。
+  List<Widget> _buildListSlivers(LogListState state, bool canDelete) {
+    if (state.loading && state.logs.isEmpty) {
+      return const [SliverToBoxAdapter(child: AppLoadingView(topPadding: 48))];
+    }
+    // 拿不到数据和真的没有数据是两回事，必须先判 error。
+    if (state.error != null && state.logs.isEmpty) {
+      return [
+        SliverToBoxAdapter(
+          child: AppErrorView(
+            title: '日志加载失败',
+            message: state.error!,
+            padding: const EdgeInsets.fromLTRB(32, 48, 32, 0),
+            onRetry: () =>
+                ref.read(logListProvider.notifier).load(refresh: true),
+          ),
+        ),
+      ];
+    }
+    if (state.logs.isEmpty) {
+      return const [
+        SliverToBoxAdapter(
+          child: AppEmptyView(
+            icon: Icons.article_outlined,
+            message: '暂无日志',
+            topPadding: 48,
+          ),
+        ),
+      ];
+    }
+
+    // 摊平成「组头 + 行」的一维列表，懒加载时按下标取。
+    // 每一行记下自己是不是本组第一行 / 最后一行，用来决定圆角和分隔线。
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    DateTime dayOf(TaskLog log) {
+      final local = log.startedAt.toLocal();
+      return DateTime(local.year, local.month, local.day);
+    }
+
+    final entries = <Object>[];
+    final logs = state.logs;
+    for (var i = 0; i < logs.length; i++) {
+      final day = dayOf(logs[i]);
+      final isFirst = i == 0 || dayOf(logs[i - 1]) != day;
+      final isLast = i == logs.length - 1 || dayOf(logs[i + 1]) != day;
+      if (isFirst) {
+        final diff = today.difference(day).inDays;
+        entries.add(
+          diff == 0
+              ? '今天'
+              : diff == 1
+              ? '昨天'
+              : day.year == today.year
+              ? '${day.month}月${day.day}日'
+              : '${day.year}年${day.month}月${day.day}日',
+        );
+      }
+      entries.add((log: logs[i], first: isFirst, last: isLast));
+    }
+
+    final palette = context.palette;
+    return [
+      SliverPadding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+        sliver: SliverList(
+          delegate: SliverChildBuilderDelegate((context, index) {
+            final entry = entries[index];
+            if (entry is String) {
+              return Padding(
+                padding: EdgeInsets.fromLTRB(20, index == 0 ? 4 : 18, 20, 8),
+                child: Text(
+                  entry,
+                  style: AppText.caption.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: palette.text2,
+                  ),
+                ),
+              );
+            }
+            final slot = entry as ({TaskLog log, bool first, bool last});
+            return _buildLogRow(slot.log, slot.first, slot.last, canDelete);
+          }, childCount: entries.length),
+        ),
+      ),
+    ];
+  }
+
+  Widget _buildLogRow(TaskLog log, bool first, bool last, bool canDelete) {
+    final palette = context.palette;
+    final selected = _selectedIds.contains(log.id);
+
+    // 状态色：成功=绿、失败=红、运行中=蓝、已终止=橙、未知=灰。
+    // 「已终止」单独一档：面板 v3 的 status=3 以前会亮成运行中的蓝，用户会以为任务卡住了。
+    final (IconData icon, Color color) = switch (log.statusTone) {
+      PanelStatusTone.success => (Icons.check_rounded, palette.ok),
+      PanelStatusTone.danger => (Icons.close_rounded, palette.err),
+      PanelStatusTone.running => (Icons.autorenew_rounded, palette.accent),
+      PanelStatusTone.warning => (Icons.stop_rounded, palette.warn),
+      PanelStatusTone.neutral => (Icons.question_mark_rounded, palette.text3),
+    };
+
+    // 失败的行直接把错误行摆出来，不用点进去翻。正文来自列表接口自带的 content，不额外发请求。
+    final errorLine = log.isFailed
+        ? _errorLineCache.putIfAbsent(
+            log.id,
+            () => pickLogErrorLine(log.content),
+          )
+        : null;
+
+    void open() {
+      if (_selectionMode) {
+        _toggleSelection(log.id);
+      } else {
+        context.push('/logs/${log.id}/stream');
+      }
+    }
+
+    final time = DateFormat('HH:mm:ss').format(log.startedAt.toLocal());
+    Widget row = ColoredBox(
+      // 多选选中的行铺一层浅蓝；叠在卡片白上，不能直接用半透明色（会透出页面灰底）。
+      color: selected
+          ? Color.alphaBlend(palette.tint(palette.accent), palette.card)
+          : palette.card,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          AppGroupedRow(
+            leading: _selectionMode
+                ? SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: Icon(
+                      selected
+                          ? Icons.check_circle_rounded
+                          : Icons.circle_outlined,
+                      size: 26,
+                      color: selected ? palette.accent : palette.text3,
+                    ),
+                  )
+                : AppIconTile(icon: icon, color: color),
+            title: log.taskName ?? '任务 #${log.taskId}',
+            subtitle: '$time · ${log.isRunning ? '运行中' : log.durationText}',
+            showChevron: !_selectionMode,
+            showSeparator: !first,
+            onTap: open,
+            // 长按进多选，多选只服务批量删除，没有删除权限就不给
+            onLongPress: canDelete && !_selectionMode
+                ? () => _enterSelectionModeWith(log.id)
+                : null,
+          ),
+          if (errorLine != null)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: open,
+              child: Container(
+                // 左边与行标题对齐：行内边距 18 + 图标 36 + 间距 14
+                margin: const EdgeInsets.fromLTRB(68, 0, 18, 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 7,
+                ),
+                decoration: BoxDecoration(
+                  color: palette.tint(palette.err),
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                ),
+                child: Text(
+                  errorLine,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 12.5,
+                    height: 1.35,
+                    color: palette.errInk,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+
+    // 左滑删除：先弹确认，删成功才真的滑走，取消或失败就弹回原位。多选时不给滑。
+    if (canDelete && !_selectionMode) {
+      row = Dismissible(
+        key: ValueKey('log-${log.id}'),
+        direction: DismissDirection.endToStart,
+        background: Container(
+          color: palette.err,
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.only(right: 24),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.delete_outline_rounded, color: palette.onStatus),
+              const SizedBox(width: 6),
+              Text(
+                '删除',
+                style: TextStyle(
+                  color: palette.onStatus,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+        confirmDismiss: (_) => _handleDelete(log),
+        onDismissed: (_) =>
+            ref.read(logListProvider.notifier).removeLocally(log.id),
+        child: row,
+      );
+    }
+
+    // 本组第一行圆上边、最后一行圆下边，连起来就是一张分组卡片。
+    const radius = Radius.circular(AppRadius.card);
+    return ClipRRect(
+      borderRadius: BorderRadius.vertical(
+        top: first ? radius : Radius.zero,
+        bottom: last ? radius : Radius.zero,
+      ),
+      child: row,
+    );
+  }
 }
 
-class _StatusFilterChip extends StatelessWidget {
+/// 一个筛选方块：彩色图标方块 + 状态名 + 今天的次数。选中时方块变成实色。
+class _StatusFilterTile extends StatelessWidget {
   final String label;
+  final IconData icon;
+  final Color color;
+  final int? count;
   final bool selected;
   final VoidCallback onTap;
 
-  /// 状态筛选 chip 的强调色。
-  ///
-  /// 传 null 表示「这不是某个状态，而是『全部』」，用中性强调色。
-  /// 原先默认值是 `AppColors.primary`，主色换蓝之后「全部」和「运行中」
-  /// 是同一族蓝，选中时分不清选的是哪个，所以默认改成中性色。
-  final Color? selectedColor;
-
-  const _StatusFilterChip({
+  const _StatusFilterTile({
     required this.label,
+    required this.icon,
+    required this.color,
+    required this.count,
     required this.selected,
     required this.onTap,
-    this.selectedColor,
   });
 
   @override
   Widget build(BuildContext context) {
-    final surfaces = AppSurfaces.of(context);
-    final isLight = surfaces.isLight;
-    final accent =
-        selectedColor ?? (isLight ? AppColors.slate800 : AppColors.slate100);
-    // 选中态底色是 accent 的 alpha=16 淡底。三个筛选项传的是
-    // success / danger / info，其中 success 在淡底上只有 2.13:1。
-    final foreground = selected
-        ? surfaces.tintFg(accent)
-        : (isLight ? AppColors.slate600 : AppColors.slate300);
-    return Material(
-      color: Colors.transparent,
+    final palette = context.palette;
+    return Semantics(
+      button: true,
+      selected: selected,
       child: InkWell(
         onTap: onTap,
-        // 水波纹与底板必须同档，否则波纹会溢出胶囊的两个圆头。
-        borderRadius: BorderRadius.circular(AppRadius.pill),
-        child: Ink(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          decoration: BoxDecoration(
-            color: selected
-                ? accent.withAlpha(16)
-                : (isLight ? AppColors.slate50 : AppColors.slate950),
-            borderRadius: BorderRadius.circular(AppRadius.pill),
-            border: Border.all(
-              color: selected
-                  ? accent.withAlpha(70)
-                  : (isLight ? AppColors.slate200 : AppColors.slate800),
-            ),
-          ),
-          child: Row(
+        borderRadius: BorderRadius.circular(AppRadius.tile),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              AppIconTile(icon: icon, color: color, size: 52, solid: selected),
+              const SizedBox(height: 8),
               Text(
                 label,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: foreground,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppText.caption.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: palette.text,
                 ),
               ),
+              if (count != null)
+                Text(
+                  '$count 次',
+                  maxLines: 1,
+                  style: AppText.tabular(
+                    AppText.caption.copyWith(
+                      fontSize: 12,
+                      color: palette.text2,
+                    ),
+                  ),
+                ),
             ],
           ),
         ),

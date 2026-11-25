@@ -3,11 +3,12 @@ import 'package:intl/intl.dart';
 
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
-import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_back_button.dart';
+import '../../../shared/widgets/app_grouped_list.dart';
+import '../../../shared/widgets/app_large_title_header.dart';
 
 class SponsorPage extends StatefulWidget {
   const SponsorPage({super.key});
@@ -98,100 +99,100 @@ class _SponsorPageState extends State<SponsorPage> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
+    final palette = context.palette;
+    final caption = AppText.caption.copyWith(color: palette.text2);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('赞助名单')),
-      body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppColors.primary),
-            )
-          : RefreshIndicator(
-              color: AppColors.primary,
-              onRefresh: _loadSponsors,
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
-                children: [
-                  AppCard(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+      body: SafeArea(
+        child: _loading
+            ? Center(child: CircularProgressIndicator(color: palette.accent))
+            : RefreshIndicator(
+                color: palette.accent,
+                onRefresh: _loadSponsors,
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                  children: [
+                    // 二级页：返回按钮在上，大标题在下（iOS 的导航大标题样式）
+                    const Align(
+                      alignment: Alignment.centerLeft,
+                      child: AppBackButton(),
+                    ),
+                    AppLargeTitleHeader(
+                      title: '赞助名单',
+                      subtitle: _summaryText(),
+                      padding: const EdgeInsets.fromLTRB(4, 4, 4, 20),
+                    ),
+                    AppGroupedList(
                       children: [
-                        const Text(
-                          '感谢支持',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '本项目长期持续维护，感谢每一位赞助用户对开发迭代和服务开销的支持。',
-                          style: TextStyle(
-                            fontSize: 13,
-                            height: 1.6,
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          _summaryText(),
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: isLight
-                                ? AppColors.slate500
-                                : AppColors.slate400,
+                        Padding(
+                          padding: const EdgeInsets.all(18),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '感谢支持',
+                                style: AppText.cardTitle.copyWith(
+                                  color: palette.text,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                '本项目长期持续维护，感谢每一位赞助用户对开发迭代和服务开销的支持。',
+                                style: caption,
+                              ),
+                            ],
                           ),
                         ),
                       ],
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  if (_sponsors.isEmpty)
-                    AppCard(
-                      padding: const EdgeInsets.all(AppSpacing.xl),
-                      child: Column(
+                    const SizedBox(height: 28),
+                    if (_sponsors.isEmpty)
+                      AppGroupedList(
                         children: [
-                          Icon(
-                            Icons.favorite_border,
-                            size: 44,
-                            color: AppColors.primary.withAlpha(180),
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            _unavailable ? '赞助名单服务暂时不可用' : '暂时还没有赞助名单',
-                            style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            _unavailable
-                                ? '后端已经做了兜底，晚点下拉刷新再看即可。'
-                                : '后续录入赞助信息后，这里会自动展示最新名单。',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 13,
-                              height: 1.6,
-                              color: theme.colorScheme.onSurfaceVariant,
+                          Padding(
+                            padding: const EdgeInsets.all(AppSpacing.xl),
+                            child: Column(
+                              children: [
+                                Icon(
+                                  Icons.favorite_border,
+                                  size: 44,
+                                  color: palette.text3,
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  _unavailable ? '赞助名单服务暂时不可用' : '暂时还没有赞助名单',
+                                  style: AppText.body.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: palette.text,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  _unavailable
+                                      ? '后端已经做了兜底，晚点下拉刷新再看即可。'
+                                      : '后续录入赞助信息后，这里会自动展示最新名单。',
+                                  textAlign: TextAlign.center,
+                                  style: caption,
+                                ),
+                              ],
                             ),
                           ),
                         ],
+                      )
+                    else
+                      AppGroupedList(
+                        children: [
+                          for (final sponsor in _sponsors)
+                            _SponsorRow(
+                              sponsor: sponsor,
+                              currencyFormat: _currencyFormat,
+                            ),
+                        ],
                       ),
-                    )
-                  else
-                    ..._sponsors.map(
-                      (sponsor) => _SponsorCard(
-                        sponsor: sponsor,
-                        currencyFormat: _currencyFormat,
-                        isLight: isLight,
-                      ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
+      ),
     );
   }
 }
@@ -226,75 +227,46 @@ class _SponsorRecord {
   }
 }
 
-class _SponsorCard extends StatelessWidget {
+/// 赞助名单里的一行：头像 + 名字 + 金额（等宽数字）。
+class _SponsorRow extends StatelessWidget {
   final _SponsorRecord sponsor;
   final NumberFormat currencyFormat;
-  final bool isLight;
 
-  const _SponsorCard({
-    required this.sponsor,
-    required this.currencyFormat,
-    required this.isLight,
-  });
+  const _SponsorRow({required this.sponsor, required this.currencyFormat});
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.palette;
     final avatarUrl = sponsor.avatarUrl.trim();
-    return AppCard(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
-      child: Row(
-        children: [
-          avatarUrl.isNotEmpty
-              ? ClipOval(
-                  child: Image.network(
-                    avatarUrl,
-                    width: 46,
-                    height: 46,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) =>
-                        _FallbackAvatar(initial: sponsor.initial),
-                  ),
-                )
-              : _FallbackAvatar(initial: sponsor.initial),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  sponsor.name,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '感谢你的支持',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
+    return AppGroupedRow(
+      leading: avatarUrl.isNotEmpty
+          ? ClipOval(
+              child: Image.network(
+                avatarUrl,
+                width: 36,
+                height: 36,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) =>
+                    _FallbackAvatar(initial: sponsor.initial),
+              ),
+            )
+          : _FallbackAvatar(initial: sponsor.initial),
+      title: sponsor.name,
+      subtitle: '感谢你的支持',
+      trailing: Text(
+        currencyFormat.format(sponsor.amount),
+        style: AppText.tabular(
+          AppText.body.copyWith(
+            fontWeight: FontWeight.w700,
+            color: palette.text,
           ),
-          const SizedBox(width: 10),
-          Text(
-            currencyFormat.format(sponsor.amount),
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-              color: AppColors.primary,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
+/// 头像兜底：首字母圆底。尺寸与 `Image.network` 的 36 一致，加载失败那一刻不跳。
 class _FallbackAvatar extends StatelessWidget {
   final String initial;
 
@@ -302,21 +274,22 @@ class _FallbackAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.palette;
     return Container(
-      width: 46,
-      height: 46,
+      width: 36,
+      height: 36,
       decoration: BoxDecoration(
-        color: AppColors.primary.withAlpha(22),
+        color: palette.tint(palette.accent),
         shape: BoxShape.circle,
       ),
       alignment: Alignment.center,
       child: Text(
         initial,
         style: TextStyle(
-          fontSize: 18,
+          fontSize: 15,
           fontWeight: FontWeight.w700,
-          // 圆底就是 primary 的 alpha=22 淡底，首字母用满强度同色只有 2.6:1。
-          color: context.surfaces.tintFg(AppColors.primary),
+          // 浅底上的字用墨色
+          color: palette.accentInk,
         ),
       ),
     );

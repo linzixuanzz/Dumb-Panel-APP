@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../core/theme/app_theme.dart';
 import '../../core/theme/design_tokens.dart';
 
 /// 提示条的语义色调。
@@ -74,7 +73,7 @@ class AppSnack {
       messenger.hideCurrentSnackBar();
     }
 
-    final accent = _accentOf(tone);
+    final accent = _accentOf(tone, context.palette);
     // neutral 一律传 null，让 SnackBar 落回主题默认的 inverseSurface /
     // onInverseSurface 组合 —— 未重标的调用点配色与改造前逐字节相同。
     final surfaces = AppSurfaces.of(context);
@@ -139,10 +138,11 @@ class AppSnack {
   );
 
   /// 返回该色调的强调色；neutral 返回 null 表示「不着色，用主题默认」。
-  static Color? _accentOf(AppSnackTone tone) => switch (tone) {
-    AppSnackTone.neutral => null,
-    AppSnackTone.success => AppColors.success,
-    AppSnackTone.error => AppColors.danger,
-    AppSnackTone.warning => AppColors.warning,
-  };
+  static Color? _accentOf(AppSnackTone tone, AppPalette palette) =>
+      switch (tone) {
+        AppSnackTone.neutral => null,
+        AppSnackTone.success => palette.ok,
+        AppSnackTone.error => palette.err,
+        AppSnackTone.warning => palette.warn,
+      };
 }

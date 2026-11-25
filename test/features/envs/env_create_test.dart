@@ -4,7 +4,6 @@ import 'package:daidai_app/core/network/api_endpoints.dart';
 import 'package:daidai_app/core/theme/app_theme.dart';
 import 'package:daidai_app/features/envs/views/env_list_page.dart';
 import 'package:daidai_app/shared/utils/api_utils.dart';
-import 'package:daidai_app/shared/widgets/app_circle_add_button.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -216,7 +215,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byType(AppCircleAddButton));
+      await tester.tap(find.byTooltip('新建变量'));
       await tester.pumpAndSettle();
       expect(find.text('新建环境变量'), findsOneWidget);
 
@@ -269,7 +268,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byType(AppCircleAddButton));
+      await tester.tap(find.byTooltip('新建变量'));
       await tester.pumpAndSettle();
 
       // 弹层里的第一个输入框就是「变量名」。取错了的话名字会是空的，
@@ -328,7 +327,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byType(AppCircleAddButton));
+      await tester.tap(find.byTooltip('新建变量'));
       await tester.pumpAndSettle();
       await tester.enterText(
         find

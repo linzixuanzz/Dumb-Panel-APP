@@ -2,11 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../auth/auth_provider.dart';
+import '../theme/design_tokens.dart';
 import 'default_landing_page.dart';
 import '../../features/login/views/app_boot_page.dart';
 import '../../features/login/views/login_page.dart';
 import '../../features/server_config/views/server_config_page.dart';
-import '../../features/dashboard/views/dashboard_page.dart';
+import '../../features/overview/views/overview_page.dart';
 import '../../features/tasks/views/task_list_page.dart';
 import '../../features/tasks/views/task_form_page.dart';
 import '../../features/tasks/views/task_detail_page.dart';
@@ -14,7 +15,7 @@ import '../../features/logs/views/log_list_page.dart';
 import '../../features/logs/views/log_stream_page.dart';
 import '../../features/envs/views/env_list_page.dart';
 import '../../features/settings/views/about_page.dart';
-import '../../features/settings/views/more_page.dart';
+import '../../features/settings/views/settings_page.dart';
 import '../../features/settings/views/sponsor_page.dart';
 import '../../features/subscriptions/views/subscription_list_page.dart';
 import '../../features/scripts/views/script_list_page.dart';
@@ -33,6 +34,30 @@ import '../../shared/models/task.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 final _shellNavigatorKey = GlobalKey<NavigatorState>();
+
+/// 底栏 5 个 Tab 的页面：切 Tab 时新页淡入并从 0.97 放大到 1（方案书 §2.5）。
+/// 系统开了「移除动画」时直接切，不做过渡。
+///
+/// 公开出来是给测试里自建的路由表复用，保证测的就是线上这套过渡。
+Page<void> tabPage(GoRouterState state, Widget child) {
+  return CustomTransitionPage<void>(
+    key: state.pageKey,
+    child: child,
+    transitionDuration: AppMotion.normal,
+    reverseTransitionDuration: Duration.zero,
+    transitionsBuilder: (context, animation, secondaryAnimation, child) {
+      if (AppMotion.reduce(context)) return child;
+      final curved = CurvedAnimation(parent: animation, curve: Curves.easeOut);
+      return FadeTransition(
+        opacity: curved,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.97, end: 1).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
+}
 
 /// 将 auth status 变化转为 Listenable，供 GoRouter.refreshListenable 使用
 class _AuthNotifierBridge extends ChangeNotifier {
@@ -74,7 +99,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       }
       if (isServerConfig) {
         if (isAuth && !manualServerConfig && !manageServerConfig) {
-          // 进入主界面的落点统一读「默认打开页面」（APP #24），没设过就是主页
+          // 进入主界面的落点统一读「默认打开页面」（APP #24），没设过就是任务
           return DefaultLandingPage.route;
         }
         if (!isAuth &&
@@ -98,34 +123,33 @@ final routerProvider = Provider<GoRouter>((ref) {
         ),
       ),
       GoRoute(path: '/login', builder: (_, state) => const LoginPage()),
+      // v2.0 底栏改成「任务 / 日志 / 概览 / 变量 / 设置」，旧的两个 Tab 路由保留成重定向：
+      // 旧版本的深链、页面里还没改的 context.go('/dashboard' | '/more') 都不会落空。
+      GoRoute(path: '/dashboard', redirect: (_, state) => '/overview'),
+      GoRoute(path: '/more', redirect: (_, state) => '/settings'),
       ShellRoute(
         navigatorKey: _shellNavigatorKey,
         builder: (_, state, child) => MainScaffold(child: child),
         routes: [
           GoRoute(
-            path: '/dashboard',
-            pageBuilder: (_, state) =>
-                const NoTransitionPage(child: DashboardPage()),
-          ),
-          GoRoute(
             path: '/tasks',
-            pageBuilder: (_, state) =>
-                const NoTransitionPage(child: TaskListPage()),
+            pageBuilder: (_, state) => tabPage(state, const TaskListPage()),
           ),
           GoRoute(
             path: '/logs',
-            pageBuilder: (_, state) =>
-                const NoTransitionPage(child: LogListPage()),
+            pageBuilder: (_, state) => tabPage(state, const LogListPage()),
+          ),
+          GoRoute(
+            path: '/overview',
+            pageBuilder: (_, state) => tabPage(state, const OverviewPage()),
           ),
           GoRoute(
             path: '/envs',
-            pageBuilder: (_, state) =>
-                const NoTransitionPage(child: EnvListPage()),
+            pageBuilder: (_, state) => tabPage(state, const EnvListPage()),
           ),
           GoRoute(
-            path: '/more',
-            pageBuilder: (_, state) =>
-                const NoTransitionPage(child: MorePage()),
+            path: '/settings',
+            pageBuilder: (_, state) => tabPage(state, const SettingsPage()),
           ),
         ],
       ),
@@ -146,7 +170,8 @@ final routerProvider = Provider<GoRouter>((ref) {
           return TaskFormPage(task: task);
         },
       ),
-      // 任务详情（issue #20）：extra 传列表里那条 Task，先渲染再跟着列表 provider 刷新
+      // 任务详情（issue #20）：extra 传列表里那条 Task，先渲染再跟着列表 provider 刷新。
+      // v2.0 起列表点任务直接弹 showTaskDetailSheet，这条路由保留给深链与旧调用。
       GoRoute(
         path: '/tasks/:id/detail',
         parentNavigatorKey: _rootNavigatorKey,

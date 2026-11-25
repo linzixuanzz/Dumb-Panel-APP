@@ -4,13 +4,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_circle_add_button.dart';
 import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_large_title_header.dart';
+import '../../../shared/widgets/app_pill_button.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
 
@@ -22,7 +23,9 @@ final userListProvider = StateNotifierProvider<UserListNotifier, UserListState>(
   },
 );
 
-class _User {
+/// 面板用户（原名 `_User`）。因为公开的 [UserListState] 要暴露它，
+/// 私有类型会触发 library_private_types_in_public_api，所以改成公开名，结构不变。
+class PanelUser {
   final int id;
   final String username;
   final String role;
@@ -30,7 +33,7 @@ class _User {
   final DateTime? lastLoginAt;
   final DateTime createdAt;
 
-  const _User({
+  const PanelUser({
     required this.id,
     required this.username,
     required this.role,
@@ -39,8 +42,8 @@ class _User {
     required this.createdAt,
   });
 
-  factory _User.fromJson(Map<String, dynamic> json) {
-    return _User(
+  factory PanelUser.fromJson(Map<String, dynamic> json) {
+    return PanelUser(
       id: (json['id'] as num?)?.toInt() ?? 0,
       username: json['username']?.toString() ?? '',
       role: json['role']?.toString() ?? 'viewer',
@@ -71,7 +74,7 @@ class _User {
 }
 
 class UserListState {
-  final List<_User> items;
+  final List<PanelUser> items;
   final bool loading;
   final String? error;
 
@@ -83,7 +86,11 @@ class UserListState {
 
   /// [error] 刻意不写 `error ?? this.error`：语义是「不传即清空」，
   /// 否则一次失败之后的所有 `copyWith` 都会把旧错误粘住，重试成功了还在报错。
-  UserListState copyWith({List<_User>? items, bool? loading, String? error}) {
+  UserListState copyWith({
+    List<PanelUser>? items,
+    bool? loading,
+    String? error,
+  }) {
     return UserListState(
       items: items ?? this.items,
       loading: loading ?? this.loading,
@@ -108,11 +115,11 @@ class UserListNotifier extends StateNotifier<UserListState> {
     try {
       final resp = await _dio.get(ApiEndpoints.users);
       final data = extractData(resp.data);
-      List<_User> items = [];
+      List<PanelUser> items = [];
       if (data is List) {
         items = data
             .whereType<Map<String, dynamic>>()
-            .map((e) => _User.fromJson(e))
+            .map((e) => PanelUser.fromJson(e))
             .toList();
       }
       state = state.copyWith(items: items, loading: false);
@@ -172,8 +179,9 @@ class _UserListPageState extends ConsumerState<UserListPage> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(userListProvider);
-    final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
+    final p = context.palette;
+    // 二级页面没有悬浮底栏，这里读到的是系统安全区 + 16。
+    final listBottom = AppSpacing.listBottomOf(context);
     final currentUsername = ref.watch(authProvider).user?.username;
 
     return Scaffold(
@@ -181,39 +189,24 @@ class _UserListPageState extends ConsumerState<UserListPage> {
         padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12),
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  const AppBackButton(),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      '用户管理',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  AppCircleAddButton(onTap: () => _showCreateDialog()),
-                ],
-              ),
+            // 返回头 + 大标题（v2.0 次级页面统一写法）
+            AppLargeTitleHeader(
+              title: '用户管理',
+              leading: const AppBackButton(),
+              actions: [AppCircleAddButton(onTap: () => _showCreateDialog())],
+              padding: const EdgeInsets.fromLTRB(8, 0, 16, 16),
             ),
-            const SizedBox(height: 16),
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: p.accent,
                 onRefresh: () => ref.read(userListProvider.notifier).load(),
                 child: state.loading && state.items.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
-                          SizedBox(height: 120),
+                        children: [
+                          const SizedBox(height: 120),
                           Center(
-                            child: CircularProgressIndicator(
-                              color: AppColors.primary,
-                            ),
+                            child: CircularProgressIndicator(color: p.accent),
                           ),
                         ],
                       )
@@ -239,23 +232,22 @@ class _UserListPageState extends ConsumerState<UserListPage> {
                           Icon(
                             Icons.people_outline,
                             size: 56,
-                            color: AppColors.slate400.withAlpha(120),
+                            color: p.text3,
                           ),
                           const SizedBox(height: 12),
-                          const Center(
+                          Center(
                             child: Text(
                               '暂无用户',
-                              style: TextStyle(color: AppColors.slate400),
+                              style: TextStyle(color: p.text2),
                             ),
                           ),
                         ],
                       )
                     : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                        padding: EdgeInsets.fromLTRB(20, 0, 20, listBottom),
                         itemCount: state.items.length,
                         itemBuilder: (_, i) => _UserCard(
                           user: state.items[i],
-                          isLight: isLight,
                           currentUsername: currentUsername,
                           ref: ref,
                           context: context,
@@ -272,7 +264,7 @@ class _UserListPageState extends ConsumerState<UserListPage> {
     );
   }
 
-  Future<void> _showRolePicker(_User user) async {
+  Future<void> _showRolePicker(PanelUser user) async {
     String role = user.role;
     final changed = await showDialog<String>(
       context: context,
@@ -457,7 +449,7 @@ class _UserListPageState extends ConsumerState<UserListPage> {
     );
   }
 
-  void _showResetPasswordDialog(_User user) {
+  void _showResetPasswordDialog(PanelUser user) {
     final passwordC = TextEditingController();
     showDialog(
       context: context,
@@ -495,6 +487,7 @@ class _UserListPageState extends ConsumerState<UserListPage> {
                           if (!mounted) {
                             return;
                           }
+                          if (!dialogCtx.mounted) return;
                           Navigator.of(dialogCtx).pop();
                           // 同上：弹窗已 pop，dialogCtx 失效，改用页面级 context，
                           // 由前面的 mounted 判断守住 async gap。
@@ -521,7 +514,7 @@ class _UserListPageState extends ConsumerState<UserListPage> {
     );
   }
 
-  Future<void> _confirmDelete(_User user) async {
+  Future<void> _confirmDelete(PanelUser user) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (dialogCtx) => AlertDialog(
@@ -543,12 +536,12 @@ class _UserListPageState extends ConsumerState<UserListPage> {
               Expanded(
                 child: SizedBox(
                   height: 44,
-                  child: FilledButton(
+                  child: AppPillButton(
+                    label: '删除',
+                    variant: AppPillVariant.danger,
+                    expand: true,
+                    height: 44,
                     onPressed: () => Navigator.pop(dialogCtx, true),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.red500,
-                    ),
-                    child: const Text('删除'),
                   ),
                 ),
               ),
@@ -575,18 +568,16 @@ class _UserListPageState extends ConsumerState<UserListPage> {
 }
 
 class _UserCard extends StatelessWidget {
-  final _User user;
-  final bool isLight;
+  final PanelUser user;
   final String? currentUsername;
   final WidgetRef ref;
   final BuildContext context;
-  final void Function(_User) showResetPw;
-  final Future<void> Function(_User) showRolePicker;
-  final Future<void> Function(_User) showDelete;
+  final void Function(PanelUser) showResetPw;
+  final Future<void> Function(PanelUser) showRolePicker;
+  final Future<void> Function(PanelUser) showDelete;
 
   const _UserCard({
     required this.user,
-    required this.isLight,
     required this.currentUsername,
     required this.ref,
     required this.context,
@@ -599,14 +590,13 @@ class _UserCard extends StatelessWidget {
   // 下面的 mounted 判断和 SnackBar 用。
   @override
   Widget build(BuildContext ctx) {
-    final roleColor = user.role == 'admin'
-        ? AppColors.red500
+    final p = ctx.palette;
+    // 角色色：实色只用来铺淡底；压在淡底上的首字母和徽章文字用对应的墨色。
+    final (roleColor, roleFg) = user.role == 'admin'
+        ? (p.err, p.errInk)
         : user.role == 'operator'
-        ? AppColors.amber500
-        : AppColors.primary;
-    // 首字母头像和角色徽章都压在 roleColor 的 alpha=25 淡底上，
-    // 管理员红 3.43:1、操作员琥珀 2.04:1、普通用户蓝 2.60:1。
-    final roleFg = AppSurfaces.of(ctx).tintFg(roleColor);
+        ? (p.warn, p.warnInk)
+        : (p.accent, p.accentInk);
     final isSelf = currentUsername == user.username;
 
     return AppCard(
@@ -618,7 +608,7 @@ class _UserCard extends StatelessWidget {
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color: roleColor.withAlpha(25),
+              color: p.tint(roleColor),
               shape: BoxShape.circle,
             ),
             child: Center(
@@ -653,7 +643,7 @@ class _UserCard extends StatelessWidget {
                         vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: roleColor.withAlpha(25),
+                        color: p.tint(roleColor),
                         // 10px 微徽章。原值 4，全库这一类统一走 sm。
                         borderRadius: BorderRadius.circular(AppRadius.sm),
                       ),
@@ -674,9 +664,7 @@ class _UserCard extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 12,
                     // 「已启用」全库统一走 success 绿，与任务/订阅/依赖列表一致。
-                    color: user.enabled
-                        ? AppColors.success
-                        : AppColors.slate400,
+                    color: user.enabled ? p.okInk : p.text2,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -684,14 +672,14 @@ class _UserCard extends StatelessWidget {
                   '最后登录: ${formatTimeCn(user.lastLoginAt)}',
                   style: TextStyle(
                     fontSize: 11,
-                    color: isLight ? AppColors.slate500 : AppColors.slate400,
+                    color: p.text2,
                   ),
                 ),
                 Text(
                   '创建时间: ${formatTimeCn(user.createdAt)}',
                   style: TextStyle(
                     fontSize: 11,
-                    color: isLight ? AppColors.slate500 : AppColors.slate400,
+                    color: p.text2,
                   ),
                 ),
               ],
@@ -701,7 +689,7 @@ class _UserCard extends StatelessWidget {
             icon: Icon(
               Icons.more_vert,
               size: 18,
-              color: isLight ? AppColors.slate400 : AppColors.slate500,
+              color: p.text3,
             ),
             itemBuilder: (_) => [
               if (!isSelf)
@@ -713,9 +701,9 @@ class _UserCard extends StatelessWidget {
                 ),
               const PopupMenuItem(value: 'reset_pw', child: Text('重置密码')),
               if (!isSelf)
-                const PopupMenuItem(
+                PopupMenuItem(
                   value: 'delete',
-                  child: Text('删除', style: TextStyle(color: AppColors.red500)),
+                  child: Text('删除', style: TextStyle(color: p.errInk)),
                 ),
             ],
             onSelected: (v) async {

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/auth/auth_provider.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/task_view.dart';
 import '../../../shared/utils/api_utils.dart';
@@ -120,7 +119,7 @@ class _TaskViewPickerSheet extends ConsumerWidget {
               leading: const Icon(Icons.all_inbox_outlined),
               title: const Text('全部任务'),
               trailing: selectedViewId == null
-                  ? const Icon(Icons.check, color: AppColors.primary)
+                  ? Icon(Icons.check, color: context.palette.accent)
                   : null,
               onTap: () => Navigator.pop(
                 context,
@@ -128,13 +127,13 @@ class _TaskViewPickerSheet extends ConsumerWidget {
               ),
             ),
             if (views.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(
+              Padding(
+                padding: const EdgeInsets.symmetric(
                   horizontal: AppSpacing.lg,
                   vertical: AppSpacing.sm,
                 ),
                 child: AppNotice(
-                  color: AppColors.info,
+                  color: context.palette.accent,
                   icon: Icons.filter_alt_outlined,
                   text: '面板上还没有任务视图。视图可以按命令、名称、定时规则、状态、标签、订阅等条件筛选任务。',
                 ),
@@ -159,7 +158,7 @@ class _TaskViewPickerSheet extends ConsumerWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           if (selected)
-                            const Icon(Icons.check, color: AppColors.primary),
+                            Icon(Icons.check, color: context.palette.accent),
                           if (canManage)
                             IconButton(
                               icon: const Icon(Icons.edit_outlined, size: 18),
@@ -405,7 +404,7 @@ class _TaskViewEditorSheetState extends ConsumerState<_TaskViewEditorSheet> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: AppColors.danger),
+            style: TextButton.styleFrom(foregroundColor: ctx.palette.errInk),
             child: const Text('删除'),
           ),
         ],
@@ -471,8 +470,8 @@ class _TaskViewEditorSheetState extends ConsumerState<_TaskViewEditorSheet> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const AppNotice(
-            color: AppColors.warning,
+          AppNotice(
+            color: context.palette.warn,
             icon: Icons.groups_outlined,
             text: '任务视图对所有用户可见，也会同步到网页端。在这里的改动会影响面板上的其他人。',
           ),
@@ -726,7 +725,9 @@ class _TaskViewEditorSheetState extends ConsumerState<_TaskViewEditorSheet> {
             TextButton.icon(
               onPressed: _saving ? null : _delete,
               icon: const Icon(Icons.delete_outline, size: 16),
-              style: TextButton.styleFrom(foregroundColor: AppColors.danger),
+              style: TextButton.styleFrom(
+                foregroundColor: context.palette.errInk,
+              ),
               label: const Text('删除'),
             ),
           const Spacer(),
@@ -739,12 +740,13 @@ class _TaskViewEditorSheetState extends ConsumerState<_TaskViewEditorSheet> {
             onPressed: _saving ? null : _save,
             style: FilledButton.styleFrom(minimumSize: const Size(80, 38)),
             child: _saving
-                ? const SizedBox(
+                ? SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: Colors.white,
+                      // 主按钮上的转圈：跟主按钮前景色（浅色白、深色黑）
+                      color: context.palette.primaryBtnFg,
                     ),
                   )
                 : const Text('保存'),

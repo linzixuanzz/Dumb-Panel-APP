@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../core/theme/app_theme.dart';
 import '../../core/theme/design_tokens.dart';
 
 /// 页面头部的胶囊型 chip 按钮（「批量」「排序」等）。
@@ -75,11 +74,11 @@ class AppChipButton extends StatelessWidget {
           ),
         ),
         child: iconOnly
-            ? Icon(icon, size: 16, color: AppColors.slate400)
+            ? Icon(icon, size: 16, color: surfaces.mutedText)
             : Row(
                 children: [
                   if (icon != null) ...[
-                    Icon(icon, size: 16, color: AppColors.slate400),
+                    Icon(icon, size: 16, color: surfaces.mutedText),
                     const SizedBox(width: AppSpacing.xs),
                   ],
                   Text(

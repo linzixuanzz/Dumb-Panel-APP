@@ -1,7 +1,6 @@
 import 'package:daidai_app/core/network/api_endpoints.dart';
 import 'package:daidai_app/core/network/dio_client.dart';
 import 'package:daidai_app/features/tasks/views/task_list_page.dart';
-import 'package:daidai_app/shared/widgets/app_circle_add_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -100,7 +99,8 @@ void main() {
     await _openPage(tester, textScale: 1.3);
 
     expect(tester.takeException(), isNull);
-    final add = find.byType(AppCircleAddButton);
+    // v2.0 页头：新建是右上角的圆形玻璃按钮
+    final add = find.byTooltip('新建任务');
     expect(tester.getRect(add).right, lessThanOrEqualTo(360));
     await tester.tap(add);
     await _pumpFrames(tester);

@@ -5,10 +5,10 @@ import '../../../core/auth/auth_provider.dart';
 import '../../../core/router/default_landing_page.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/network/dio_client.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/widgets/app_notice.dart';
-import '../../dashboard/providers/dashboard_provider.dart';
+import '../../../shared/widgets/app_pill_button.dart';
+import '../../overview/providers/dashboard_provider.dart';
 import '../widgets/geetest_captcha_dialog.dart';
 
 class LoginPage extends ConsumerStatefulWidget {
@@ -195,7 +195,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
       try {
         ref.invalidate(dashboardProvider);
-        await ref.read(dashboardProvider.notifier).load();
+        // 轻量预加载：只拉今日统计（小组件要用），其余等概览页挂载时再拉
+        await ref.read(dashboardProvider.notifier).load(full: false);
       } catch (_) {}
 
       if (mounted) {
@@ -240,7 +241,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final palette = context.palette;
 
     return Scaffold(
       // 这里**故意不设背景色**，不是漏写了，别再包一层回来。
@@ -250,8 +251,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       // 一个不用统一页面底色的页面。
       //
       // 而它的替代品「显式写 context.surfaces.page」同样是多余的 ——
-      // app_theme.dart 的 scaffoldBackgroundColor 就是 cs.surface
-      // （浅色 slate50 / 深色 slate950），与 AppSurfaces.page 逐字相同，
+      // app_theme.dart 的 scaffoldBackgroundColor 就是 palette.bg
+      // （v2.0：浅色 #F2F2F7 / 深色纯黑），与 AppSurfaces.page 逐字相同，
       // Scaffold 已经把这块底铺好了，再套一个 Container 只是满屏重画一遍。
       //
       // 交给 Scaffold 还有一个好处：将来若调整 scaffoldBackgroundColor，
@@ -273,34 +274,31 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     // 图标本身是不透明满幅的成品应用图标，那块底板只在四周露出 8dp 的
                     // 淡蓝框 —— 既没有承载信息，配色又和图标自己的蓝底几乎同色。
                     // 收成单层：直接把图标切成 56 的圆角方块，整体占位不变。
+                    // v2.0：图标放大到 64，圆角按彩色图标方块的比例（15/46）缩放。
                     ClipRRect(
-                      borderRadius: BorderRadius.circular(AppRadius.lg),
+                      borderRadius: BorderRadius.circular(
+                        AppRadius.tile * 64 / 46,
+                      ),
                       child: Image.asset(
                         'assets/icon.png',
-                        width: 56,
-                        height: 56,
+                        width: 64,
+                        height: 64,
                         fit: BoxFit.cover,
                       ),
                     ),
                     const SizedBox(height: 20),
 
-                    // Title
+                    // Title：v2.0 大标题
                     Text(
                       _needsInit ? '初始化面板' : '欢迎回来',
-                      style: const TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w700,
-                      ),
+                      style: AppText.largeTitle.copyWith(color: palette.text),
                     ),
                     const SizedBox(height: 6),
                     Text(
                       _needsInit
                           ? '首次使用，请创建管理员账号。'
                           : '登录 Daidai Panel 管理您的服务器与任务。',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
+                      style: AppText.caption.copyWith(color: palette.text2),
                     ),
                     const SizedBox(height: 32),
 
@@ -318,12 +316,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                             icon: Icon(
                               Icons.expand_more,
                               size: 20,
-                              color: theme.colorScheme.onSurfaceVariant,
+                              color: palette.text2,
                             ),
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: theme.colorScheme.onSurface,
-                            ),
+                            dropdownColor: palette.card,
+                            style: AppText.body.copyWith(color: palette.text),
                             items: _panels.map((p) {
                               return DropdownMenuItem(
                                 value: p.url,
@@ -354,6 +350,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                         controller: _usernameController,
                         decoration: const InputDecoration(
                           hintText: 'admin',
+                          // 外层 _IconInput 已经是白卡片，这里关掉全局主题的灰色填充，
+                          // 否则会变成白卡里再套一块灰底（双层背景）。
+                          filled: false,
                           border: InputBorder.none,
                           enabledBorder: InputBorder.none,
                           focusedBorder: InputBorder.none,
@@ -382,13 +381,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                               ? Icons.visibility_off_outlined
                               : Icons.visibility_outlined,
                           size: 20,
-                          color: theme.colorScheme.onSurfaceVariant,
+                          color: palette.text2,
                         ),
                       ),
                       child: TextFormField(
                         controller: _passwordController,
                         decoration: const InputDecoration(
                           hintText: '••••••••',
+                          filled: false, // 同上：卡片里不再套灰底
                           border: InputBorder.none,
                           enabledBorder: InputBorder.none,
                           focusedBorder: InputBorder.none,
@@ -418,9 +418,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                           child: Text(
                             '${_totpController.text.trim().length}/6',
                             textAlign: TextAlign.right,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: theme.colorScheme.onSurfaceVariant,
+                            style: AppText.tabular(
+                              AppText.caption.copyWith(color: palette.text2),
                             ),
                           ),
                         ),
@@ -428,6 +427,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                           controller: _totpController,
                           decoration: const InputDecoration(
                             hintText: '6位数字验证码',
+                            filled: false, // 同上：卡片里不再套灰底
                             border: InputBorder.none,
                             enabledBorder: InputBorder.none,
                             focusedBorder: InputBorder.none,
@@ -489,7 +489,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     if (_error != null) ...[
                       const SizedBox(height: 12),
                       AppNotice(
-                        color: AppColors.danger,
+                        color: palette.err,
                         text: _error!,
                         accentText: true,
                         textAlign: TextAlign.center,
@@ -498,31 +498,15 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
                     // Login Button
                     const SizedBox(height: 24),
-                    SizedBox(
-                      width: double.infinity,
+                    // v2.0 主操作统一成黑色胶囊（深色模式白色）。
+                    // 胶囊按钮只收文字，所以登录中不再在按钮里转圈，改成文案 + 禁用态。
+                    AppPillButton(
+                      label: _loading
+                          ? '正在登录…'
+                          : (_needsInit ? '创建并登录' : '连接并登录'),
+                      expand: true,
                       height: 52,
-                      // 本地 style 整块删除：底色 / 前景色 / 圆角三项与
-                      // filledButtonTheme 完全一致，只多出 elevation 4 +
-                      // 主色辉光 shadowColor。删掉即走 theme（elevation 0）。
-                      child: FilledButton(
-                        onPressed: _loading ? null : _submit,
-                        child: _loading
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : Text(
-                                _needsInit ? '创建并登录' : '连接并登录',
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                      ),
+                      onPressed: _loading ? null : _submit,
                     ),
 
                     // Switch panel
@@ -533,13 +517,13 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                         icon: Icon(
                           Icons.swap_horiz,
                           size: 18,
-                          color: theme.colorScheme.onSurfaceVariant,
+                          color: palette.text2,
                         ),
                         label: Text(
                           '管理面板',
-                          style: TextStyle(
-                            color: theme.colorScheme.onSurfaceVariant,
-                            fontSize: 13,
+                          style: AppText.caption.copyWith(
+                            color: palette.text2,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
@@ -575,10 +559,9 @@ class _FieldLabel extends StatelessWidget {
       padding: const EdgeInsets.only(left: 2),
       child: Text(
         text,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w500,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        style: AppText.caption.copyWith(
+          fontWeight: FontWeight.w600,
+          color: context.palette.text2,
         ),
       ),
     );
@@ -594,23 +577,19 @@ class _IconInput extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
-    final borderColor = isLight ? AppColors.slate200 : AppColors.slate800;
+    final palette = context.palette;
 
+    // v2.0：白卡片底、无描边（页面底是灰的，靠明度差分层），和分组列表同一种观感。
     return Container(
       height: 52,
       padding: const EdgeInsets.symmetric(horizontal: 14),
       decoration: BoxDecoration(
-        color: isLight ? Colors.white : AppColors.slate900,
-        // 这是一个自己画边框的输入框，必须与 inputDecorationTheme 同档，
-        // 否则同一屏里两种输入框会有两种角。
+        color: palette.card,
         borderRadius: BorderRadius.circular(AppRadius.md),
-        border: Border.all(color: borderColor),
       ),
       child: Row(
         children: [
-          Icon(icon, size: 20, color: AppColors.slate400),
+          Icon(icon, size: 20, color: palette.text2),
           const SizedBox(width: 12),
           Expanded(child: child),
           if (suffix != null) ...[const SizedBox(width: 8), suffix!],
@@ -635,9 +614,8 @@ class _CompactCheck extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = enabled
-        ? Theme.of(context).colorScheme.onSurface
-        : Theme.of(context).disabledColor;
+    final palette = context.palette;
+    final color = enabled ? palette.text : palette.text3;
 
     return GestureDetector(
       onTap: enabled ? () => onChanged(!value) : null,
@@ -650,15 +628,12 @@ class _CompactCheck extends StatelessWidget {
             child: Checkbox(
               value: value,
               onChanged: enabled ? (v) => onChanged(v ?? false) : null,
-              activeColor: AppColors.primary,
-              checkColor: Colors.white,
-              // 圆角已由 checkboxTheme 统一供给（AppRadius.control，同为 4），
-              // 本地覆盖删除，全库勾选框不再各写各的。
-              side: BorderSide(color: AppColors.slate300, width: 1.5),
+              // 选中色、圆角都由 checkboxTheme 统一供给（accent、AppRadius.control）。
+              side: BorderSide(color: palette.text3, width: 1.5),
             ),
           ),
           const SizedBox(width: 8),
-          Text(label, style: TextStyle(fontSize: 13, color: color)),
+          Text(label, style: AppText.caption.copyWith(color: color)),
         ],
       ),
     );

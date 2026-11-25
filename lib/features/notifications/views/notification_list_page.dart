@@ -6,13 +6,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/notify_channel.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/widgets/app_circle_add_button.dart';
 import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_large_title_header.dart';
+import '../../../shared/widgets/app_pill_button.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
 import '../utils/channel_config.dart';
@@ -166,48 +167,34 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(notificationListProvider);
-    final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
+    final p = context.palette;
+    // 二级页面没有悬浮底栏，这里读到的是系统安全区 + 16。
+    final listBottom = AppSpacing.listBottomOf(context);
 
     return Scaffold(
       body: Padding(
         padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12),
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  const AppBackButton(),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      '通知渠道',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  AppCircleAddButton(onTap: () => _showChannelDialog()),
-                ],
-              ),
+            // 返回头 + 大标题（v2.0 次级页面统一写法）
+            AppLargeTitleHeader(
+              title: '通知渠道',
+              leading: const AppBackButton(),
+              actions: [AppCircleAddButton(onTap: () => _showChannelDialog())],
+              padding: const EdgeInsets.fromLTRB(8, 0, 16, 16),
             ),
-            const SizedBox(height: 16),
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: p.accent,
                 onRefresh: () =>
                     ref.read(notificationListProvider.notifier).load(),
                 child: state.loading && state.items.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
-                          SizedBox(height: 120),
+                        children: [
+                          const SizedBox(height: 120),
                           Center(
-                            child: CircularProgressIndicator(
-                              color: AppColors.primary,
-                            ),
+                            child: CircularProgressIndicator(color: p.accent),
                           ),
                         ],
                       )
@@ -233,26 +220,25 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                           Icon(
                             Icons.notifications_off,
                             size: 56,
-                            color: AppColors.slate400.withAlpha(120),
+                            color: p.text3,
                           ),
                           const SizedBox(height: 12),
-                          const Center(
+                          Center(
                             child: Text(
                               '暂无通知渠道',
-                              style: TextStyle(color: AppColors.slate400),
+                              style: TextStyle(color: p.text2),
                             ),
                           ),
                         ],
                       )
                     : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                        padding: EdgeInsets.fromLTRB(20, 0, 20, listBottom),
                         itemCount: state.items.length,
                         itemBuilder: (_, i) {
                           final channel = state.items[i];
                           return _ChannelCard(
                             channel: channel,
                             typeLabel: _typeName(state.types, channel.type),
-                            isLight: isLight,
                             onEdit: () => _showChannelDialog(channel: channel),
                             onToggle: () => _doToggle(channel),
                             onTest: () => _doTest(channel),
@@ -320,12 +306,12 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
               Expanded(
                 child: SizedBox(
                   height: 44,
-                  child: FilledButton(
+                  child: AppPillButton(
+                    label: '删除',
+                    variant: AppPillVariant.danger,
+                    expand: true,
+                    height: 44,
                     onPressed: () => Navigator.pop(dialogContext, true),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.red500,
-                    ),
-                    child: const Text('删除'),
                   ),
                 ),
               ),
@@ -689,6 +675,7 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
                                 .update(channel.id, payload);
                           }
                           if (!mounted) return;
+                          if (!ctx.mounted) return;
                           Navigator.of(ctx).pop();
                           AppSnack.success(
                             context,
@@ -729,7 +716,6 @@ class _NotificationListPageState extends ConsumerState<NotificationListPage> {
 class _ChannelCard extends StatelessWidget {
   final NotifyChannel channel;
   final String typeLabel;
-  final bool isLight;
   final VoidCallback onEdit;
   final VoidCallback onToggle;
   final VoidCallback onTest;
@@ -738,7 +724,6 @@ class _ChannelCard extends StatelessWidget {
   const _ChannelCard({
     required this.channel,
     required this.typeLabel,
-    required this.isLight,
     required this.onEdit,
     required this.onToggle,
     required this.onTest,
@@ -765,6 +750,7 @@ class _ChannelCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.palette;
     return AppCard(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -775,19 +761,15 @@ class _ChannelCard extends StatelessWidget {
             width: 36,
             height: 36,
             decoration: BoxDecoration(
-              color: channel.enabled
-                  ? AppColors.success.withAlpha(25)
-                  : AppColors.slate200.withAlpha(60),
+              color: channel.enabled ? p.tint(p.ok) : p.fill,
               // 图标底板一律走 sm，不跟外层 AppCard（lg）同档。
               borderRadius: BorderRadius.circular(AppRadius.sm),
             ),
             child: Icon(
               _typeIcon(),
               size: 18,
-              // 底板就是同色的 alpha=25 淡底，18px 图标按 UI 组件也要 3:1。
-              color: context.surfaces.tintFg(
-                channel.enabled ? AppColors.success : AppColors.slate400,
-              ),
+              // 淡底上的图标用实色（令牌约定）；停用态走弱化灰。
+              color: channel.enabled ? p.ok : p.text3,
             ),
           ),
           const SizedBox(width: 12),
@@ -809,7 +791,7 @@ class _ChannelCard extends StatelessWidget {
                   typeLabel,
                   style: TextStyle(
                     fontSize: 11,
-                    color: isLight ? AppColors.slate500 : AppColors.slate400,
+                    color: p.text2,
                   ),
                 ),
               ],
@@ -817,20 +799,16 @@ class _ChannelCard extends StatelessWidget {
           ),
           GestureDetector(
             onTap: onTest,
-            child: const Padding(
-              padding: EdgeInsets.all(6),
-              child: Icon(Icons.send, size: 16, color: AppColors.blue500),
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: Icon(Icons.send, size: 16, color: p.accent),
             ),
           ),
           GestureDetector(
             onTap: onEdit,
-            child: const Padding(
-              padding: EdgeInsets.all(6),
-              child: Icon(
-                Icons.edit_outlined,
-                size: 18,
-                color: AppColors.blue500,
-              ),
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: Icon(Icons.edit_outlined, size: 18, color: p.accent),
             ),
           ),
           GestureDetector(
@@ -842,19 +820,15 @@ class _ChannelCard extends StatelessWidget {
               child: Icon(
                 channel.enabled ? Icons.toggle_on : Icons.toggle_off,
                 size: 28,
-                color: channel.enabled ? AppColors.success : AppColors.slate400,
+                color: channel.enabled ? p.ok : p.text3,
               ),
             ),
           ),
           GestureDetector(
             onTap: onDelete,
-            child: const Padding(
-              padding: EdgeInsets.all(6),
-              child: Icon(
-                Icons.delete_outline,
-                size: 18,
-                color: AppColors.red500,
-              ),
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: Icon(Icons.delete_outline, size: 18, color: p.err),
             ),
           ),
         ],

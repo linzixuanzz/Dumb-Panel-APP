@@ -7,11 +7,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
+import '../../../shared/widgets/app_large_title_header.dart';
 import '../../../shared/widgets/app_notice.dart';
+import '../../../shared/widgets/app_pill_button.dart';
 import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_snack.dart';
 
@@ -681,8 +682,8 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                 ),
               ],
               const SizedBox(height: 14),
-              const AppNotice(
-                color: AppColors.warning,
+              AppNotice(
+                color: dialogContext.palette.warn,
                 icon: Icons.warning_amber_rounded,
                 text: '恢复期间不要重复提交恢复请求，也不要立刻切换账号或清理缓存。',
               ),
@@ -694,7 +695,11 @@ class _BackupPageState extends ConsumerState<BackupPage> {
             onPressed: () => Navigator.pop(dialogContext),
             child: const Text('取消'),
           ),
-          FilledButton(
+          // 破坏性确认：红色胶囊（v2.0 危险操作统一样式）。
+          AppPillButton(
+            label: '确认恢复',
+            variant: AppPillVariant.danger,
+            height: 40,
             onPressed: () {
               if (needsPassword && passwordController.text.trim().isEmpty) {
                 // 密码没填属于校验没过，恢复请求根本没发出去，不该报红。
@@ -703,8 +708,6 @@ class _BackupPageState extends ConsumerState<BackupPage> {
               }
               Navigator.pop(dialogContext, passwordController.text.trim());
             },
-            style: FilledButton.styleFrom(backgroundColor: AppColors.red500),
-            child: const Text('确认恢复'),
           ),
         ],
       ),
@@ -722,10 +725,11 @@ class _BackupPageState extends ConsumerState<BackupPage> {
             onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('取消'),
           ),
-          FilledButton(
+          AppPillButton(
+            label: '删除',
+            variant: AppPillVariant.danger,
+            height: 40,
             onPressed: () => Navigator.pop(dialogContext, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.red500),
-            child: const Text('删除'),
           ),
         ],
       ),
@@ -831,16 +835,16 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     return '空闲';
   }
 
-  // 恢复失败=红、已完成=绿、恢复中=蓝。改造前「已完成」用 primaryDark、
-  // 「恢复中」用 blue600，主色换蓝后两个状态是同一族蓝。
-  Color _restoreStatusColor(bool isLight, _RestoreProgressState progress) {
+  // 恢复失败=红、已完成=绿、恢复中=蓝。这个颜色同时给图标、进度条和百分比文字用，
+  // 所以取墨色（浅色模式压深一档，深色模式等于实色），保证当文字时也够对比度。
+  Color _restoreStatusColor(AppPalette p, _RestoreProgressState progress) {
     if (progress.failed) {
-      return isLight ? AppColors.dangerDark : AppColors.danger;
+      return p.errInk;
     }
     if (progress.completed) {
-      return isLight ? AppColors.successDark : AppColors.success;
+      return p.okInk;
     }
-    return isLight ? AppColors.infoDark : AppColors.info;
+    return p.accentInk;
   }
 
   IconData _restoreStatusIcon(_RestoreProgressState progress) {
@@ -917,8 +921,9 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     return Icon(icon, size: 18);
   }
 
-  Widget _buildActionCard(bool isLight) {
+  Widget _buildActionCard() {
     final theme = Theme.of(context);
+    final p = context.palette;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(18),
@@ -932,15 +937,12 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
-                    color: AppColors.blue500.withAlpha(isLight ? 24 : 36),
+                    color: p.tint(p.accent),
                     // ⚠️ 嵌套陷阱：外层是 Flutter Card，cardTheme 现在也是
                     // lg(14)，原值 14 会与外层**相等**。图标底板一律走 sm。
                     borderRadius: BorderRadius.circular(AppRadius.sm),
                   ),
-                  child: const Icon(
-                    Icons.inventory_2_outlined,
-                    color: AppColors.blue500,
-                  ),
+                  child: Icon(Icons.inventory_2_outlined, color: p.accent),
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -989,8 +991,8 @@ class _BackupPageState extends ConsumerState<BackupPage> {
               ],
             ),
             const SizedBox(height: 14),
-            const AppNotice(
-              color: AppColors.primary,
+            AppNotice(
+              color: p.accent,
               text: '恢复过程中会轮询显示实时进度；加密备份恢复时需要输入备份密码。',
             ),
             if (_loading && _backups.isNotEmpty) ...[
@@ -1003,10 +1005,11 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     );
   }
 
-  Widget _buildRestoreProgressCard(bool isLight) {
+  Widget _buildRestoreProgressCard() {
     final progress = _restoreProgress;
     final theme = Theme.of(context);
-    final color = _restoreStatusColor(isLight, progress);
+    final p = context.palette;
+    final color = _restoreStatusColor(p, progress);
     final selectionLabels = progress.selection?.labels() ?? const <String>[];
 
     return Card(
@@ -1022,7 +1025,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
-                    color: color.withAlpha(isLight ? 24 : 36),
+                    color: p.tint(color),
                     // 同上，嵌在 lg 的 Card 里 → 走 sm。
                     borderRadius: BorderRadius.circular(AppRadius.sm),
                   ),
@@ -1076,9 +1079,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
               minHeight: 8,
               borderRadius: BorderRadius.circular(AppRadius.pill),
               color: color,
-              backgroundColor: isLight
-                  ? AppColors.slate100
-                  : AppColors.slate800,
+              backgroundColor: p.fill,
             ),
             const SizedBox(height: 10),
             Row(
@@ -1109,7 +1110,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
             if (progress.error.trim().isNotEmpty) ...[
               const SizedBox(height: 12),
               AppNotice(
-                color: AppColors.danger,
+                color: p.err,
                 text: progress.error.trim(),
                 accentText: true,
               ),
@@ -1120,28 +1121,28 @@ class _BackupPageState extends ConsumerState<BackupPage> {
               runSpacing: 8,
               children: [
                 Chip(
-                  avatar: const Icon(
+                  avatar: Icon(
                     Icons.widgets_outlined,
                     size: 16,
-                    color: AppColors.blue500,
+                    color: p.accent,
                   ),
                   label: Text('来源：${_restoreSourceLabel(progress.source)}'),
                 ),
                 if (progress.startedAt != null)
                   Chip(
-                    avatar: const Icon(
+                    avatar: Icon(
                       Icons.schedule_outlined,
                       size: 16,
-                      color: AppColors.blue500,
+                      color: p.accent,
                     ),
                     label: Text('开始：${_formatDateTime(progress.startedAt)}'),
                   ),
                 if (progress.updatedAt != null)
                   Chip(
-                    avatar: const Icon(
+                    avatar: Icon(
                       Icons.update_outlined,
                       size: 16,
-                      color: AppColors.blue500,
+                      color: p.accent,
                     ),
                     label: Text('更新：${_formatDateTime(progress.updatedAt)}'),
                   ),
@@ -1173,7 +1174,8 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     );
   }
 
-  Widget _buildBackupCard(_BackupFileRecord record, bool isLight) {
+  Widget _buildBackupCard(_BackupFileRecord record) {
+    final p = context.palette;
     final theme = Theme.of(context);
     final downloading = _downloading.contains(record.filename);
     final deleting = _deleting.contains(record.filename);
@@ -1191,9 +1193,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                   width: 42,
                   height: 42,
                   decoration: BoxDecoration(
-                    color: record.encrypted
-                        ? AppColors.amber500.withAlpha(isLight ? 18 : 28)
-                        : AppColors.blue500.withAlpha(isLight ? 18 : 28),
+                    color: p.tint(record.encrypted ? p.warn : p.accent),
                     // 同上，嵌在 lg 的 Card 里 → 走 sm。
                     borderRadius: BorderRadius.circular(AppRadius.sm),
                   ),
@@ -1201,9 +1201,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                     record.encrypted
                         ? Icons.lock_outline_rounded
                         : Icons.archive_outlined,
-                    color: record.encrypted
-                        ? AppColors.amber500
-                        : AppColors.blue500,
+                    color: record.encrypted ? p.warn : p.accent,
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -1237,12 +1235,12 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                             ),
                           ),
                           if (record.encrypted)
-                            const Chip(
-                              label: Text('已加密'),
+                            Chip(
+                              label: const Text('已加密'),
                               avatar: Icon(
                                 Icons.shield_outlined,
                                 size: 16,
-                                color: AppColors.amber500,
+                                color: p.warn,
                               ),
                             ),
                         ],
@@ -1275,9 +1273,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                   onPressed: deleting || _busyRestoring
                       ? null
                       : () => _deleteBackup(record.filename),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.red500,
-                  ),
+                  style: OutlinedButton.styleFrom(foregroundColor: p.errInk),
                   icon: _buildActionIcon(
                     deleting,
                     Icons.delete_outline_rounded,
@@ -1295,49 +1291,40 @@ class _BackupPageState extends ConsumerState<BackupPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
+    final p = context.palette;
+    // 二级页面没有悬浮底栏，这里读到的是系统安全区 + 16。
+    final listBottom = AppSpacing.listBottomOf(context);
 
     return Scaffold(
       body: Padding(
         padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12),
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  const AppBackButton(),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      '备份与恢复',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: '刷新',
-                    onPressed: _loading ? null : _refresh,
-                    icon: const Icon(Icons.refresh_rounded),
-                  ),
-                ],
-              ),
+            // 返回头 + 大标题（v2.0 次级页面统一写法）
+            AppLargeTitleHeader(
+              title: '备份与恢复',
+              leading: const AppBackButton(),
+              actions: [
+                IconButton(
+                  tooltip: '刷新',
+                  onPressed: _loading ? null : _refresh,
+                  icon: const Icon(Icons.refresh_rounded),
+                ),
+              ],
+              padding: const EdgeInsets.fromLTRB(8, 0, 16, 16),
             ),
-            const SizedBox(height: 16),
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: p.accent,
                 onRefresh: _refresh,
                 child: ListView(
                   physics: const AlwaysScrollableScrollPhysics(),
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                  padding: EdgeInsets.fromLTRB(20, 0, 20, listBottom),
                   children: [
-                    _buildActionCard(isLight),
+                    _buildActionCard(),
                     if (_showProgressCard) ...[
                       const SizedBox(height: 12),
-                      _buildRestoreProgressCard(isLight),
+                      _buildRestoreProgressCard(),
                     ],
                     const SizedBox(height: 16),
                     Row(
@@ -1360,12 +1347,10 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                     ),
                     const SizedBox(height: 10),
                     if (_loading && _backups.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 60),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 60),
                         child: Center(
-                          child: CircularProgressIndicator(
-                            color: AppColors.primary,
-                          ),
+                          child: CircularProgressIndicator(color: p.accent),
                         ),
                       )
                     else if (_backups.isEmpty)
@@ -1380,9 +1365,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                               Icon(
                                 Icons.folder_open_rounded,
                                 size: 56,
-                                color: isLight
-                                    ? AppColors.slate400.withAlpha(170)
-                                    : AppColors.slate600,
+                                color: p.text3,
                               ),
                               const SizedBox(height: 12),
                               Text(
@@ -1408,7 +1391,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                       ..._backups.map(
                         (record) => Padding(
                           padding: const EdgeInsets.only(bottom: 12),
-                          child: _buildBackupCard(record, isLight),
+                          child: _buildBackupCard(record),
                         ),
                       ),
                   ],

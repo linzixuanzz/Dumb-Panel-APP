@@ -2,6 +2,8 @@ import 'package:daidai_app/core/network/api_endpoints.dart';
 import 'package:daidai_app/core/network/dio_client.dart';
 import 'package:daidai_app/features/tasks/views/task_detail_page.dart';
 import 'package:daidai_app/features/tasks/views/task_list_page.dart';
+import 'package:daidai_app/features/tasks/widgets/task_detail_sheet.dart';
+import 'package:daidai_app/shared/api/panel_insights.dart';
 import 'package:daidai_app/shared/models/task.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -54,6 +56,11 @@ void main() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     FlutterSecureStorage.setMockInitialValues({});
     DioClient.instance.setBaseUrl('https://panel.test');
+    resetPanelInsightsForTest();
+    // 详情会顺手拉健康画像和最近日志：默认都按老面板 / 没有日志的 404 处理
+    DioClient.instance.dio.httpClientAdapter = FakeHttpAdapter(
+      (_) => jsonResponse(<String, dynamic>{}, status: 404),
+    );
   });
 
   testWidgets('非多选模式下点任务卡片进入详情页', (tester) async {
@@ -79,7 +86,8 @@ void main() {
     await tester.tap(find.text('京东签到'));
     await _pumpFrames(tester);
 
-    expect(find.byType(TaskDetailPage), findsOneWidget);
+    // v2.0：B1 合入后列表点任务改为弹层（同一份 TaskDetailContent），合入前仍是详情页路由，两种都认
+    expect(find.byType(TaskDetailContent), findsOneWidget);
     expect(find.text('任务详情'), findsOneWidget);
     expect(find.text('jd/sign.py'), findsOneWidget);
 
@@ -105,10 +113,13 @@ void main() {
     expect(
       find.descendant(
         of: scriptRow,
-        matching: find.byIcon(Icons.chevron_right),
+        matching: find.byIcon(Icons.chevron_right_rounded),
       ),
       findsOneWidget,
     );
+    // 信息区在最近日志下面，先滚到能点的位置
+    await tester.ensureVisible(scriptRow);
+    await tester.pumpAndSettle();
 
     await tester.tap(scriptRow);
     await tester.pumpAndSettle();
@@ -128,6 +139,8 @@ void main() {
     await tester.pumpAndSettle();
 
     final scriptRow = find.byKey(const Key('task-detail-script'));
+    await tester.ensureVisible(scriptRow);
+    await tester.pumpAndSettle();
     expect(
       find.descendant(of: scriptRow, matching: find.text('-')),
       findsOneWidget,
@@ -135,11 +148,18 @@ void main() {
     expect(
       find.descendant(
         of: scriptRow,
-        matching: find.byIcon(Icons.chevron_right),
+        matching: find.byIcon(Icons.chevron_right_rounded),
       ),
       findsNothing,
     );
-    expect(tester.widget<InkWell>(scriptRow).onTap, isNull);
+    expect(
+      tester
+          .widget<InkWell>(
+            find.descendant(of: scriptRow, matching: find.byType(InkWell)),
+          )
+          .onTap,
+      isNull,
+    );
 
     await tester.tap(scriptRow);
     await tester.pumpAndSettle();
@@ -163,7 +183,12 @@ void main() {
     expect(find.text('最后运行'), findsNothing);
     expect(find.text('最后运行时长'), findsNothing);
     expect(find.text('下次运行'), findsNothing);
-    expect(find.text('最新日志'), findsOneWidget);
+    expect(find.byKey(const Key('task-detail-latest-log')), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('日志历史'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('日志历史'), findsOneWidget);
   });
 }

@@ -184,6 +184,9 @@ class _ScriptCodeEditorState extends State<ScriptCodeEditor>
   @override
   Widget build(BuildContext context) {
     final onDarkEditor = widget.background.computeLuminance() < 0.45;
+    // v2.0 换装说明：本组件里的正文 / 行号 / 搜索命中高亮都是代码编辑器的功能色，
+    // 跟的是编辑器底色（用户在面板里自定义）且与面板 Web 的编辑器对齐，
+    // 不跟界面令牌走，所以保留 AppColors 原值；只有选区底色改用界面强调色。
     final foreground = onDarkEditor
         ? const Color(0xFFD4D4D4)
         : AppColors.slate900;
@@ -239,7 +242,7 @@ class _ScriptCodeEditorState extends State<ScriptCodeEditor>
         textColor: foreground,
         // 底色由外层卡片画，这里透明，免得圆角处露出直角。
         backgroundColor: Colors.transparent,
-        selectionColor: AppColors.primary.withAlpha(60),
+        selectionColor: context.palette.accent.withAlpha(60),
         // 全部命中的弱高亮；当前命中由 ScriptEditorFindController 叠画一层变成强高亮。
         highlightColor: AppColors.searchMatch,
         cursorColor: foreground,

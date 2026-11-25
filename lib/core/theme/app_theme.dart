@@ -110,203 +110,277 @@ class AppColors {
   static const termRed = Color(0xFFF87171); // red-400
 }
 
+/// v2.0 主题：全部 Material 组件映射到 [AppPalette]。
+///
+/// 目的是「次级页面不改代码也能换装」：脚本、订阅、依赖这些页面大量直接用
+/// `TextField` / `FilledButton` / `Switch` / `AlertDialog`，它们的外观都从这里来。
+/// 新组件（分组列表、胶囊按钮、底栏）是自绘的，不靠这里。
 class AppTheme {
-  static ThemeData light() {
-    final colorScheme = ColorScheme.fromSeed(
-      seedColor: AppColors.primary,
-      brightness: Brightness.light,
-      primary: AppColors.primary,
+  static ThemeData light() => _buildTheme(AppPalette.light, Brightness.light);
+
+  static ThemeData dark() => _buildTheme(AppPalette.dark, Brightness.dark);
+
+  static ThemeData _buildTheme(AppPalette p, Brightness brightness) {
+    final cs = ColorScheme.fromSeed(
+      seedColor: p.accent,
+      brightness: brightness,
+      primary: p.accent,
       onPrimary: Colors.white,
-      secondary: AppColors.blue500,
-      surface: AppColors.slate50,
-      onSurface: AppColors.slate900,
-      onSurfaceVariant: AppColors.slate500,
-      outline: AppColors.slate200,
-      outlineVariant: AppColors.slate100,
-      error: AppColors.red500,
-      surfaceContainerHighest: AppColors.slate100,
+      secondary: p.accent,
+      onSecondary: Colors.white,
+      // surface 是页面底色：v1.x 的页面大多直接用 colorScheme.surface 当背景。
+      surface: p.bg,
+      onSurface: p.text,
+      onSurfaceVariant: p.text2,
+      outline: p.separator,
+      outlineVariant: p.separator,
+      error: p.err,
+      onError: Colors.white,
+      surfaceContainerLowest: p.card,
+      surfaceContainerLow: p.card,
+      surfaceContainer: p.card,
+      surfaceContainerHigh: p.card,
+      surfaceContainerHighest: p.card2,
+      // SnackBar 的中性色调走 inverseSurface（见 AppSnack），与主按钮同一对黑白。
+      inverseSurface: p.primaryBtnBg,
+      onInverseSurface: p.primaryBtnFg,
     );
-    return _buildTheme(colorScheme);
-  }
 
-  static ThemeData dark() {
-    final colorScheme = ColorScheme.fromSeed(
-      seedColor: AppColors.primary,
-      brightness: Brightness.dark,
-      primary: AppColors.primary,
-      onPrimary: Colors.white,
-      secondary: AppColors.blue500,
-      surface: AppColors.slate950,
-      onSurface: AppColors.slate50,
-      onSurfaceVariant: AppColors.slate400,
-      outline: AppColors.slate800,
-      outlineVariant: AppColors.slate800,
-      error: AppColors.red500,
-      surfaceContainerHighest: AppColors.slate900,
+    // ⚠️ 下面 border / enabledBorder / focusedBorder 三处圆角**必须同值**。
+    // 聚焦是三个 border 之间的插值动画，任何一处不一致都会让动画中途出现
+    // 角忽大忽小的抖动 —— 静态截图看不出来，只有点进输入框的那一瞬间才有。
+    const inputRadius = BorderRadius.all(Radius.circular(AppRadius.md));
+    const noBorder = OutlineInputBorder(
+      borderRadius: inputRadius,
+      borderSide: BorderSide.none,
     );
-    return _buildTheme(colorScheme);
-  }
 
-  static ThemeData _buildTheme(ColorScheme cs) {
-    final isLight = cs.brightness == Brightness.light;
-    final cardColor = isLight ? Colors.white : AppColors.slate900;
-    final borderColor = isLight ? AppColors.slate200 : AppColors.slate800;
+    final base = ThemeData(useMaterial3: true, colorScheme: cs);
 
-    return ThemeData(
-      useMaterial3: true,
-      colorScheme: cs,
-      scaffoldBackgroundColor: cs.surface,
+    return base.copyWith(
+      scaffoldBackgroundColor: p.bg,
+      canvasColor: p.bg,
+      dividerColor: p.separator,
+      extensions: <ThemeExtension<dynamic>>[p],
+      textTheme: base.textTheme.apply(bodyColor: p.text, displayColor: p.text),
+      iconTheme: IconThemeData(color: p.text),
+      // 点按反馈：iOS 风格是整行变灰，不要 Material 的水波纹扩散。
+      splashFactory: NoSplash.splashFactory,
+      highlightColor: p.fill,
       appBarTheme: AppBarTheme(
         centerTitle: false,
         elevation: 0,
         scrolledUnderElevation: 0,
-        backgroundColor: cs.surface,
-        foregroundColor: cs.onSurface,
+        backgroundColor: p.bg,
+        surfaceTintColor: Colors.transparent,
+        foregroundColor: p.text,
         titleTextStyle: TextStyle(
-          color: cs.onSurface,
-          fontSize: 24,
+          color: p.text,
+          fontSize: 20,
           fontWeight: FontWeight.w700,
+          letterSpacing: -0.3,
         ),
       ),
       cardTheme: CardThemeData(
         elevation: 0,
-        color: cardColor,
-        shape: RoundedRectangleBorder(
-          // 区块级大卡片，与 AppCard 同档 —— 全库只有 6 处走 Flutter Card，
-          // 其中 3 处是 backup_page 的整页结构面板，这一档在那一页上是看得见的。
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-          side: BorderSide(color: borderColor, width: 1),
+        color: p.card,
+        surfaceTintColor: Colors.transparent,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(AppRadius.cardSm)),
         ),
         margin: const EdgeInsets.only(bottom: 12),
       ),
-      // ⚠️ 下面 border / enabledBorder / focusedBorder 三处圆角**必须同值**。
-      // 聚焦是三个 border 之间的插值动画，任何一处不一致都会让动画中途出现
-      // 角忽大忽小的抖动 —— 静态截图看不出来，只有点进输入框的那一瞬间才有。
+      // 输入框：iOS 搜索框式的灰色填充、无描边，聚焦时才出一圈强调色。
       inputDecorationTheme: InputDecorationTheme(
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(AppRadius.md),
-          borderSide: BorderSide(color: borderColor),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(AppRadius.md),
-          borderSide: BorderSide(color: borderColor),
-        ),
+        border: noBorder,
+        enabledBorder: noBorder,
+        disabledBorder: noBorder,
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(AppRadius.md),
-          borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
+          borderRadius: inputRadius,
+          borderSide: BorderSide(color: p.accent, width: AppBorderWidth.focus),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: inputRadius,
+          borderSide: BorderSide(color: p.err),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: inputRadius,
+          borderSide: BorderSide(color: p.err, width: AppBorderWidth.focus),
         ),
         filled: true,
-        fillColor: cardColor,
+        fillColor: p.fill,
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 16,
           vertical: 14,
         ),
-        hintStyle: TextStyle(
-          color: isLight ? AppColors.slate300 : AppColors.slate600,
-          fontSize: 14,
-        ),
+        hintStyle: TextStyle(color: p.text3, fontSize: 15),
         labelStyle: TextStyle(
-          color: cs.onSurfaceVariant,
-          fontSize: 12,
+          color: p.text2,
+          fontSize: 13,
           fontWeight: FontWeight.w500,
         ),
+        prefixIconColor: p.text2,
+        suffixIconColor: p.text2,
       ),
+      // 主按钮：黑色胶囊（深色白色胶囊）。
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          backgroundColor: AppColors.primary,
-          foregroundColor: Colors.white,
+          backgroundColor: p.primaryBtnBg,
+          foregroundColor: p.primaryBtnFg,
+          disabledBackgroundColor: p.fill,
+          disabledForegroundColor: p.text3,
           minimumSize: const Size(0, 48),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppRadius.md),
-          ),
+          shape: const StadiumBorder(),
           elevation: 0,
-          textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
         ),
       ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: p.primaryBtnBg,
+          foregroundColor: p.primaryBtnFg,
+          disabledBackgroundColor: p.fill,
+          disabledForegroundColor: p.text3,
+          minimumSize: const Size(0, 48),
+          shape: const StadiumBorder(),
+          elevation: 0,
+          shadowColor: Colors.transparent,
+          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+        ),
+      ),
+      // 次要按钮：灰色填充胶囊，没有描边。
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
+          foregroundColor: p.text,
+          backgroundColor: p.fill,
+          disabledForegroundColor: p.text3,
           minimumSize: const Size(0, 44),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppRadius.md),
-          ),
-          side: BorderSide(color: borderColor),
+          shape: const StadiumBorder(),
+          side: BorderSide.none,
+          textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
         ),
       ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          foregroundColor: p.accent,
+          textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+        ),
+      ),
+      iconButtonTheme: IconButtonThemeData(
+        style: IconButton.styleFrom(foregroundColor: p.text),
+      ),
+      floatingActionButtonTheme: FloatingActionButtonThemeData(
+        backgroundColor: p.primaryBtnBg,
+        foregroundColor: p.primaryBtnFg,
+        elevation: 0,
+        focusElevation: 0,
+        hoverElevation: 0,
+        highlightElevation: 0,
+        shape: const StadiumBorder(),
+      ),
+      // 开关：iOS 绿，白色圆钮，关着时是灰色填充、不画描边。
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.all(Colors.white),
         trackColor: WidgetStateProperty.resolveWith((states) {
-          return states.contains(WidgetState.selected)
-              ? AppColors.primary
-              : isLight
-              ? AppColors.slate300
-              : AppColors.slate700;
+          return states.contains(WidgetState.selected) ? p.ok : p.fill;
         }),
-        trackOutlineColor: WidgetStateProperty.resolveWith((states) {
-          return states.contains(WidgetState.selected)
-              ? Colors.transparent
-              : isLight
-              ? AppColors.slate400
-              : AppColors.slate600;
+        trackOutlineColor: WidgetStateProperty.all(Colors.transparent),
+      ),
+      checkboxTheme: CheckboxThemeData(
+        // Checkbox 走**控件**档，不跟表面档一起收缩，理由见 AppRadius.control。
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(AppRadius.control)),
+        ),
+        fillColor: WidgetStateProperty.resolveWith((states) {
+          return states.contains(WidgetState.selected) ? p.accent : null;
         }),
+        side: BorderSide(color: p.text3, width: 1.5),
+      ),
+      radioTheme: RadioThemeData(
+        fillColor: WidgetStateProperty.resolveWith((states) {
+          return states.contains(WidgetState.selected) ? p.accent : p.text3;
+        }),
+      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(
+        color: p.accent,
+        linearTrackColor: p.fill,
+        circularTrackColor: Colors.transparent,
+      ),
+      sliderTheme: SliderThemeData(
+        activeTrackColor: p.accent,
+        inactiveTrackColor: p.fill,
+        thumbColor: Colors.white,
       ),
       dividerTheme: DividerThemeData(
-        color: borderColor,
-        thickness: 1,
+        color: p.separator,
+        thickness: 0.5,
         space: 0,
       ),
-      // 零像素变化：Chip 默认高 32，圆角在绘制时会被 clamp 到高的一半（16），
-      // 原先写的 20 从来没有生效过 —— 它渲染出来本来就是胶囊，这里只是把
-      // 「实际是什么」写成「代码里说的是什么」。
-      chipTheme: const ChipThemeData(
-        shape: RoundedRectangleBorder(
+      listTileTheme: ListTileThemeData(
+        iconColor: p.text2,
+        textColor: p.text,
+        subtitleTextStyle: TextStyle(color: p.text2, fontSize: 13.5),
+      ),
+      chipTheme: ChipThemeData(
+        backgroundColor: p.fill,
+        selectedColor: p.primaryBtnBg,
+        secondarySelectedColor: p.primaryBtnBg,
+        checkmarkColor: p.primaryBtnFg,
+        labelStyle: TextStyle(color: p.text, fontSize: 13),
+        secondaryLabelStyle: TextStyle(color: p.primaryBtnFg, fontSize: 13),
+        side: BorderSide.none,
+        shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.all(Radius.circular(AppRadius.pill)),
         ),
       ),
-      // Checkbox 走**控件**档，不跟表面档一起收缩，理由见 AppRadius.control。
-      // 这一处同时收编两类站点：2 处本地写死 4 的（login / log_list）与
-      // 7 处走 Material 默认约 2dp 的，改完 9 个勾选框第一次是同一个圆角。
-      checkboxTheme: const CheckboxThemeData(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.all(Radius.circular(AppRadius.control)),
-        ),
+      tabBarTheme: TabBarThemeData(
+        labelColor: p.text,
+        unselectedLabelColor: p.text2,
+        indicatorColor: p.text,
+        dividerColor: Colors.transparent,
       ),
+      // 底部面板：顶部大圆角。拖拽把手不在主题里统一开（会给全部旧面板顶部
+      // 多塞 48dp，旧面板的高度都是按没有把手算的），新弹层走 showAppSheet 自带把手。
       bottomSheetTheme: BottomSheetThemeData(
-        backgroundColor: cardColor,
+        backgroundColor: p.card,
+        surfaceTintColor: Colors.transparent,
+        modalBackgroundColor: p.card,
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(
-            top: Radius.circular(AppRadius.lg),
+            top: Radius.circular(AppRadius.card),
           ),
         ),
       ),
       popupMenuTheme: PopupMenuThemeData(
-        color: cardColor,
+        color: p.card,
         surfaceTintColor: Colors.transparent,
-        // 扁平化：去掉 M3 给弹出菜单的默认投影，改由 1px 边框做唯一分隔物。
-        // 菜单浮在页面之上、没有遮罩，去掉投影后必须补边框，否则与下方内容糊在一起。
-        // 这一处一次覆盖全库 7 个 PopupMenuButton。
+        // 浮层不靠投影分层：用一圈分隔线色的细边。
         elevation: 0,
         shadowColor: Colors.transparent,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppRadius.md),
-          side: BorderSide(color: borderColor),
+          side: BorderSide(color: p.separator),
         ),
       ),
       dialogTheme: DialogThemeData(
-        backgroundColor: cardColor,
+        backgroundColor: p.card,
         surfaceTintColor: Colors.transparent,
-        // 弹窗与底部面板同为「浮在页面上的容器」，统一走 lg，不再一个 20 一个 20
-        // 却各写各的。
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppRadius.lg),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(AppRadius.cardSm)),
         ),
+        titleTextStyle: TextStyle(
+          color: p.text,
+          fontSize: 19,
+          fontWeight: FontWeight.w700,
+        ),
+        contentTextStyle: TextStyle(color: p.text, fontSize: 15, height: 1.45),
         actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+      ),
+      textSelectionTheme: TextSelectionThemeData(
+        cursorColor: p.accent,
+        selectionColor: p.accent.withValues(alpha: 0.25),
+        selectionHandleColor: p.accent,
       ),
     );
   }
-
-  // 原先这里有一组 successColor / errorColor / warningColor / runningColor /
-  // disabledColor 常量，全库零引用，且主色换蓝之后 successColor 与 runningColor
-  // 双双等于 AppColors.primary —— 一组既没人用、语义又是错的假常量。
-  // 已删除，状态色统一由 AppColors.success / info / danger / warning / neutral 提供，
-  // 并在各状态判断处真正使用。
 }

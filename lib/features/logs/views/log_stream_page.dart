@@ -7,7 +7,7 @@ import '../../../core/auth/auth_provider.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/sse_client.dart';
-import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/task.dart';
 import '../../../shared/models/task_log.dart';
 import '../../../shared/utils/api_utils.dart';
@@ -472,9 +472,11 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
       _logBackgroundColor,
       themeBrightness: Theme.of(context).brightness,
     );
-    final chipBackground = logTheme.brightness == Brightness.dark
-        ? AppColors.slate800
-        : AppColors.slate100;
+    // 日志正文的底色是账户可配的（面板「日志背景色」），不一定跟着 APP 明暗走，
+    // 所以状态胶囊按日志底色的明暗挑对应那一套色板，而不是 context.palette。
+    final logPalette = logTheme.brightness == Brightness.dark
+        ? AppPalette.dark
+        : AppPalette.light;
 
     // 「编辑对应脚本」的两道门禁：
     // 1. `_taskId == null` 说明日志详情还没到手，这时连要跳哪个任务都不知道
@@ -496,32 +498,73 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
         // 原来的「自动滚动」开关已经去掉：停在底部就跟随、上翻就停，
         // 回到底部由正文右下角的按钮负责（issue #10）。
         // ellipsis 保留 —— 状态 chip 的文案本身也会变长。
-        title: Text(
-          '日志 #${widget.logId}',
-          overflow: TextOverflow.ellipsis,
+        // 标题写任务名（拿到日志详情之后），日志编号挪到下面一行小字。
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              _taskName ?? '日志 #${widget.logId}',
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+            ),
+            if (_taskName != null)
+              Text(
+                '日志 #${widget.logId}',
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: logTheme.mutedForeground,
+                ),
+              ),
+          ],
         ),
         backgroundColor: logTheme.background,
         foregroundColor: logTheme.foreground,
         actions: [
+          // 状态胶囊：灰色填充 + 左边的完成勾 / 转圈，文案就是 _status。
           Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: Chip(
-              backgroundColor: chipBackground,
-              label: Text(
-                _status,
-                style: TextStyle(fontSize: 12, color: logTheme.foreground),
-              ),
-              avatar: _done
-                  ? Icon(Icons.check, size: 16, color: logTheme.foreground)
-                  : SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
+            padding: const EdgeInsets.only(right: 4),
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: logPalette.fill,
+                  borderRadius: BorderRadius.circular(AppRadius.pill),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_done)
+                      Icon(
+                        Icons.check_rounded,
+                        size: 15,
+                        color: logTheme.foreground,
+                      )
+                    else
+                      SizedBox(
+                        width: 13,
+                        height: 13,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: logTheme.foreground,
+                        ),
+                      ),
+                    const SizedBox(width: 6),
+                    Text(
+                      _status,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
                         color: logTheme.foreground,
                       ),
                     ),
-              visualDensity: VisualDensity.compact,
+                  ],
+                ),
+              ),
             ),
           ),
           // 各项全被门禁挡掉时（日志详情没加载出来、又不是 operator）整个按钮

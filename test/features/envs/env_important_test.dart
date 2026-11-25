@@ -116,7 +116,8 @@ Finder _nameRow(String name) =>
 
 /// 打开导入弹层 → 贴一份 JSON → 选「替换」→ 点「导入」，停在替换确认框上。
 Future<void> _openReplaceConfirm(WidgetTester tester) async {
-  await tester.tap(find.byTooltip('导入导出'));
+  // v2.0：导入导出在大标题右边的「⋯」菜单里。
+  await tester.tap(find.byTooltip('更多'));
   await tester.pumpAndSettle();
   await tester.tap(find.text('导入变量'));
   await tester.pumpAndSettle();
@@ -177,6 +178,9 @@ void main() {
       await _openPage(tester, panel);
       expect(find.text('重要'), findsNothing);
 
+      // v2.0：「排序」收进了大标题右边的「⋯」菜单。
+      await tester.tap(find.byTooltip('更多'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('排序'));
       await tester.pumpAndSettle();
       expect(find.text('重要'), findsNothing);
@@ -205,6 +209,9 @@ void main() {
       await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
 
+      // v2.0：「批量」收进了大标题右边的「⋯」菜单。
+      await tester.tap(find.byTooltip('更多'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('批量'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('OLD_A'));
@@ -289,6 +296,9 @@ void main() {
 
       expectMarks();
 
+      // v2.0：「排序」收进了大标题右边的「⋯」菜单。
+      await tester.tap(find.byTooltip('更多'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('排序'));
       await tester.pumpAndSettle();
       expectMarks();
@@ -308,6 +318,9 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.text('重要'), findsOneWidget);
 
+      // v2.0：「排序」收进了大标题右边的「⋯」菜单。
+      await tester.tap(find.byTooltip('更多'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('排序'));
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
@@ -613,6 +626,9 @@ void main() {
       ]);
       await _openPage(tester, panel);
 
+      // v2.0：「批量」收进了大标题右边的「⋯」菜单。
+      await tester.tap(find.byTooltip('更多'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('批量'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('CFG_A'));
@@ -639,6 +655,9 @@ void main() {
       ]);
       await _openPage(tester, panel);
 
+      // v2.0：「批量」收进了大标题右边的「⋯」菜单。
+      await tester.tap(find.byTooltip('更多'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('批量'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('CFG_A'));

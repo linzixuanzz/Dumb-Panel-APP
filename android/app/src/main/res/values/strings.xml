@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 桌面小组件在「添加小组件」列表里的名字与说明 -->
+    <string name="task_widget_label">呆呆面板 · 任务</string>
+    <string name="task_widget_description">今日成功率、下一个任务、最近失败的任务。数据在打开 APP 时更新。</string>
+</resources>

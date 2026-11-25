@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/log_line_buffer.dart';
@@ -106,6 +107,7 @@ class _PanelLogPageState extends State<PanelLogPage> {
       _logBackgroundColor,
       themeBrightness: Theme.of(context).brightness,
     );
+    // 日志卡片的描边跟着「日志主题」的明暗走（不是 App 明暗），属于日志内容配色，保持原值。
     final borderColor = logTheme.brightness == Brightness.dark
         ? AppColors.slate700
         : AppColors.slate200;
@@ -194,9 +196,9 @@ class _PanelLogPageState extends State<PanelLogPage> {
               color: logTheme.background,
               borderColor: borderColor,
               child: _loading
-                  ? const Center(
+                  ? Center(
                       child: CircularProgressIndicator(
-                        color: AppColors.primary,
+                        color: context.palette.accent,
                       ),
                     )
                   : _content.trim().isEmpty

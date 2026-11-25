@@ -4,10 +4,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_grouped_list.dart';
+import '../../../shared/widgets/app_icon_tile.dart';
+import '../../../shared/widgets/app_large_title_header.dart';
+import '../../../shared/widgets/app_pill_button.dart';
 import '../../../shared/widgets/app_notice.dart';
 import '../../../shared/widgets/app_section_title.dart';
 import '../../../shared/widgets/app_back_button.dart';
@@ -491,12 +494,12 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
               Expanded(
                 child: SizedBox(
                   height: 44,
-                  child: FilledButton(
+                  child: AppPillButton(
+                    label: '重启',
+                    variant: AppPillVariant.danger,
+                    expand: true,
+                    height: 44,
                     onPressed: () => Navigator.pop(dialogCtx, true),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.red500,
-                    ),
-                    child: const Text('重启'),
                   ),
                 ),
               ),
@@ -626,10 +629,10 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                   style: const TextStyle(fontSize: 14),
                 ),
                 trailing: option.value == current
-                    ? const Icon(
+                    ? Icon(
                         Icons.check_rounded,
                         size: 18,
-                        color: AppColors.primary,
+                        color: ctx.palette.accent,
                       )
                     : null,
                 onTap: () => Navigator.pop(ctx, option.value),
@@ -711,7 +714,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
               Icon(
                 Icons.warning_amber_rounded,
                 size: 12,
-                color: surfaces.tintFg(AppColors.warning),
+                color: context.palette.warn,
               ),
               const SizedBox(width: AppSpacing.xxs),
               Expanded(
@@ -720,7 +723,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                   style: TextStyle(
                     fontSize: 10,
                     height: 1.4,
-                    color: surfaces.tintFg(AppColors.warning),
+                    color: context.palette.warnInk,
                   ),
                 ),
               ),
@@ -1036,50 +1039,33 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final isLight = Theme.of(context).brightness == Brightness.light;
+    final p = context.palette;
+    // 二级页面没有悬浮底栏，这里读到的是系统安全区 + 16。
+    final listBottom = AppSpacing.listBottomOf(context);
 
     return Scaffold(
       body: Padding(
         padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12),
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.pageHorizontal,
-              ),
-              child: Row(
-                children: [
-                  const AppBackButton(),
-                  const SizedBox(width: AppSpacing.sm),
-                  const Expanded(
-                    child: Text(
-                      '系统设置',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+            // 返回头 + 大标题（v2.0 次级页面统一写法）
+            const AppLargeTitleHeader(
+              title: '系统设置',
+              leading: AppBackButton(),
+              padding: EdgeInsets.fromLTRB(8, 0, 16, 16),
             ),
-            const SizedBox(height: AppSpacing.lg),
             Expanded(
               child: _loading
-                  ? const Center(
-                      child: CircularProgressIndicator(
-                        color: AppColors.primary,
-                      ),
-                    )
+                  ? Center(child: CircularProgressIndicator(color: p.accent))
                   : RefreshIndicator(
-                      color: AppColors.primary,
+                      color: p.accent,
                       onRefresh: _load,
                       child: ListView(
-                        padding: const EdgeInsets.fromLTRB(
+                        padding: EdgeInsets.fromLTRB(
                           AppSpacing.pageHorizontal,
                           0,
                           AppSpacing.pageHorizontal,
-                          AppSpacing.xxl,
+                          listBottom,
                         ),
                         children: [
                           // ── Version Info ──
@@ -1091,21 +1077,18 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                   _KVRow(
                                     '版本',
                                     _versionInfo?['version']?.toString() ?? '',
-                                    isLight,
                                   ),
                                   const Divider(height: 16),
                                   _KVRow(
                                     'API',
                                     _versionInfo?['api_version']?.toString() ??
                                         '',
-                                    isLight,
                                   ),
                                   const Divider(height: 16),
                                   _KVRow(
                                     'Go',
                                     _versionInfo?['go_version']?.toString() ??
                                         '',
-                                    isLight,
                                   ),
                                 ],
                               ),
@@ -1152,9 +1135,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                         style: TextStyle(
                                           fontSize: 12,
                                           height: 1.6,
-                                          color: isLight
-                                              ? AppColors.slate600
-                                              : AppColors.slate300,
+                                          color: p.text2,
                                         ),
                                       ),
                                     ],
@@ -1208,9 +1189,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                     style: TextStyle(
                                       fontSize: 12,
                                       height: 1.6,
-                                      color: isLight
-                                          ? AppColors.slate600
-                                          : AppColors.slate300,
+                                      color: p.text2,
                                     ),
                                   ),
                                   if ((_updateStatus?['phase']?.toString() ?? '')
@@ -1221,9 +1200,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                                       '阶段：${_updateStatus?['phase']}',
                                       style: TextStyle(
                                         fontSize: 12,
-                                        color: isLight
-                                            ? AppColors.slate500
-                                            : AppColors.slate400,
+                                        color: p.text2,
                                       ),
                                     ),
                                   ],
@@ -1251,7 +1228,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                           const SizedBox(height: AppSpacing.sm),
                           if (_configError != null) ...[
                             AppNotice(
-                              color: AppColors.danger,
+                              color: p.err,
                               icon: Icons.error_outline,
                               text: '$_configError\n下拉可重试。',
                             ),
@@ -1280,29 +1257,41 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
                           // ── 系统操作 ──
                           const AppSectionTitle('系统操作'),
                           const SizedBox(height: AppSpacing.sm),
-                          _ActionBtn(
-                            icon: Icons.backup,
-                            title: '备份恢复',
-                            subtitle: '创建备份、恢复、管理备份文件',
-                            isLight: isLight,
-                            onTap: () => context.push('/backup'),
-                          ),
-                          const SizedBox(height: AppSpacing.sm),
-                          _ActionBtn(
-                            icon: Icons.article_outlined,
-                            title: '面板日志',
-                            subtitle: '查看面板运行日志，支持级别与关键字筛选',
-                            isLight: isLight,
-                            onTap: () => context.push('/panel-log'),
-                          ),
-                          const SizedBox(height: AppSpacing.sm),
-                          _ActionBtn(
-                            icon: Icons.restart_alt,
-                            title: '重启面板',
-                            subtitle: '重启面板服务，运行中任务将中断',
-                            isLight: isLight,
-                            onTap: _restart,
-                            danger: true,
+                          // 三个入口收进一个分组列表（原来是三张独立卡片）。
+                          AppGroupedList(
+                            children: [
+                              AppGroupedRow(
+                                leading: AppIconTile(
+                                  icon: Icons.backup,
+                                  color: p.accent,
+                                ),
+                                title: '备份恢复',
+                                subtitle: '创建备份、恢复、管理备份文件',
+                                showChevron: true,
+                                onTap: () => context.push('/backup'),
+                              ),
+                              AppGroupedRow(
+                                leading: AppIconTile(
+                                  icon: Icons.article_outlined,
+                                  color: p.accent,
+                                ),
+                                title: '面板日志',
+                                subtitle: '查看面板运行日志，支持级别与关键字筛选',
+                                showChevron: true,
+                                onTap: () => context.push('/panel-log'),
+                              ),
+                              AppGroupedRow(
+                                leading: AppIconTile(
+                                  icon: Icons.restart_alt,
+                                  color: p.err,
+                                ),
+                                title: '重启面板',
+                                subtitle: '重启面板服务，运行中任务将中断',
+                                titleColor: p.errInk,
+                                showChevron: true,
+                                onTap: _restart,
+                              ),
+                            ],
                           ),
                         ],
                       ),
@@ -1318,8 +1307,7 @@ class _SystemSettingsPageState extends ConsumerState<SystemSettingsPage> {
 class _KVRow extends StatelessWidget {
   final String label;
   final String value;
-  final bool isLight;
-  const _KVRow(this.label, this.value, this.isLight);
+  const _KVRow(this.label, this.value);
 
   @override
   Widget build(BuildContext context) {
@@ -1329,7 +1317,7 @@ class _KVRow extends StatelessWidget {
           label,
           style: TextStyle(
             fontSize: 13,
-            color: isLight ? AppColors.slate500 : AppColors.slate400,
+            color: context.palette.text2,
           ),
         ),
         const Spacer(),
@@ -1338,69 +1326,6 @@ class _KVRow extends StatelessWidget {
           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
         ),
       ],
-    );
-  }
-}
-
-class _ActionBtn extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final bool isLight;
-  final VoidCallback onTap;
-  final bool danger;
-
-  const _ActionBtn({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.isLight,
-    required this.onTap,
-    this.danger = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return AppCard(
-      onTap: onTap,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      child: Row(
-        children: [
-          Icon(
-            icon,
-            size: 20,
-            color: danger ? AppColors.red500 : AppColors.primary,
-          ),
-          const SizedBox(width: AppSpacing.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: danger ? AppColors.red500 : null,
-                  ),
-                ),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: isLight ? AppColors.slate500 : AppColors.slate400,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Icon(
-            Icons.chevron_right,
-            size: 18,
-            color: isLight ? AppColors.slate400 : AppColors.slate600,
-          ),
-        ],
-      ),
     );
   }
 }

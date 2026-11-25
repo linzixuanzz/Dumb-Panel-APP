@@ -3,7 +3,6 @@ import 'package:re_editor/re_editor.dart';
 
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/log_background.dart';
@@ -168,7 +167,9 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, true),
-            style: TextButton.styleFrom(foregroundColor: AppColors.red500),
+            style: TextButton.styleFrom(
+              foregroundColor: dialogContext.palette.errInk,
+            ),
             child: const Text('放弃修改'),
           ),
         ],
@@ -284,7 +285,10 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
   @override
   Widget build(BuildContext context) {
     final editable = !_loading && _loadError == null;
+    final p = context.palette;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    // 编辑器兜底底色属于代码编辑器的功能色（与脚本编辑页、面板 Web 的编辑器一致），
+    // 不跟界面令牌走，保持原值。
     final editorBackground =
         _editorBackgroundColor ??
         (isDark ? const Color(0xFF1E1E1E) : Colors.white);
@@ -320,9 +324,7 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
           ],
         ),
         body: _loading
-            ? const Center(
-                child: CircularProgressIndicator(color: AppColors.primary),
-              )
+            ? Center(child: CircularProgressIndicator(color: p.accent))
             : _loadError != null
             ? SingleChildScrollView(
                 child: AppErrorView(
@@ -345,9 +347,7 @@ class _ConfigScriptPageState extends State<ConfigScriptPage> {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: 12,
-                          color: _dirty
-                              ? AppColors.amber500
-                              : Theme.of(context).colorScheme.onSurfaceVariant,
+                          color: _dirty ? p.warnInk : p.text2,
                         ),
                       ),
                     ),

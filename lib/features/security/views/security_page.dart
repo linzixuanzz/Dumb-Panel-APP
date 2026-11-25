@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
-import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_large_title_header.dart';
+import '../../../shared/widgets/app_pill_button.dart';
 import '../../../shared/widgets/app_snack.dart';
 
 // ── Security Page (Tabbed) ──
@@ -36,41 +38,26 @@ class _SecurityPageState extends ConsumerState<SecurityPage>
 
   @override
   Widget build(BuildContext context) {
-    final isLight = Theme.of(context).brightness == Brightness.light;
+    final p = context.palette;
 
     return Scaffold(
       body: Padding(
         padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12),
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  const AppBackButton(),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      '安全设置',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+            // 返回头 + 大标题（v2.0 次级页面统一写法）
+            const AppLargeTitleHeader(
+              title: '安全设置',
+              leading: AppBackButton(),
+              padding: EdgeInsets.fromLTRB(8, 0, 16, 12),
             ),
-            const SizedBox(height: 12),
             TabBar(
               controller: _tabController,
               isScrollable: true,
               tabAlignment: TabAlignment.start,
-              labelColor: AppColors.primary,
-              unselectedLabelColor: isLight
-                  ? AppColors.slate500
-                  : AppColors.slate400,
-              indicatorColor: AppColors.primary,
+              labelColor: p.accentInk,
+              unselectedLabelColor: p.text2,
+              indicatorColor: p.accent,
               labelStyle: const TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
@@ -88,10 +75,10 @@ class _SecurityPageState extends ConsumerState<SecurityPage>
               child: TabBarView(
                 controller: _tabController,
                 children: [
-                  _LoginLogsTab(isLight: isLight),
-                  _SessionsTab(isLight: isLight),
-                  _IpWhitelistTab(isLight: isLight),
-                  _TwoFaTab(isLight: isLight),
+                  const _LoginLogsTab(),
+                  const _SessionsTab(),
+                  const _IpWhitelistTab(),
+                  const _TwoFaTab(),
                 ],
               ),
             ),
@@ -105,8 +92,7 @@ class _SecurityPageState extends ConsumerState<SecurityPage>
 // ── Login Logs Tab ──
 
 class _LoginLogsTab extends ConsumerStatefulWidget {
-  final bool isLight;
-  const _LoginLogsTab({required this.isLight});
+  const _LoginLogsTab();
 
   @override
   ConsumerState<_LoginLogsTab> createState() => _LoginLogsTabState();
@@ -166,10 +152,11 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
             onPressed: () => Navigator.pop(dialogCtx, false),
             child: const Text('取消'),
           ),
-          FilledButton(
+          AppPillButton(
+            label: '清理',
+            variant: AppPillVariant.danger,
+            height: 40,
             onPressed: () => Navigator.pop(dialogCtx, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.red500),
-            child: const Text('清理'),
           ),
         ],
       ),
@@ -195,17 +182,16 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final p = context.palette;
     return RefreshIndicator(
-      color: AppColors.primary,
+      color: p.accent,
       onRefresh: _load,
       child: _loading
           ? ListView(
               physics: const AlwaysScrollableScrollPhysics(),
-              children: const [
-                SizedBox(height: 120),
-                Center(
-                  child: CircularProgressIndicator(color: AppColors.primary),
-                ),
+              children: [
+                const SizedBox(height: 120),
+                Center(child: CircularProgressIndicator(color: p.accent)),
               ],
             )
           : ListView(
@@ -248,19 +234,14 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
                   onPressed: _clearLogs,
                   icon: const Icon(Icons.delete_sweep_outlined, size: 16),
                   label: const Text('清理登录日志'),
-                  style: FilledButton.styleFrom(
-                    foregroundColor: AppColors.red500,
-                  ),
+                  style: FilledButton.styleFrom(foregroundColor: p.errInk),
                 ),
                 const SizedBox(height: 12),
                 if (_logs.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 80),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 80),
                     child: Center(
-                      child: Text(
-                        '暂无记录',
-                        style: TextStyle(color: AppColors.slate400),
-                      ),
+                      child: Text('暂无记录', style: TextStyle(color: p.text2)),
                     ),
                   )
                 else
@@ -283,9 +264,7 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
                           Icon(
                             success ? Icons.check_circle : Icons.cancel,
                             size: 18,
-                            color: success
-                                ? AppColors.success
-                                : AppColors.red500,
+                            color: success ? p.ok : p.err,
                           ),
                           const SizedBox(width: 10),
                           Expanded(
@@ -304,9 +283,7 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
                                   '${log['ip'] ?? ''} · ${log['message'] ?? ''}',
                                   style: TextStyle(
                                     fontSize: 11,
-                                    color: widget.isLight
-                                        ? AppColors.slate500
-                                        : AppColors.slate400,
+                                    color: p.text2,
                                   ),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
@@ -316,9 +293,7 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
                                   log['client_name']?.toString() ?? '客户端未知',
                                   style: TextStyle(
                                     fontSize: 11,
-                                    color: widget.isLight
-                                        ? AppColors.slate500
-                                        : AppColors.slate400,
+                                    color: p.text2,
                                   ),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
@@ -330,9 +305,7 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
                             formatTimeCn(time),
                             style: TextStyle(
                               fontSize: 11,
-                              color: widget.isLight
-                                  ? AppColors.slate400
-                                  : AppColors.slate500,
+                              color: p.text3,
                             ),
                           ),
                         ],
@@ -348,8 +321,7 @@ class _LoginLogsTabState extends ConsumerState<_LoginLogsTab>
 // ── Sessions Tab ──
 
 class _SessionsTab extends ConsumerStatefulWidget {
-  final bool isLight;
-  const _SessionsTab({required this.isLight});
+  const _SessionsTab();
 
   @override
   ConsumerState<_SessionsTab> createState() => _SessionsTabState();
@@ -396,10 +368,11 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
             onPressed: () => Navigator.pop(dialogCtx, false),
             child: const Text('取消'),
           ),
-          FilledButton(
+          AppPillButton(
+            label: '撤销',
+            variant: AppPillVariant.danger,
+            height: 40,
             onPressed: () => Navigator.pop(dialogCtx, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.red500),
-            child: const Text('撤销'),
           ),
         ],
       ),
@@ -433,10 +406,11 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
             onPressed: () => Navigator.pop(dialogCtx, false),
             child: const Text('取消'),
           ),
-          FilledButton(
+          AppPillButton(
+            label: '撤销',
+            variant: AppPillVariant.danger,
+            height: 40,
             onPressed: () => Navigator.pop(dialogCtx, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.red500),
-            child: const Text('撤销'),
           ),
         ],
       ),
@@ -462,17 +436,16 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final p = context.palette;
     return RefreshIndicator(
-      color: AppColors.primary,
+      color: p.accent,
       onRefresh: _load,
       child: _loading
           ? ListView(
               physics: const AlwaysScrollableScrollPhysics(),
-              children: const [
-                SizedBox(height: 120),
-                Center(
-                  child: CircularProgressIndicator(color: AppColors.primary),
-                ),
+              children: [
+                const SizedBox(height: 120),
+                Center(child: CircularProgressIndicator(color: p.accent)),
               ],
             )
           : _sessions.isEmpty
@@ -495,11 +468,8 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
                   ),
                 ),
                 const SizedBox(height: 80),
-                const Center(
-                  child: Text(
-                    '暂无会话',
-                    style: TextStyle(color: AppColors.slate400),
-                  ),
+                Center(
+                  child: Text('暂无会话', style: TextStyle(color: p.text2)),
                 ),
               ],
             )
@@ -537,11 +507,7 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
                   ),
                   child: Row(
                     children: [
-                      const Icon(
-                        Icons.devices,
-                        size: 18,
-                        color: AppColors.primary,
-                      ),
+                      Icon(Icons.devices, size: 18, color: p.accent),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Column(
@@ -561,9 +527,7 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
                                   : '',
                               style: TextStyle(
                                 fontSize: 11,
-                                color: widget.isLight
-                                    ? AppColors.slate500
-                                    : AppColors.slate400,
+                                color: p.text2,
                               ),
                             ),
                             const SizedBox(height: 2),
@@ -571,9 +535,7 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
                               '客户端: ${s['client_name'] ?? s['client_type_label'] ?? '未知'}',
                               style: TextStyle(
                                 fontSize: 11,
-                                color: widget.isLight
-                                    ? AppColors.slate500
-                                    : AppColors.slate400,
+                                color: p.text2,
                               ),
                             ),
                             if ((s['user_agent']?.toString() ?? '').isNotEmpty)
@@ -581,9 +543,7 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
                                 'UA: ${s['user_agent']}',
                                 style: TextStyle(
                                   fontSize: 11,
-                                  color: widget.isLight
-                                      ? AppColors.slate500
-                                      : AppColors.slate400,
+                                  color: p.text2,
                                 ),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
@@ -598,11 +558,7 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
                             _revokeSession(id);
                           }
                         },
-                        child: const Icon(
-                          Icons.close,
-                          size: 18,
-                          color: AppColors.red500,
-                        ),
+                        child: Icon(Icons.close, size: 18, color: p.err),
                       ),
                     ],
                   ),
@@ -616,8 +572,7 @@ class _SessionsTabState extends ConsumerState<_SessionsTab>
 // ── IP Whitelist Tab ──
 
 class _IpWhitelistTab extends ConsumerStatefulWidget {
-  final bool isLight;
-  const _IpWhitelistTab({required this.isLight});
+  const _IpWhitelistTab();
 
   @override
   ConsumerState<_IpWhitelistTab> createState() => _IpWhitelistTabState();
@@ -669,10 +624,11 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
             onPressed: () => Navigator.pop(dialogCtx, false),
             child: const Text('取消'),
           ),
-          FilledButton(
+          AppPillButton(
+            label: '删除',
+            variant: AppPillVariant.danger,
+            height: 40,
             onPressed: () => Navigator.pop(dialogCtx, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.red500),
-            child: const Text('删除'),
           ),
         ],
       ),
@@ -699,17 +655,16 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final p = context.palette;
     return RefreshIndicator(
-      color: AppColors.primary,
+      color: p.accent,
       onRefresh: _load,
       child: _loading
           ? ListView(
               physics: const AlwaysScrollableScrollPhysics(),
-              children: const [
-                SizedBox(height: 120),
-                Center(
-                  child: CircularProgressIndicator(color: AppColors.primary),
-                ),
+              children: [
+                const SizedBox(height: 120),
+                Center(child: CircularProgressIndicator(color: p.accent)),
               ],
             )
           : _items.isEmpty
@@ -732,11 +687,8 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
                   ),
                 ),
                 const SizedBox(height: 80),
-                const Center(
-                  child: Text(
-                    '暂无白名单',
-                    style: TextStyle(color: AppColors.slate400),
-                  ),
+                Center(
+                  child: Text('暂无白名单', style: TextStyle(color: p.text2)),
                 ),
               ],
             )
@@ -771,11 +723,7 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
                   ),
                   child: Row(
                     children: [
-                      const Icon(
-                        Icons.shield_outlined,
-                        size: 18,
-                        color: AppColors.primary,
-                      ),
+                      Icon(Icons.shield_outlined, size: 18, color: p.accent),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Column(
@@ -794,9 +742,7 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
                                 item['remarks'].toString(),
                                 style: TextStyle(
                                   fontSize: 11,
-                                  color: widget.isLight
-                                      ? AppColors.slate500
-                                      : AppColors.slate400,
+                                  color: p.text2,
                                 ),
                               ),
                           ],
@@ -804,10 +750,10 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
                       ),
                       GestureDetector(
                         onTap: () => _deleteItem(item),
-                        child: const Icon(
+                        child: Icon(
                           Icons.delete_outline,
                           size: 18,
-                          color: AppColors.red500,
+                          color: p.err,
                         ),
                       ),
                     ],
@@ -869,6 +815,8 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
                         if (!mounted) {
                           return;
                         }
+                        // 弹窗可能已被别的途径关掉，pop 前确认它的 context 还在。
+                        if (!dialogCtx.mounted) return;
                         Navigator.of(dialogCtx).pop();
                         await _load();
                         if (!mounted) {
@@ -900,8 +848,7 @@ class _IpWhitelistTabState extends ConsumerState<_IpWhitelistTab>
 // ── 2FA Tab ──
 
 class _TwoFaTab extends ConsumerStatefulWidget {
-  final bool isLight;
-  const _TwoFaTab({required this.isLight});
+  const _TwoFaTab();
 
   @override
   ConsumerState<_TwoFaTab> createState() => _TwoFaTabState();
@@ -939,10 +886,9 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final p = context.palette;
     if (_loading) {
-      return const Center(
-        child: CircularProgressIndicator(color: AppColors.primary),
-      );
+      return Center(child: CircularProgressIndicator(color: p.accent));
     }
 
     return Padding(
@@ -957,7 +903,7 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
                   Icons.security,
                   size: 24,
                   // 「已启用」统一走 success 绿。
-                  color: _enabled ? AppColors.success : AppColors.slate400,
+                  color: _enabled ? p.ok : p.text3,
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -976,9 +922,7 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
                         _enabled ? '已启用' : '未启用',
                         style: TextStyle(
                           fontSize: 12,
-                          color: _enabled
-                              ? AppColors.success
-                              : AppColors.slate400,
+                          color: _enabled ? p.okInk : p.text2,
                         ),
                       ),
                     ],
@@ -988,8 +932,8 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
                   OutlinedButton(
                     onPressed: _disable2FA,
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.red500,
-                      side: const BorderSide(color: AppColors.red500),
+                      foregroundColor: p.errInk,
+                      side: BorderSide(color: p.err),
                       minimumSize: const Size(0, 36),
                     ),
                     child: const Text('禁用', style: TextStyle(fontSize: 12)),
@@ -1100,11 +1044,12 @@ class _TwoFaTabState extends ConsumerState<_TwoFaTab>
             onPressed: () => Navigator.pop(dialogCtx),
             child: const Text('取消'),
           ),
-          FilledButton(
+          AppPillButton(
+            label: '禁用',
+            variant: AppPillVariant.danger,
+            height: 40,
             onPressed: () =>
                 Navigator.pop(dialogCtx, codeController.text.trim()),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.red500),
-            child: const Text('禁用'),
           ),
         ],
       ),

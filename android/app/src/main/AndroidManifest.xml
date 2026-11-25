@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.USE_FINGERPRINT" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 「任务运行中」常驻通知（APP v2.0）：安卓 13+ 要运行时授权，用户在设置页打开开关时才申请 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:label="呆呆面板"
@@ -28,6 +30,12 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- 关掉 Flutter 自带的深链路由（3.27 起默认开）：桌面小组件点按时 Intent 带着
+                 daidai://task/12 这类 URI，默认会被原样推给 GoRouter，匹配不到就落到「页面不存在」。
+                 小组件入口统一由 IntegrationService 经 home_widget 解析后再导航；APP 没有别的 URI 深链。 -->
+            <meta-data
+                android:name="flutter_deeplinking_enabled"
+                android:value="false" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
@@ -48,6 +56,19 @@
         <receiver
             android:name=".InstallResultReceiver"
             android:exported="false" />
+        <!-- 桌面小组件（APP v2.0）。exported=true 是系统要求：APPWIDGET_UPDATE 由系统发来。
+             它只读本地快照、不接受任何外部数据，点按走 home_widget 的显式 Intent 回 MainActivity。 -->
+        <receiver
+            android:name=".TaskWidgetProvider"
+            android:exported="true"
+            android:label="@string/task_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/task_widget_info" />
+        </receiver>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../core/theme/app_theme.dart';
 import '../../core/theme/design_tokens.dart';
 
 /// 列表「加载中」占位。
@@ -22,8 +21,8 @@ class AppLoadingView extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: EdgeInsets.only(top: topPadding),
-      child: const Center(
-        child: CircularProgressIndicator(color: AppColors.primary),
+      child: Center(
+        child: CircularProgressIndicator(color: context.palette.accent),
       ),
     );
   }
@@ -49,17 +48,18 @@ class AppEmptyView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.palette;
     return Padding(
       padding: EdgeInsets.only(top: topPadding),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 56, color: AppColors.slate400.withAlpha(120)),
+          Icon(icon, size: 56, color: palette.text3),
           const SizedBox(height: AppSpacing.md),
           Text(
             message,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: AppColors.slate400, fontSize: 15),
+            style: TextStyle(color: palette.text2, fontSize: 15),
           ),
         ],
       ),
@@ -96,12 +96,13 @@ class AppErrorView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.palette;
     return Padding(
       padding: padding,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 56, color: AppColors.red500.withAlpha(120)),
+          Icon(icon, size: 56, color: palette.err.withValues(alpha: 0.5)),
           const SizedBox(height: AppSpacing.md),
           Text(
             title,
@@ -112,7 +113,7 @@ class AppErrorView extends StatelessWidget {
           Text(
             message,
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 13, color: AppColors.slate400),
+            style: TextStyle(fontSize: 13, color: palette.text2),
           ),
           if (onRetry != null) ...[
             const SizedBox(height: AppSpacing.lg),

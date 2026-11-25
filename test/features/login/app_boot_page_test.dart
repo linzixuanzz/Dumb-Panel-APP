@@ -4,7 +4,7 @@ import 'package:daidai_app/core/auth/auth_provider.dart';
 import 'package:daidai_app/core/auth/auth_service.dart';
 import 'package:daidai_app/core/storage/secure_storage.dart';
 import 'package:daidai_app/core/theme/app_theme.dart';
-import 'package:daidai_app/features/dashboard/providers/dashboard_provider.dart';
+import 'package:daidai_app/features/overview/providers/dashboard_provider.dart';
 import 'package:daidai_app/features/login/views/app_boot_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -80,8 +80,9 @@ void main() {
           builder: (_, _) =>
               const Scaffold(body: Center(child: Text('服务器配置页占位'))),
         ),
+        // v2.0 默认打开页面没设过时落「任务」（原来是 /dashboard 主页）
         GoRoute(
-          path: '/dashboard',
+          path: '/tasks',
           builder: (_, _) =>
               const Scaffold(body: Center(child: Text('首页占位'))),
         ),
@@ -247,7 +248,7 @@ class _HangingDashboardNotifier extends DashboardNotifier {
   final void Function() onLoad;
 
   @override
-  Future<void> load() {
+  Future<void> load({bool full = true}) {
     onLoad();
     return Completer<void>().future;
   }

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 桌面小组件（深色）。取值同 APP 令牌 AppPalette.dark；系统切到深色时启动器自动用这一套。 -->
+    <color name="widget_bg">#FF1C1C1E</color>
+    <color name="widget_text">#FFFFFFFF</color>
+    <color name="widget_text2">#FF8D8D93</color>
+    <color name="widget_fill">#FF2C2C2E</color>
+    <color name="widget_accent">#FF0A84FF</color>
+    <color name="widget_ok">#FF30D158</color>
+    <color name="widget_err">#FFFF453A</color>
+
+    <color name="shortcut_bg">#FF0A84FF</color>
+</resources>

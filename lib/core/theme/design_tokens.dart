@@ -11,7 +11,11 @@
 
 import 'package:flutter/material.dart';
 
+import 'app_palette.dart';
 import 'app_theme.dart';
+
+// 导入本文件即可拿到 `context.palette`，不必再单独 import 色板。
+export 'app_palette.dart';
 
 /// 圆角令牌。
 ///
@@ -25,7 +29,7 @@ import 'app_theme.dart';
 /// 2. **clamp**：Flutter 画圆角时会把半径截到边长的一半。高 6 的进度条写 4、
 ///    高 31 的 chip 写 20，渲染出来本来就是胶囊，它们归 [pill] 是零像素变化。
 ///
-/// 档位就是下面这五个，**没有第六个**：
+/// v1.x 的档位是下面这五个（v2.0 另加了 [card] / [cardSm] / [tile]，见类末尾）：
 /// - [control] —— Checkbox。唯一的**控件**档，不跟表面一起收缩。
 /// - [sm] —— 图标底板、微徽章、代码块、小方按钮。
 /// - [md] —— 输入框、按钮、内嵌块、提示条、弹出菜单、左滑操作按钮。
@@ -96,6 +100,19 @@ class AppRadius {
   /// 本档**不跟着扁平化归 0**（已确认）：chip 是胶囊、卡片是圆角矩形，
   /// 这是两类东西；把 chip 也改成方块，它会和紧挨着的输入框糊成一片。
   static const double pill = 999;
+
+  // ── v2.0 新增（方案书 §2.3）────────────────────────────────
+  // 上面五档是 v1.x 次级页面在用的，取值不动；v2.0 的新组件（分组列表、缺口卡片、
+  // 大卡片、弹层）走下面三档。次级页面换装时可以逐步迁到这三档。
+
+  /// 大卡片 / 分组列表容器 / 弹层顶部。
+  static const double card = 30;
+
+  /// 小卡片（概览页两列小卡、详情弹层里的统计格子）。
+  static const double cardSm = 28;
+
+  /// 彩色图标方块。按 46dp 方块定的，方块更小时 `AppIconTile` 按比例缩。
+  static const double tile = 15;
 }
 
 /// 间距令牌。取值来自现有页面里出现频率最高的那几档。
@@ -113,8 +130,103 @@ class AppSpacing {
   /// 列表页左右留白。全库列表页统一是 20。
   static const double pageHorizontal = 20;
 
-  /// 列表底部留白，避开悬浮的底部导航栏。全库统一是 100。
-  static const double listBottom = 100;
+  /// 列表底部留白的**兜底常量**，避开悬浮的玻璃底栏。
+  ///
+  /// v2.0 底栏 = 胶囊高 [AppTabBarMetrics.height] + 离底 max(安全区, 10)，
+  /// 全面屏手势条（安全区约 34）时一共约 96，再留 16 的呼吸距离 → 112。
+  /// 能拿到 context 时优先用 [listBottomOf]，它把真实安全区算进去。
+  static const double listBottom = 112;
+
+  /// Tab 页列表底部留白：底栏实际占的高度 + 16。
+  ///
+  /// 主界面外壳的 `Scaffold(extendBody: true)` 会把底栏高度（含安全区）
+  /// 并进 body 的 `MediaQuery.padding.bottom`，所以这里读到的就是「被底栏盖住的高度」。
+  /// 不在主界面外壳里（二级页面）时读到的是系统安全区，同样适用。
+  ///
+  /// ⚠️ 要在页面层（`ListView` **外面**）读，再传给 `ListView(padding: ...)`：
+  /// 不传 padding 的 `ListView` 会把 MediaQuery 的 padding 吃掉，在它里面读到的是 0。
+  static double listBottomOf(BuildContext context) =>
+      MediaQuery.paddingOf(context).bottom + lg;
+}
+
+/// 悬浮玻璃底栏的尺寸。放在令牌里是因为列表留白要和它对齐。
+class AppTabBarMetrics {
+  const AppTabBarMetrics._();
+
+  /// 胶囊本体高度。
+  static const double height = 62;
+
+  /// 离屏幕底边的最小距离（没有安全区的老机型）。
+  static const double bottomGap = 10;
+
+  /// 左右边距。
+  static const double sideGap = 16;
+}
+
+/// 字号令牌（方案书 §2.3）。只定字号 / 字重 / 字距，**不带颜色**：
+/// 颜色跟着 `DefaultTextStyle`（主题已映射到 `palette.text`），需要次要色时
+/// `AppText.caption.copyWith(color: context.palette.text2)`。
+class AppText {
+  const AppText._();
+
+  /// Tab 页大标题。
+  static const TextStyle largeTitle = TextStyle(
+    fontSize: 34,
+    fontWeight: FontWeight.w800,
+    letterSpacing: -0.7,
+    height: 1.15,
+  );
+
+  /// 区块标题（「常用任务」「所有任务」）。
+  static const TextStyle section = TextStyle(
+    fontSize: 22,
+    fontWeight: FontWeight.w700,
+    letterSpacing: -0.3,
+  );
+
+  /// 卡片标题。
+  static const TextStyle cardTitle = TextStyle(
+    fontSize: 21,
+    fontWeight: FontWeight.w700,
+    letterSpacing: -0.2,
+  );
+
+  /// 正文 / 列表行标题。
+  static const TextStyle body = TextStyle(fontSize: 16.5);
+
+  /// 说明 / 列表行副标题。
+  static const TextStyle caption = TextStyle(fontSize: 13.5, height: 1.35);
+
+  /// 数字一律等宽：倒计时、耗时、计数跳动时宽度不变，不会左右抖。
+  static TextStyle tabular(TextStyle style) => style.copyWith(
+    fontFeatures: const [FontFeature.tabularFigures()],
+  );
+}
+
+/// 动效令牌（方案书 §2.5）。
+class AppMotion {
+  const AppMotion._();
+
+  /// 系统开了「移除动画」（安卓）/「减弱动态效果」（iOS）。
+  /// 为 true 时：底栏药丸直接跳、切 Tab 直接切、弹层只淡入、列表不做入场。
+  /// 按住运行的进度条**不受影响**（那是功能，不是装饰）。
+  static bool reduce(BuildContext context) =>
+      MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+
+  static const Duration fast = Duration(milliseconds: 120);
+  static const Duration normal = Duration(milliseconds: 220);
+  static const Duration sheet = Duration(milliseconds: 380);
+
+  /// 弹簧滑动（底栏药丸、分段控件滑块）用的时长：比 [sheet] 稍长，
+  /// 因为 [spring] 末段有一次轻回弹，太短会看不出来。
+  static const Duration slide = Duration(milliseconds: 450);
+
+  /// 轻回弹的弹簧曲线（末段冲过 1 一点再回来）。
+  static const Curve spring = Cubic(0.2, 0.9, 0.25, 1.15);
+
+  /// 动画时长的统一出口：减少动画时返回 0。
+  static Duration of(BuildContext context, Duration duration) =>
+      reduce(context) ? Duration.zero : duration;
 }
 
 /// 可点区域的最小尺寸。
@@ -170,36 +282,42 @@ class AppSurfaces {
       Theme.of(context).brightness == Brightness.light ? light : dark;
 
   // ── 表面 ──────────────────────────────────────────────
+  //
+  // v2.0 起这些表面色全部改由 [AppPalette] 供给（v1.x 是 Slate 系），
+  // 次级页面不用改一行代码就换上新的灰底白卡。新代码直接用 `context.palette`。
 
-  /// 卡片底色。原写法：`isLight ? Colors.white : AppColors.slate900`。
-  Color get card => isLight ? Colors.white : AppColors.slate900;
+  AppPalette get _p => isLight ? AppPalette.light : AppPalette.dark;
 
-  /// 卡片描边。原写法：`isLight ? AppColors.slate200 : AppColors.slate800`。
-  Color get cardBorder => isLight ? AppColors.slate200 : AppColors.slate800;
+  /// 卡片底色。
+  Color get card => _p.card;
 
-  /// 卡片内嵌的次级浅底块。原写法：`isLight ? AppColors.slate50 : AppColors.slate800`。
-  Color get subtle => isLight ? AppColors.slate50 : AppColors.slate800;
+  /// 卡片描边。v2.0 的卡片「无边框」，这里给一条几乎看不见的发丝线：
+  /// 不直接给透明，是因为白卡片偶尔会叠在白底（弹窗）上，完全没边就糊成一片。
+  Color get cardBorder =>
+      isLight ? const Color(0x143C3C43) : const Color(0x59545458);
 
-  /// 次级块的描边。原写法：`isLight ? AppColors.slate200 : AppColors.slate700`。
-  Color get subtleBorder => isLight ? AppColors.slate200 : AppColors.slate700;
+  /// 卡片内嵌的次级浅底块（不透明）。
+  Color get subtle => _p.card2;
+
+  /// 次级块的描边。
+  Color get subtleBorder => _p.separator;
 
   /// 页面底色。
-  Color get page => isLight ? AppColors.slate50 : AppColors.slate950;
+  Color get page => _p.bg;
 
   // ── 文字 ──────────────────────────────────────────────
 
   /// 次级说明文字。
-  Color get mutedText => isLight ? AppColors.slate500 : AppColors.slate400;
+  Color get mutedText => _p.text2;
 
   /// 正文强调文字。
-  Color get strongText => isLight ? AppColors.slate800 : AppColors.slate100;
+  Color get strongText => _p.text;
 
   // ── 禁用态 ────────────────────────────────────────────
 
-  Color get disabledFg => AppColors.slate400;
-  Color get disabledBg => isLight ? AppColors.slate50 : AppColors.slate800;
-  Color get disabledBorder =>
-      isLight ? AppColors.slate200 : AppColors.slate700;
+  Color get disabledFg => _p.text3;
+  Color get disabledBg => _p.card2;
+  Color get disabledBorder => _p.separator;
 
   // ── 强调色的淡底 ──────────────────────────────────────
 

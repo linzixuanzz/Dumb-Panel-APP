@@ -18,6 +18,8 @@ import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_circle_add_button.dart';
 import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_large_title_header.dart';
+import '../../../shared/widgets/app_pill_button.dart';
 import '../../../shared/widgets/app_notice.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
@@ -233,35 +235,22 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(subscriptionListProvider);
-    final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
+    final p = context.palette;
+    // 二级页面没有悬浮底栏，这里读到的是系统安全区 + 16。
+    final listBottom = AppSpacing.listBottomOf(context);
 
     return Scaffold(
       body: Padding(
         padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12),
         child: Column(
           children: [
-            // Header
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  const AppBackButton(),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      '订阅管理',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  AppCircleAddButton(onTap: () => _showCreateDialog()),
-                ],
-              ),
+            // Header：返回头 + 大标题（v2.0 次级页面统一写法）
+            AppLargeTitleHeader(
+              title: '订阅管理',
+              leading: const AppBackButton(),
+              actions: [AppCircleAddButton(onTap: () => _showCreateDialog())],
+              padding: const EdgeInsets.fromLTRB(8, 0, 16, 16),
             ),
-            const SizedBox(height: 16),
 
             // Search
             Padding(
@@ -272,47 +261,31 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                   controller: _searchController,
                   decoration: InputDecoration(
                     hintText: '搜索订阅...',
-                    prefixIcon: const Icon(
-                      Icons.search,
-                      size: 18,
-                      color: AppColors.slate400,
-                    ),
+                    prefixIcon: Icon(Icons.search, size: 18, color: p.text3),
                     filled: true,
-                    fillColor: isLight ? Colors.white : AppColors.slate900,
-                    // 逐字复制 app_theme 的三处 OutlineInputBorder：
-                    // 计划裁决只令牌化不删除。三处圆角同值是聚焦动画的硬要求。
+                    fillColor: p.fill,
+                    // 与 app_theme 的输入框一致：灰色填充、无描边，聚焦时一圈强调色。
+                    // 三处圆角同值是聚焦动画的硬要求。
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(AppRadius.md),
-                      borderSide: BorderSide(
-                        color: isLight
-                            ? AppColors.slate200
-                            : AppColors.slate800,
-                      ),
+                      borderSide: BorderSide.none,
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(AppRadius.md),
-                      borderSide: BorderSide(
-                        color: isLight
-                            ? AppColors.slate200
-                            : AppColors.slate800,
-                      ),
+                      borderSide: BorderSide.none,
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(AppRadius.md),
-                      borderSide: const BorderSide(
-                        color: AppColors.primary,
-                        width: 1.5,
+                      borderSide: BorderSide(
+                        color: p.accent,
+                        width: AppBorderWidth.focus,
                       ),
                     ),
                     contentPadding: const EdgeInsets.symmetric(vertical: 12),
                     isDense: true,
                     suffixIcon: _searchController.text.isNotEmpty
                         ? IconButton(
-                            icon: const Icon(
-                              Icons.clear,
-                              size: 16,
-                              color: AppColors.slate400,
-                            ),
+                            icon: Icon(Icons.clear, size: 16, color: p.text3),
                             onPressed: () {
                               _searchController.clear();
                               ref
@@ -338,18 +311,16 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
             // List
             Expanded(
               child: RefreshIndicator(
-                color: AppColors.primary,
+                color: p.accent,
                 onRefresh: () =>
                     ref.read(subscriptionListProvider.notifier).load(),
                 child: state.loading && state.items.isEmpty
                     ? ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [
-                          SizedBox(height: 120),
+                        children: [
+                          const SizedBox(height: 120),
                           Center(
-                            child: CircularProgressIndicator(
-                              color: AppColors.primary,
-                            ),
+                            child: CircularProgressIndicator(color: p.accent),
                           ),
                         ],
                       )
@@ -376,25 +347,24 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                           Icon(
                             Icons.sync_disabled,
                             size: 56,
-                            color: AppColors.slate400.withAlpha(120),
+                            color: p.text3,
                           ),
                           const SizedBox(height: 12),
-                          const Center(
+                          Center(
                             child: Text(
                               '暂无订阅',
-                              style: TextStyle(color: AppColors.slate400),
+                              style: TextStyle(color: p.text2),
                             ),
                           ),
                         ],
                       )
                     : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                        padding: EdgeInsets.fromLTRB(20, 0, 20, listBottom),
                         itemCount: state.items.length,
                         itemBuilder: (_, i) {
                           final sub = state.items[i];
                           return _SubCard(
                             sub: sub,
-                            isLight: isLight,
                             onPull: () => _doPull(sub),
                             onStopPull: () => _doStopPull(sub),
                             onLogs: () => _openLogs(sub),
@@ -492,12 +462,12 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
               Expanded(
                 child: SizedBox(
                   height: 44,
-                  child: FilledButton(
+                  child: AppPillButton(
+                    label: '删除',
+                    variant: AppPillVariant.danger,
+                    expand: true,
+                    height: 44,
                     onPressed: () => Navigator.pop(dialogContext, true),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.red500,
-                    ),
-                    child: const Text('删除'),
                   ),
                 ),
               ),
@@ -719,9 +689,9 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                                           forceOverwrite
                                               ? '拉取时覆盖本地修改'
                                               : '拉取时保留本地修改的文件',
-                                          style: const TextStyle(
+                                          style: TextStyle(
                                             fontSize: 11,
-                                            color: Colors.grey,
+                                            color: context.palette.text2,
                                           ),
                                         ),
                                       ],
@@ -1041,9 +1011,9 @@ class _SubscriptionListPageState extends ConsumerState<SubscriptionListPage> {
                                           forceOverwrite
                                               ? '拉取时覆盖本地修改'
                                               : '拉取时保留本地修改的文件',
-                                          style: const TextStyle(
+                                          style: TextStyle(
                                             fontSize: 11,
-                                            color: Colors.grey,
+                                            color: context.palette.text2,
                                           ),
                                         ),
                                       ],
@@ -1293,10 +1263,10 @@ class _SubscriptionAuthFields extends StatelessWidget {
         if (state.type == SubscriptionAuthType.ssh) ...[
           const SizedBox(height: 12),
           if (keyError != null)
-            AppNotice(color: AppColors.warning, text: keyError)
+            AppNotice(color: context.palette.warn, text: keyError)
           else if (sshKeys.isEmpty)
-            const AppNotice(
-              color: AppColors.warning,
+            AppNotice(
+              color: context.palette.warn,
               text: '面板里还没有 SSH 密钥。请先在面板 Web 端的订阅页添加，或改用 Access Token。',
             )
           else
@@ -1362,7 +1332,6 @@ class _SubscriptionAuthFields extends StatelessWidget {
 
 class _SubCard extends StatelessWidget {
   final Subscription sub;
-  final bool isLight;
   final VoidCallback onPull;
   final VoidCallback onStopPull;
   final VoidCallback onLogs;
@@ -1372,7 +1341,6 @@ class _SubCard extends StatelessWidget {
 
   const _SubCard({
     required this.sub,
-    required this.isLight,
     required this.onPull,
     required this.onStopPull,
     required this.onLogs,
@@ -1383,28 +1351,30 @@ class _SubCard extends StatelessWidget {
 
   // 拉取中=蓝(info)、已启用=绿(success)、已禁用=灰。原先「已启用」是
   // primary 淡底 + 写死的 Emerald 深绿字，主色换蓝后互相打架。
-  Color _statusBg() {
+  // 徽章：底是状态色的淡底，字用对应的墨色。
+  Color _statusBg(AppPalette p) {
     if (sub.isPulling) {
-      return isLight ? AppColors.infoLight : AppColors.info.withAlpha(25);
+      return p.tint(p.accent);
     }
     if (sub.enabled) {
-      return isLight ? AppColors.successLight : AppColors.success.withAlpha(25);
+      return p.tint(p.ok);
     }
-    return isLight ? AppColors.slate100 : AppColors.slate800;
+    return p.fill;
   }
 
-  Color _statusFg() {
+  Color _statusFg(AppPalette p) {
     if (sub.isPulling) {
-      return isLight ? AppColors.infoDark : AppColors.info;
+      return p.accentInk;
     }
     if (sub.enabled) {
-      return isLight ? AppColors.successDark : AppColors.success;
+      return p.okInk;
     }
-    return AppColors.neutral;
+    return p.text2;
   }
 
   @override
   Widget build(BuildContext context) {
+    final p = context.palette;
     return AppCard(
       onTap: onEdit,
       margin: const EdgeInsets.only(bottom: 8),
@@ -1421,7 +1391,7 @@ class _SubCard extends StatelessWidget {
                 width: 8,
                 height: 8,
                 decoration: BoxDecoration(
-                  color: sub.enabled ? AppColors.success : AppColors.slate300,
+                  color: sub.enabled ? p.ok : p.text3,
                   shape: BoxShape.circle,
                 ),
               ),
@@ -1441,7 +1411,7 @@ class _SubCard extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: _statusBg(),
+                  color: _statusBg(p),
                   // 10px 微徽章。原值 4，全库这一类统一走 sm。
                   borderRadius: BorderRadius.circular(AppRadius.sm),
                 ),
@@ -1450,7 +1420,7 @@ class _SubCard extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w700,
-                    color: _statusFg(),
+                    color: _statusFg(p),
                   ),
                 ),
               ),
@@ -1465,7 +1435,7 @@ class _SubCard extends StatelessWidget {
                   '仓库：',
                   style: TextStyle(
                     fontSize: 12,
-                    color: isLight ? AppColors.slate500 : AppColors.slate400,
+                    color: p.text2,
                   ),
                 ),
                 Expanded(
@@ -1473,7 +1443,7 @@ class _SubCard extends StatelessWidget {
                     sub.url.isNotEmpty ? sub.url : sub.typeLabel,
                     style: TextStyle(
                       fontSize: 12,
-                      color: isLight ? AppColors.slate500 : AppColors.slate400,
+                      color: p.text2,
                       fontFamily: 'monospace',
                     ),
                     maxLines: 1,
@@ -1491,9 +1461,7 @@ class _SubCard extends StatelessWidget {
             decoration: BoxDecoration(
               border: Border(
                 top: BorderSide(
-                  color: isLight
-                      ? AppColors.slate100
-                      : AppColors.slate800.withAlpha(120),
+                  color: p.separator,
                 ),
               ),
             ),
@@ -1510,20 +1478,20 @@ class _SubCard extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 12,
-                      color: isLight ? AppColors.slate500 : AppColors.slate400,
+                      color: p.text2,
                     ),
                   ),
                 ),
                 _SmallIconBtn(
                   icon: sub.isPulling ? Icons.stop : Icons.sync,
                   onTap: sub.isPulling ? onStopPull : onPull,
-                  color: sub.isPulling ? AppColors.red500 : AppColors.primary,
+                  color: sub.isPulling ? p.err : p.accent,
                 ),
                 const SizedBox(width: 4),
                 _SmallIconBtn(
                   icon: Icons.receipt_long_outlined,
                   onTap: onLogs,
-                  color: AppColors.blue500,
+                  color: p.accent,
                 ),
                 const SizedBox(width: 4),
                 _SmallIconBtn(
@@ -1534,7 +1502,7 @@ class _SubCard extends StatelessWidget {
                 _SmallIconBtn(
                   icon: Icons.delete_outline,
                   onTap: onDelete,
-                  color: AppColors.red500,
+                  color: p.err,
                 ),
               ],
             ),
@@ -1565,7 +1533,7 @@ class _SmallIconBtn extends StatelessWidget {
         width: AppTapTarget.min,
         height: AppTapTarget.min,
         child: Center(
-          child: Icon(icon, size: 18, color: color ?? AppColors.slate400),
+          child: Icon(icon, size: 18, color: color ?? context.palette.text3),
         ),
       ),
     );
@@ -1577,8 +1545,8 @@ class _HookScriptHint extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const AppNotice(
-      color: AppColors.blue500,
+    return AppNotice(
+      color: context.palette.accent,
       text: '钩子会在订阅拉取成功后执行，适合安装依赖、移动文件或触发通知；这里填写的是 Shell 命令，留空则不执行。',
     );
   }
@@ -1648,6 +1616,7 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
       _logBackgroundColor,
       themeBrightness: Theme.of(context).brightness,
     );
+    // 日志卡片的描边跟着「日志主题」的明暗走（不是 App 明暗），属于日志内容配色，保持原值。
     final borderColor = logTheme.brightness == Brightness.dark
         ? AppColors.slate700
         : AppColors.slate200;
@@ -1706,7 +1675,9 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final isLight = Theme.of(context).brightness == Brightness.light;
+    final p = context.palette;
+    // 二级页面没有悬浮底栏，这里读到的是系统安全区 + 16。
+    final listBottom = AppSpacing.listBottomOf(context);
     final totalPages = ((_total + _pageSize - 1) ~/ _pageSize).clamp(
       1,
       1 << 20,
@@ -1716,185 +1687,182 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
         : '拉取日志';
 
     return Scaffold(
-      appBar: AppBar(title: Text(title)),
-      body: Column(
-        children: [
-          Expanded(
-            child: RefreshIndicator(
-              color: AppColors.primary,
-              onRefresh: () => _load(page: _page),
-              child: _loading && _logs.isEmpty
-                  ? ListView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      children: const [
-                        SizedBox(height: 120),
-                        Center(
-                          child: CircularProgressIndicator(
-                            color: AppColors.primary,
+      body: Padding(
+        padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12),
+        child: Column(
+          children: [
+            // 返回头 + 大标题（v2.0 次级页面统一写法；原来是 AppBar）
+            AppLargeTitleHeader(
+              title: title,
+              leading: const AppBackButton(),
+              padding: const EdgeInsets.fromLTRB(8, 0, 16, 0),
+            ),
+            Expanded(
+              child: RefreshIndicator(
+                color: p.accent,
+                onRefresh: () => _load(page: _page),
+                child: _loading && _logs.isEmpty
+                    ? ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: [
+                          const SizedBox(height: 120),
+                          Center(
+                            child: CircularProgressIndicator(color: p.accent),
                           ),
-                        ),
-                      ],
-                    )
-                  : _logs.isEmpty
-                  ? ListView(
-                      children: const [
-                        SizedBox(height: 100),
-                        Center(
-                          child: Text(
-                            '暂无拉取日志',
-                            style: TextStyle(color: AppColors.slate400),
+                        ],
+                      )
+                    : _logs.isEmpty
+                    ? ListView(
+                        children: [
+                          const SizedBox(height: 100),
+                          Center(
+                            child: Text(
+                              '暂无拉取日志',
+                              style: TextStyle(color: p.text2),
+                            ),
                           ),
-                        ),
-                      ],
-                    )
-                  : ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-                      itemCount: _logs.length,
-                      itemBuilder: (_, index) {
-                        final log = _logs[index];
-                        // 面板 SubLog.Status 目前只有 0 成功 / 1 失败
-                        // （server/service/subscription.go:95-101 就是这么算的）。
-                        // 但 Web 端注释里已经在说「不给 SubLog.Status 加『已终止』，
-                        // 前端自己打本地标记」（views/subscriptions/index.vue:740），
-                        // 说明第三个值是有可能出现的。所以这里不写
-                        // `status == 0 ? 成功 : 失败` —— 那会把任何新值一律说成失败。
-                        final logStatus = (log['status'] as num?)?.toInt();
-                        final success = logStatus == 0;
-                        final failed = logStatus == 1;
-                        final time = DateTime.tryParse(
-                          log['created_at']?.toString() ?? '',
-                        );
-                        final preview = _subscriptionLogPreview(log);
+                        ],
+                      )
+                    : ListView.builder(
+                        padding: EdgeInsets.fromLTRB(20, 16, 20, listBottom),
+                        itemCount: _logs.length,
+                        itemBuilder: (_, index) {
+                          final log = _logs[index];
+                          // 面板 SubLog.Status 目前只有 0 成功 / 1 失败
+                          // （server/service/subscription.go:95-101 就是这么算的）。
+                          // 但 Web 端注释里已经在说「不给 SubLog.Status 加『已终止』，
+                          // 前端自己打本地标记」（views/subscriptions/index.vue:740），
+                          // 说明第三个值是有可能出现的。所以这里不写
+                          // `status == 0 ? 成功 : 失败` —— 那会把任何新值一律说成失败。
+                          final logStatus = (log['status'] as num?)?.toInt();
+                          final success = logStatus == 0;
+                          final failed = logStatus == 1;
+                          final time = DateTime.tryParse(
+                            log['created_at']?.toString() ?? '',
+                          );
+                          final preview = _subscriptionLogPreview(log);
 
-                        return AppCard(
-                          onTap: () => _showLogDetail(log),
-                          margin: const EdgeInsets.only(bottom: 10),
-                          padding: const EdgeInsets.all(14),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: success
-                                          ? AppColors.success.withAlpha(20)
-                                          : failed
-                                          ? AppColors.danger.withAlpha(15)
-                                          : AppColors.neutral.withAlpha(20),
-                                      borderRadius: BorderRadius.circular(
-                                        AppRadius.pill,
+                          return AppCard(
+                            onTap: () => _showLogDetail(log),
+                            margin: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.all(14),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
                                       ),
-                                    ),
-                                    child: Text(
-                                      success
-                                          ? '成功'
-                                          : failed
-                                          ? '失败'
-                                          : '未知(${logStatus ?? '-'})',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w700,
-                                        // 底色是同色淡底：success 2.13:1、
-                                        // danger 3.43:1，绿的那个尤其糊。
-                                        color: context.surfaces.tintFg(
-                                          success
-                                              ? AppColors.success
+                                      decoration: BoxDecoration(
+                                        color: success
+                                            ? p.tint(p.ok)
+                                            : failed
+                                            ? p.tint(p.err)
+                                            : p.fill,
+                                        borderRadius: BorderRadius.circular(
+                                          AppRadius.pill,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        success
+                                            ? '成功'
+                                            : failed
+                                            ? '失败'
+                                            : '未知(${logStatus ?? '-'})',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          // 淡底上的字用墨色。
+                                          color: success
+                                              ? p.okInk
                                               : failed
-                                              ? AppColors.danger
-                                              : AppColors.neutral,
+                                              ? p.errInk
+                                              : p.text2,
                                         ),
                                       ),
                                     ),
-                                  ),
-                                  const Spacer(),
-                                  Text(
-                                    // 原写法是裸秒，且拿不到 duration 时假造一个
-                                    // 「0.0s」。而 `0s` 现在是有确切含义的（任务刚
-                                    // 开始跑，服务端把耗时重置为 0），拿它兜底等于
-                                    // 把「不知道」说成「跑了 0 秒」。
-                                    formatDurationSeconds(
-                                      log['duration'] as num?,
+                                    const Spacer(),
+                                    Text(
+                                      // 原写法是裸秒，且拿不到 duration 时假造一个
+                                      // 「0.0s」。而 `0s` 现在是有确切含义的（任务刚
+                                      // 开始跑，服务端把耗时重置为 0），拿它兜底等于
+                                      // 把「不知道」说成「跑了 0 秒」。
+                                      formatDurationSeconds(
+                                        log['duration'] as num?,
+                                      ),
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: p.text2,
+                                      ),
                                     ),
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: isLight
-                                          ? AppColors.slate500
-                                          : AppColors.slate400,
-                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 10),
+                                Text(
+                                  preview,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
                                   ),
-                                ],
-                              ),
-                              const SizedBox(height: 10),
-                              Text(
-                                preview,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
                                 ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                time != null ? formatTimeCn(time) : '',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: isLight
-                                      ? AppColors.slate400
-                                      : AppColors.slate500,
+                                const SizedBox(height: 8),
+                                Text(
+                                  time != null ? formatTimeCn(time) : '',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: p.text3,
+                                  ),
                                 ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-            ),
-          ),
-          if (_total > _pageSize)
-            SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _page > 1
-                            ? () => _load(page: _page - 1)
-                            : null,
-                        child: const Text('上一页'),
+                              ],
+                            ),
+                          );
+                        },
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      '第 $_page / $totalPages 页',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isLight
-                            ? AppColors.slate500
-                            : AppColors.slate400,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: FilledButton(
-                        onPressed: _page < totalPages
-                            ? () => _load(page: _page + 1)
-                            : null,
-                        child: const Text('下一页'),
-                      ),
-                    ),
-                  ],
-                ),
               ),
             ),
-        ],
+            if (_total > _pageSize)
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: _page > 1
+                              ? () => _load(page: _page - 1)
+                              : null,
+                          child: const Text('上一页'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        '第 $_page / $totalPages 页',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: p.text2,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: _page < totalPages
+                              ? () => _load(page: _page + 1)
+                              : null,
+                          child: const Text('下一页'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1994,6 +1962,8 @@ class _SubscriptionPullStreamPageState
       _logBackgroundColor,
       themeBrightness: Theme.of(context).brightness,
     );
+    // 底部完成 / 断线 banner 跟着「日志主题」的明暗走（不是 App 明暗），
+    // 属于日志内容配色，保持原值。
     final doneBannerBackground = logTheme.brightness == Brightness.dark
         ? AppColors.slate800
         : AppColors.slate100;

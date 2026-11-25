@@ -52,6 +52,14 @@ class TaskListState {
   List<TaskViewSortRule> get effectiveSortRules =>
       quickSort != null ? [quickSort!] : sortRules;
 
+  /// 当前列表是否带着会「筛掉任务」的条件（搜索词 / 状态 / 分组 / 视图筛选）。
+  /// 排序不算：只改顺序不少任务。为真时 [tasks] 不是全量，不能拿它判断「任务被删了」。
+  bool get hasNarrowingFilters =>
+      keyword.isNotEmpty ||
+      statusFilter != null ||
+      labelFilter != null ||
+      filters.isNotEmpty;
+
   /// 此刻不能拖拽排序的原因，能拖返回 null。条件与文案对齐网页端 tasks/index.vue 的
   /// dragSortDisabledReason（只取 APP 也有的两条）：
   /// - 视图带排序规则：展示顺序由规则决定，拖出来的位置刷新后又会被规则排回去；

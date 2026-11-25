@@ -7,13 +7,13 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/python_runtime_info.dart';
 import '../../../shared/models/task.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/time_utils.dart';
-import '../../../shared/widgets/app_card.dart';
+import '../../../shared/widgets/app_grouped_list.dart';
+import '../../../shared/widgets/app_pill_button.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../utils/cron_schema.dart';
 import '../providers/task_provider.dart';
@@ -871,53 +871,46 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final palette = context.palette;
     final isNarrow = MediaQuery.of(context).size.width < 420;
 
+    // v2.0 分组表单：小标题在卡片外面（次要色），卡片是白色大圆角、无边框
     Widget section(String title, List<Widget> children) {
-      return AppCard(
-        width: double.infinity,
-        margin: const EdgeInsets.only(bottom: 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
+      return AppGroupedList(
+        header: title,
+        margin: const EdgeInsets.only(bottom: 22),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: children,
             ),
-            const SizedBox(height: 14),
-            ...children,
-          ],
-        ),
+          ),
+        ],
       );
     }
 
     return Scaffold(
+      backgroundColor: palette.bg,
       appBar: AppBar(
         title: Text(isEditing ? '编辑任务' : '新建任务'),
         actions: [
           Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: FilledButton(
-              onPressed: _saving ? null : _save,
-              style: FilledButton.styleFrom(minimumSize: const Size(80, 38)),
-              child: _saving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Text('保存'),
+            padding: const EdgeInsets.only(right: 12),
+            child: Center(
+              // 主操作：黑色胶囊；保存中禁用并改文案（胶囊没有转圈态）
+              child: AppPillButton(
+                label: _saving ? '保存中…' : '保存',
+                height: 38,
+                onPressed: _saving ? null : _save,
+              ),
             ),
           ),
         ],
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         child: Form(
           key: _formKey,
           child: Column(
@@ -1269,7 +1262,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                       Text(
                         '一个都没选时，不会注入任何用户变量。',
                         style: theme.textTheme.bodySmall?.copyWith(
-                          color: AppColors.warning,
+                          color: palette.warnInk,
                         ),
                       ),
                       const SizedBox(height: 6),
@@ -1285,7 +1278,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                     Text(
                       '这不是沙箱：脚本仍能用 ddp 命令或读面板数据文件拿到全部变量，来路不明的脚本不要运行。',
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: AppColors.warning,
+                        color: palette.warnInk,
                       ),
                     ),
                   ],
@@ -1346,24 +1339,25 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                 ),
               ]),
 
-              // 钩子脚本（折叠）
-              AppCard(
+              // 钩子脚本（折叠）。卡片与上面的分组同款（白色大圆角）；
+              // 折叠头自带 18 内边距、展开区自带 fromLTRB(18,0,18,18)，
+              // 卡片本身不能再补一层，否则折叠头的点击区会缩水。
+              Container(
                 width: double.infinity,
                 margin: const EdgeInsets.only(bottom: 14),
-                // 折叠头自带 16 内边距、展开区自带 fromLTRB(16,0,16,16)，
-                // 卡片本身不能再补一层，否则折叠头的点击区会缩水。
-                padding: EdgeInsets.zero,
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  color: palette.card,
+                  borderRadius: BorderRadius.circular(AppRadius.card),
+                ),
                 child: Column(
                   children: [
                     InkWell(
-                      // 只有折叠头可点，不能提到 AppCard.onTap ——
+                      // 只有折叠头可点，不能把点击提到整张卡片上 ——
                       // 否则展开后点两个多行输入框也会把整块收起来。
                       onTap: () => setState(() => _showHooks = !_showHooks),
-                      borderRadius: const BorderRadius.vertical(
-                        top: Radius.circular(AppRadius.lg),
-                      ),
                       child: Padding(
-                        padding: const EdgeInsets.all(16),
+                        padding: const EdgeInsets.all(18),
                         child: Row(
                           children: [
                             Text(
@@ -1378,8 +1372,8 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                                 margin: const EdgeInsets.only(left: 8),
                                 width: 6,
                                 height: 6,
-                                decoration: const BoxDecoration(
-                                  color: AppColors.primary,
+                                decoration: BoxDecoration(
+                                  color: palette.accent,
                                   shape: BoxShape.circle,
                                 ),
                               ),
@@ -1389,7 +1383,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                                   ? Icons.expand_less
                                   : Icons.expand_more,
                               size: 20,
-                              color: AppColors.slate400,
+                              color: palette.text3,
                             ),
                           ],
                         ),
@@ -1397,7 +1391,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
                     ),
                     if (_showHooks)
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                        padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
                         child: Column(
                           children: [
                             TextFormField(
@@ -1447,6 +1441,7 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
     if (_cronParseResults.isEmpty) {
       return const SizedBox.shrink();
     }
+    final palette = context.palette;
     final expressions = splitCronExpressions(_cronC.text).take(5).toList();
     final showIndex = expressions.length > 1;
     final rows = <Widget>[];
@@ -1476,16 +1471,14 @@ class _TaskFormPageState extends ConsumerState<TaskFormPage> {
               Icon(
                 valid ? Icons.schedule_rounded : Icons.error_outline_rounded,
                 size: 14,
-                color: valid ? AppColors.success : AppColors.danger,
+                color: valid ? palette.ok : palette.err,
               ),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
                   '$prefix$text',
                   style: theme.textTheme.bodySmall?.copyWith(
-                    color: valid
-                        ? theme.colorScheme.onSurfaceVariant
-                        : AppColors.danger,
+                    color: valid ? palette.text2 : palette.errInk,
                   ),
                 ),
               ),

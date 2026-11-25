@@ -59,6 +59,14 @@ class ApiEndpoints {
   static String taskLiveLogs(int id) => '$baseApi/tasks/$id/live-logs';
   static String taskLogFiles(int id) => '$baseApi/tasks/$id/log-files';
   static String taskStats(int id) => '$baseApi/tasks/$id/stats';
+
+  // 面板 v4.0 新增的洞察类接口（响应**没有 data 包装**，老面板没有这几条路由）。
+  // 调用一律走 `shared/api/panel_insights.dart`，那里做了形状探测。
+  static String taskHealth(int id) => '$baseApi/tasks/$id/health';
+  static const String tasksRunning = '$baseApi/tasks/running';
+  static const String tasksRecentRuns = '$baseApi/tasks/recent-runs';
+  static const String tasksUpcoming = '$baseApi/tasks/upcoming';
+  static const String systemAttention = '$baseApi/system/attention';
   static const String tasksBatch = '$baseApi/tasks/batch';
   static const String tasksBatchEnable = '$baseApi/tasks/batch/enable';
   static const String tasksBatchDisable = '$baseApi/tasks/batch/disable';

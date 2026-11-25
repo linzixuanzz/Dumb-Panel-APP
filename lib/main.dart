@@ -1,13 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app.dart';
 import 'core/auth/auth_interceptor.dart';
 import 'core/auth/auth_provider.dart';
 import 'core/auth/token_refresher.dart';
+import 'core/integration/integration_service.dart';
 import 'core/network/app_user_agent.dart';
 import 'core/network/dio_client.dart';
 import 'core/router/default_landing_page.dart';
 import 'core/storage/secure_storage.dart';
+import 'core/theme/theme_mode_provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -54,7 +58,18 @@ void main() async {
   // 「默认打开页面」（APP #24）预读进内存：router 的 redirect 是同步的，读不了 SharedPreferences。
   await DefaultLandingPage.load();
 
+  // 明暗设置（浅色 / 深色 / 跟随系统）预读进内存，第一帧就是用户选的明暗，不先闪一下跟随系统。
+  await ThemeModeNotifier.preload();
+
+  // 系统集成（快捷方式 / 桌面小组件 / 常驻通知）。故意不 await：
+  // 监听在同步阶段就挂好了，插件初始化是平台调用，任何一个卡住都不能拖住首帧（同 issue #7 的教训）。
+  unawaited(IntegrationService.init(container));
+
   runApp(
-    UncontrolledProviderScope(container: container, child: const DaidaiApp()),
+    UncontrolledProviderScope(
+      container: container,
+      // IntegrationHost 只是把一个 WidgetRef 交给 IntegrationService，用来弹任务详情
+      child: const IntegrationHost(child: DaidaiApp()),
+    ),
   );
 }

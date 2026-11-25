@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../core/theme/app_theme.dart';
 import '../../core/theme/design_tokens.dart';
 import 'app_card.dart';
 
@@ -24,8 +23,8 @@ class TaskCronList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
     final surfaces = AppSurfaces.of(context);
+    final palette = context.palette;
     final items = _normalized;
 
     if (items.isEmpty) {
@@ -51,8 +50,8 @@ class TaskCronList extends StatelessWidget {
     final isMulti = items.length > 1;
     final cardBg = surfaces.subtle;
     final cardBorder = surfaces.subtleBorder;
-    // 序号 / 时钟图标压在 primary 淡底上，满强度 primary 只有 2.6:1。
-    final badgeFg = surfaces.tintFg(AppColors.primary);
+    // 序号 / 时钟图标压在强调色淡底上，用墨色保证对比度。
+    final badgeFg = palette.accentInk;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -75,7 +74,7 @@ class TaskCronList extends StatelessWidget {
                   width: compact ? 26 : 30,
                   height: compact ? 26 : 30,
                   decoration: BoxDecoration(
-                    color: AppColors.primary.withAlpha(isLight ? 22 : 36),
+                    color: palette.tint(palette.accent),
                     // 原来是 `compact ? 8 : 10` —— 正则扫不到的紧凑三元。
                     // 序号/时钟底板是图标底板，两种密度下都走 sm；外层卡片是
                     // md(12)，内层 8 仍小于外层。
@@ -108,9 +107,7 @@ class TaskCronList extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
-                            color: isLight
-                                ? AppColors.slate500
-                                : AppColors.slate400,
+                            color: palette.text2,
                           ),
                         ),
                         const SizedBox(height: 4),
@@ -123,9 +120,7 @@ class TaskCronList extends StatelessWidget {
                           fontSize: compact ? 11 : 12,
                           height: compact ? 1.25 : 1.45,
                           fontFamily: 'monospace',
-                          color: isLight
-                              ? AppColors.slate800
-                              : AppColors.slate100,
+                          color: palette.text,
                         ),
                       ),
                     ],

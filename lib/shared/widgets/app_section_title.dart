@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/theme/design_tokens.dart';
+
 /// 区块小标题（设置类页面里「版本信息」「系统操作」这种）。
 ///
 /// 收敛 `system_settings_page.dart` 的 `_SectionTitle` 与
@@ -20,11 +22,10 @@ class AppSectionTitle extends StatelessWidget {
       padding: padding,
       child: Text(
         text,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-          letterSpacing: 0.5,
+        // v2.0：iOS 分组列表头的样式（说明字号、次要色、不加字距）。
+        style: AppText.caption.copyWith(
+          fontWeight: FontWeight.w500,
+          color: context.palette.text2,
         ),
       ),
     );

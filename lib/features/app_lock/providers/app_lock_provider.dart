@@ -320,6 +320,10 @@ class AppLockController extends StateNotifier<AppLockState> {
       return await _localAuth.getAvailableBiometrics();
     } on PlatformException {
       return const [];
+    } on MissingPluginException {
+      // 网页版没有 local_auth 的实现，会抛 MissingPluginException（它不是 PlatformException）。
+      // 以前这里漏接，异常冒出 initialize()：网页版控制台报未捕获错误，应用锁状态也一直停在 loading。
+      return const [];
     }
   }
 

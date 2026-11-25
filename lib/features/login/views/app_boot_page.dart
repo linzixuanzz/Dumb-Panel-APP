@@ -11,7 +11,7 @@ import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/widgets/app_state_views.dart';
-import '../../dashboard/providers/dashboard_provider.dart';
+import '../../overview/providers/dashboard_provider.dart';
 
 /// 启动流程的步骤。
 ///
@@ -303,9 +303,10 @@ class _AppBootPageState extends ConsumerState<AppBootPage> {
   }
 
   /// 仪表盘预加载。失败与否都不影响启动 —— 首页自己还会再 load 一次。
+  /// 只做轻量的那份（`full: false`，只拉今日统计给小组件），完整数据等概览页挂载时再拉。
   Future<void> _preloadDashboard() async {
     try {
-      await ref.read(dashboardProvider.notifier).load();
+      await ref.read(dashboardProvider.notifier).load(full: false);
     } catch (_) {}
   }
 
@@ -374,7 +375,7 @@ class _AppBootPageState extends ConsumerState<AppBootPage> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final palette = context.palette;
     final failure = _failure;
 
     return Scaffold(
@@ -382,33 +383,38 @@ class _AppBootPageState extends ConsumerState<AppBootPage> {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 32),
           child: failure == null
-              ? _buildLoading(theme)
-              : _buildFailure(theme, failure),
+              ? _buildLoading(palette)
+              : _buildFailure(palette, failure),
         ),
       ),
     );
   }
 
-  /// 正常路径的那一屏。**与 v1.3.4 逐像素一致**，改动它就是改正常启动体验。
-  Widget _buildLoading(ThemeData theme) {
+  /// 正常路径的那一屏。结构与 v1.3.4 一致（图标 → 转圈 → 一行文案），
+  /// v2.0 只换装：图标切圆角方块、转圈改细的次要色、文案走令牌。
+  Widget _buildLoading(AppPalette palette) {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Image.asset('assets/icon.png', width: 72, height: 72),
-        const SizedBox(height: 20),
-        const SizedBox(
-          width: 28,
-          height: 28,
-          child: CircularProgressIndicator(strokeWidth: 3),
+        ClipRRect(
+          // 与登录页的图标同一种圆角（彩色图标方块 15/46 的比例）
+          borderRadius: BorderRadius.circular(AppRadius.tile * 72 / 46),
+          child: Image.asset('assets/icon.png', width: 72, height: 72),
+        ),
+        const SizedBox(height: 24),
+        SizedBox(
+          width: 24,
+          height: 24,
+          child: CircularProgressIndicator(
+            strokeWidth: 2.5,
+            color: palette.text2,
+          ),
         ),
         const SizedBox(height: 20),
         Text(
           _bootMessage ?? '正在启动呆呆面板...',
           textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 14,
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
+          style: AppText.caption.copyWith(color: palette.text2),
         ),
       ],
     );
@@ -418,7 +424,7 @@ class _AppBootPageState extends ConsumerState<AppBootPage> {
   ///
   /// 复用 [AppErrorView]（列表页的错误态同款）拿到「图标 + 标题 + 原因 + 重试」，
   /// 另外三个出口摆在下面。用 Wrap 是因为三个中文按钮在 400dp 窄屏上排不下一行。
-  Widget _buildFailure(ThemeData theme, _BootFailure failure) {
+  Widget _buildFailure(AppPalette palette, _BootFailure failure) {
     return SingleChildScrollView(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -458,10 +464,7 @@ class _AppBootPageState extends ConsumerState<AppBootPage> {
             // 「只清当前面板」这个限定放在这行说明里。
             '「清除本地会话」只清当前面板的登录凭据，面板地址和账号配置会保留。',
             textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 12,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
+            style: AppText.caption.copyWith(color: palette.text2),
           ),
         ],
       ),

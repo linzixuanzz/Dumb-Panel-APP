@@ -749,6 +749,9 @@ void main() {
     }
 
     Future<void> enterSortMode(WidgetTester tester) async {
+      // v2.0：「排序」收进了大标题右边的「⋯」菜单。
+      await tester.tap(find.byTooltip('更多'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('排序'));
       await tester.pumpAndSettle();
     }

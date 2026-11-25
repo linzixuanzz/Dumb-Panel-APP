@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../core/theme/app_theme.dart';
 import '../../core/theme/design_tokens.dart';
 
 /// 页面头部右上角的圆形「新建」按钮。
@@ -42,14 +41,15 @@ class AppCircleAddButton extends StatelessWidget {
         width: AppTapTarget.min,
         height: AppTapTarget.min,
         child: Center(
+          // v2.0：主操作一律黑色（深色模式白色），与主按钮同一对颜色。
           child: Container(
             width: 32,
             height: 32,
-            decoration: const BoxDecoration(
-              color: AppColors.primary,
+            decoration: BoxDecoration(
+              color: context.palette.primaryBtnBg,
               shape: BoxShape.circle,
             ),
-            child: Icon(icon, size: 20, color: Colors.white),
+            child: Icon(icon, size: 20, color: context.palette.primaryBtnFg),
           ),
         ),
       ),

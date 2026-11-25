@@ -16,7 +16,10 @@ class AppUserAgent {
   static String get value => _userAgent;
 
   static Map<String, String> get defaultHeaders => {
-    'User-Agent': _userAgent,
+    // 网页版不带 User-Agent：浏览器禁止脚本改这个头，每个请求都会报一条
+    // 「Refused to set unsafe header "User-Agent"」，而且实际发出去的仍是浏览器自己的 UA。
+    // 少了它服务端看到的内容不变，客户端身份照样靠下面的 X-Client-* 识别。
+    if (!kIsWeb) 'User-Agent': _userAgent,
     'X-Client-App': 'daidai-panel-app',
     'X-Client-Type': 'app',
     'X-Client-Platform': _platform,

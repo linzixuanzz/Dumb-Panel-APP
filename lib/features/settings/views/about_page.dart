@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/widgets/app_back_button.dart';
-import '../../../shared/widgets/app_card.dart';
-import '../../../shared/widgets/app_section_title.dart';
+import '../../../shared/widgets/app_grouped_list.dart';
+import '../../../shared/widgets/app_icon_tile.dart';
+import '../../../shared/widgets/app_large_title_header.dart';
 import '../../../shared/widgets/app_snack.dart';
 
 // 关于页用到的外链。APP 与面板是**两个仓库**，别混（issue #12 / v1.3.7）。
@@ -32,8 +32,7 @@ const _platform = MethodChannel('com.daidai.panel/app_install');
 ///
 /// 原先是 `more_page.dart` 里的 `_showAboutDialog` 弹窗，issue #12 要求补作者主页、
 /// 项目地址与反馈入口，弹窗（`AlertDialog` 的 content 是不可滚动的 `Column`）装不下，
-/// 故改成独立页。头部用 `AppBackButton` + 24px 粗标题的自绘头，
-/// 与「安全设置」等设置系二级页一致（`sponsor_page` 的 AppBar 是唯一特例）。
+/// 故改成独立页。v2.0 换装：返回按钮 + 大标题头，内容收进分组列表。
 class AboutPage extends StatefulWidget {
   const AboutPage({super.key});
 
@@ -64,202 +63,144 @@ class _AboutPageState extends State<AboutPage> {
 
   @override
   Widget build(BuildContext context) {
-    final isLight = Theme.of(context).brightness == Brightness.light;
+    final palette = context.palette;
+
+    // 外链行：副标题是去掉 scheme 的地址，右侧 open_in_new 把「跳出 App」和站内跳转区分开
+    Widget link(IconData icon, Color color, String title, String url) {
+      return AppGroupedRow(
+        leading: AppIconTile(icon: icon, color: color),
+        title: title,
+        subtitle: url.replaceFirst('https://', ''),
+        trailing: Icon(Icons.open_in_new, size: 16, color: palette.text3),
+        onTap: () => _openUrl(context, url),
+      );
+    }
 
     return Scaffold(
-      body: Padding(
-        padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12),
-        child: Column(
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: const [
-                  AppBackButton(),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      '关于',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+            // 二级页：返回按钮在上，大标题在下（iOS 的导航大标题样式）
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: AppBackButton(),
             ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(20, 4, 20, 32),
-                children: [
-                  // ── 应用信息卡（整块从原关于弹窗搬过来）──
-                  AppCard(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
+            const AppLargeTitleHeader(
+              title: '关于',
+              padding: EdgeInsets.fromLTRB(4, 4, 4, 20),
+            ),
+
+            // ── 应用信息 + 作者 ──
+            AppGroupedList(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+                  child: Row(
+                    children: [
+                      ClipRRect(
+                        // 应用图标，圆角按彩色图标方块的比例（15/46）缩放
+                        borderRadius: BorderRadius.circular(
+                          AppRadius.tile * 52 / 46,
+                        ),
+                        child: Image.asset(
+                          'assets/icon.png',
+                          width: 52,
+                          height: 52,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Container(
-                              width: 42,
-                              height: 42,
-                              decoration: BoxDecoration(
-                                color: AppColors.primary.withAlpha(20),
-                                // 图标底板一律走 sm，不跟外层卡片（lg）同档。
-                                borderRadius: BorderRadius.circular(
-                                  AppRadius.sm,
-                                ),
-                              ),
-                              child: const Icon(
-                                Icons.dashboard_customize_outlined,
-                                color: AppColors.primary,
+                            Text(
+                              '呆呆面板',
+                              style: AppText.cardTitle.copyWith(
+                                color: palette.text,
                               ),
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    '呆呆面板',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w700,
-                                    ),
+                            const SizedBox(height: 2),
+                            FutureBuilder<PackageInfo>(
+                              future: _packageInfoFuture,
+                              builder: (context, snapshot) {
+                                final info = snapshot.data;
+                                final versionLabel = info == null
+                                    ? '版本 -'
+                                    : '版本 ${info.version}${info.buildNumber.trim().isEmpty ? '' : '+${info.buildNumber}'}';
+                                return Text(
+                                  '$versionLabel · 轻量级定时任务管理平台',
+                                  style: AppText.caption.copyWith(
+                                    color: palette.text2,
                                   ),
-                                  const SizedBox(height: 2),
-                                  FutureBuilder<PackageInfo>(
-                                    future: _packageInfoFuture,
-                                    builder: (context, snapshot) {
-                                      final info = snapshot.data;
-                                      final versionLabel = info == null
-                                          ? '版本 -'
-                                          : '版本 ${info.version}${info.buildNumber.trim().isEmpty ? '' : '+${info.buildNumber}'}';
-                                      return Text(
-                                        versionLabel,
-                                        style: const TextStyle(fontSize: 12),
-                                      );
-                                    },
-                                  ),
-                                ],
-                              ),
+                                );
+                              },
                             ),
                           ],
                         ),
-                        const SizedBox(height: 14),
-                        Text(
-                          '轻量级定时任务管理平台',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: isLight
-                                ? AppColors.slate600
-                                : AppColors.slate300,
-                          ),
-                        ),
-                      ],
+                      ),
+                    ],
+                  ),
+                ),
+                // 作者：整行可点，跳作者主页
+                AppGroupedRow(
+                  leading: ClipOval(
+                    // 裸 Image.network 打第三方域名在本 APP 已经线上跑着
+                    // （赞助页头像打的就是 dumblist.linzixuan.top），照它写。
+                    child: Image.network(
+                      _kAuthorAvatar,
+                      width: 36,
+                      height: 36,
+                      fit: BoxFit.cover,
+                      // 没网 / 被墙时不要留白洞，退回首字母圆底。
+                      errorBuilder: (_, error, stackTrace) =>
+                          const _AuthorFallbackAvatar(),
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  title: 'linzixuanzz',
+                  subtitle: '作者主页',
+                  trailing: Icon(
+                    Icons.open_in_new,
+                    size: 16,
+                    color: palette.text3,
+                  ),
+                  onTap: () => _openUrl(context, _kAuthorHome),
+                ),
+              ],
+            ),
+            const SizedBox(height: 28),
 
-                  // ── 作者卡：整卡可点，跳作者主页 ──
-                  AppCard(
-                    onTap: () => _openUrl(context, _kAuthorHome),
-                    child: Row(
-                      children: [
-                        ClipOval(
-                          // 裸 Image.network 打第三方域名在本 APP 已经线上跑着
-                          // （赞助页头像打的就是 dumblist.linzixuan.top），照它写。
-                          child: Image.network(
-                            _kAuthorAvatar,
-                            width: 46,
-                            height: 46,
-                            fit: BoxFit.cover,
-                            // 没网 / 被墙时不要留白洞，退回首字母圆底。
-                            errorBuilder: (_, error, stackTrace) =>
-                                const _AuthorFallbackAvatar(),
-                          ),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'linzixuanzz',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                '作者主页',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: isLight
-                                      ? AppColors.slate500
-                                      : AppColors.slate400,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Icon(
-                          Icons.open_in_new,
-                          size: 16,
-                          color: isLight
-                              ? AppColors.slate400
-                              : AppColors.slate600,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 24),
+            AppGroupedList(
+              header: '项目',
+              children: [
+                link(Icons.code_rounded, palette.purple, 'GitHub 项目', _kAppRepo),
+                link(
+                  Icons.dashboard_rounded,
+                  palette.accent,
+                  '面板项目',
+                  _kPanelRepo,
+                ),
+              ],
+            ),
+            const SizedBox(height: 28),
 
-                  const AppSectionTitle(
-                    '项目',
-                    padding: EdgeInsets.only(left: 2),
-                  ),
-                  const SizedBox(height: 8),
-                  _LinkItem(
-                    icon: Icons.code,
-                    title: 'GitHub 项目',
-                    url: _kAppRepo,
-                    isLight: isLight,
-                    onTap: () => _openUrl(context, _kAppRepo),
-                  ),
-                  _LinkItem(
-                    icon: Icons.dashboard_outlined,
-                    title: '面板项目',
-                    url: _kPanelRepo,
-                    isLight: isLight,
-                    onTap: () => _openUrl(context, _kPanelRepo),
-                  ),
-                  const SizedBox(height: 24),
-
-                  const AppSectionTitle(
-                    '反馈',
-                    padding: EdgeInsets.only(left: 2),
-                  ),
-                  const SizedBox(height: 8),
-                  _LinkItem(
-                    icon: Icons.bug_report_outlined,
-                    title: '反馈 APP 问题',
-                    url: _kAppIssues,
-                    isLight: isLight,
-                    onTap: () => _openUrl(context, _kAppIssues),
-                  ),
-                  _LinkItem(
-                    icon: Icons.feedback_outlined,
-                    title: '反馈面板问题',
-                    url: _kPanelIssues,
-                    isLight: isLight,
-                    onTap: () => _openUrl(context, _kPanelIssues),
-                  ),
-                ],
-              ),
+            AppGroupedList(
+              header: '反馈',
+              children: [
+                link(
+                  Icons.bug_report_rounded,
+                  palette.err,
+                  '反馈 APP 问题',
+                  _kAppIssues,
+                ),
+                link(
+                  Icons.feedback_rounded,
+                  palette.warn,
+                  '反馈面板问题',
+                  _kPanelIssues,
+                ),
+              ],
             ),
           ],
         ),
@@ -268,104 +209,31 @@ class _AboutPageState extends State<AboutPage> {
   }
 }
 
-/// 外链列表项。
-///
-/// 刻意**复刻**而不是复用 `more_page.dart` 的 `_SettingsItem`：那是个 Dart 私有类，
-/// 跨文件根本 import 不到；提到 `shared/widgets/` 又会动到设置页现有 12 个条目的
-/// 渲染路径，为 20 行代码换一片回归面不划算。
-/// 唯二的差别：多一行目标地址，且 trailing 用 `open_in_new` 而不是 `chevron_right`——
-/// 把「跳出 App」和「站内跳转」在视觉上分开。
-class _LinkItem extends StatelessWidget {
-  final IconData icon;
-  final String title;
-
-  /// 完整链接。副标题显示去掉 scheme 后的地址，让用户点之前知道要跳去哪。
-  final String url;
-  final bool isLight;
-  final VoidCallback onTap;
-
-  const _LinkItem({
-    required this.icon,
-    required this.title,
-    required this.url,
-    required this.isLight,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return AppCard(
-      onTap: onTap,
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      child: Row(
-        children: [
-          Icon(
-            icon,
-            size: 20,
-            color: isLight ? AppColors.slate500 : AppColors.slate400,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  url.replaceFirst('https://', ''),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: isLight ? AppColors.slate500 : AppColors.slate400,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Icon(
-            Icons.open_in_new,
-            size: 16,
-            color: isLight ? AppColors.slate400 : AppColors.slate600,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 /// 作者头像的兜底。
 ///
-/// 尺寸必须和 `Image.network` 的 46 逐像素一致：写 48 的话，图加载失败的那一刻
-/// 整行会当场跳 2dp。取值与字号照 `sponsor_page.dart` 的 `_FallbackAvatar`。
+/// 尺寸必须和 `Image.network` 的 36 逐像素一致：不一致的话，图加载失败的那一刻
+/// 整行会当场跳一下。
 class _AuthorFallbackAvatar extends StatelessWidget {
   const _AuthorFallbackAvatar();
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.palette;
     return Container(
-      width: 46,
-      height: 46,
+      width: 36,
+      height: 36,
       decoration: BoxDecoration(
-        color: AppColors.primary.withAlpha(22),
+        color: palette.tint(palette.accent),
         shape: BoxShape.circle,
       ),
       alignment: Alignment.center,
       child: Text(
         'L',
         style: TextStyle(
-          fontSize: 18,
+          fontSize: 15,
           fontWeight: FontWeight.w700,
-          // 圆底就是 primary 的 alpha=22 淡底，首字母用满强度同色只有 2.6:1。
-          color: context.surfaces.tintFg(AppColors.primary),
+          // 浅底上的字用墨色
+          color: palette.accentInk,
         ),
       ),
     );

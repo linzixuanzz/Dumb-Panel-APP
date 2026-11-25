@@ -1,4 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#6CB4EE</color>
+
+    <!-- 桌面小组件（浅色）。取值同 APP 令牌 AppPalette.light；深色在 values-night/colors.xml，跟随系统。 -->
+    <color name="widget_bg">#FFFFFFFF</color>
+    <color name="widget_text">#FF000000</color>
+    <color name="widget_text2">#FF6E6E73</color>
+    <color name="widget_fill">#FFF2F2F7</color>
+    <color name="widget_accent">#FF006BE0</color>
+    <color name="widget_ok">#FF217F39</color>
+    <color name="widget_err">#FFD13027</color>
+
+    <!-- 长按图标的快捷方式图标底色（系统蓝） -->
+    <color name="shortcut_bg">#FF007AFF</color>
 </resources>

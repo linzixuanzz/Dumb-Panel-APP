@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
-import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_back_button.dart';
+import '../../../shared/widgets/app_grouped_list.dart';
+import '../../../shared/widgets/app_icon_tile.dart';
+import '../../../shared/widgets/app_large_title_header.dart';
+import '../../../shared/widgets/app_pill_button.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../providers/app_lock_provider.dart';
 import '../widgets/pattern_pad.dart';
@@ -231,302 +233,187 @@ class _AppLockSettingsPageState extends ConsumerState<AppLockSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final lockState = ref.watch(appLockProvider);
-    final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
+    final palette = context.palette;
 
     return Scaffold(
-      body: Padding(
-        padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 12),
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
+      body: SafeArea(
+        child: lockState.loading
+            ? Center(child: CircularProgressIndicator(color: palette.accent))
+            : ListView(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
                 children: [
-                  const AppBackButton(),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      '应用锁',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
+                  // 二级页：返回按钮在上，大标题在下（iOS 的导航大标题样式）
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: AppBackButton(),
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: lockState.loading
-                  ? const Center(
-                      child: CircularProgressIndicator(
-                        color: AppColors.primary,
+                  const AppLargeTitleHeader(
+                    title: '应用锁',
+                    padding: EdgeInsets.fromLTRB(4, 4, 4, 20),
+                  ),
+
+                  // ── 总开关 ──
+                  AppGroupedList(
+                    children: [
+                      AppGroupedRow(
+                        leading: AppIconTile(
+                          icon: Icons.lock_rounded,
+                          color: palette.ok,
+                          solid: true,
+                        ),
+                        title: '二次验证',
+                        subtitle: lockState.isEnabled
+                            ? '已开启，切回前台或重新进入时需要再次验证'
+                            : '未开启，登录后不会追加本地二次验证',
+                        trailing: Switch.adaptive(
+                          value: lockState.isEnabled,
+                          onChanged: _toggleEnabled,
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
+                        ),
                       ),
-                    )
-                  : ListView(
-                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                    ],
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
                       children: [
-                        AppCard(
-                          padding: const EdgeInsets.all(18),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Container(
-                                    width: 46,
-                                    height: 46,
-                                    decoration: BoxDecoration(
-                                      color: AppColors.primary.withAlpha(18),
-                                      // ⚠️ 嵌套陷阱：原值 14 与外层 AppCard 的
-                                      // lg(14) **相等**，46 的底板贴着卡片角看
-                                      // 就是错的。图标底板一律走 sm。
-                                      borderRadius: BorderRadius.circular(
-                                        AppRadius.sm,
-                                      ),
-                                    ),
-                                    child: const Icon(
-                                      Icons.lock_person_outlined,
-                                      color: AppColors.primary,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        const Text(
-                                          '二次验证',
-                                          style: TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          lockState.isEnabled
-                                              ? '已开启，切回前台或重新进入时需要再次验证'
-                                              : '未开启，登录后不会追加本地二次验证',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: theme
-                                                .colorScheme
-                                                .onSurfaceVariant,
-                                            height: 1.4,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  Switch.adaptive(
-                                    value: lockState.isEnabled,
-                                    onChanged: _toggleEnabled,
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 14),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: [
-                                  _StatusChip(
-                                    label: lockState.hasPassword
-                                        ? '密码已配置'
-                                        : '密码未配置',
-                                  ),
-                                  _StatusChip(
-                                    label: lockState.hasPattern
-                                        ? '图案已配置'
-                                        : '图案未配置',
-                                  ),
-                                  _StatusChip(
-                                    label: lockState.hasBiometric
-                                        ? '${lockState.biometricLabel}已开启'
-                                        : '${lockState.biometricLabel}未开启',
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
+                        _StatusChip(
+                          label: lockState.hasPassword ? '密码已配置' : '密码未配置',
+                          on: lockState.hasPassword,
                         ),
-                        const SizedBox(height: 20),
-                        _MethodCard(
-                          icon: Icons.password_outlined,
-                          title: '密码解锁',
-                          subtitle: lockState.hasPassword
-                              ? '已设置应用锁密码，可作为生物识别失败时的后备解锁方式。'
-                              : '设置一个仅用于本地 App 的二次验证密码。',
-                          isLight: isLight,
-                          trailing: Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              OutlinedButton(
-                                onPressed: () => _configurePassword(
-                                  changing: lockState.hasPassword,
-                                ),
-                                child: Text(
-                                  lockState.hasPassword ? '修改' : '设置',
-                                ),
-                              ),
-                              if (lockState.hasPassword)
-                                OutlinedButton(
-                                  onPressed: _removePassword,
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: AppColors.red500,
-                                  ),
-                                  child: const Text('移除'),
-                                ),
-                            ],
-                          ),
+                        _StatusChip(
+                          label: lockState.hasPattern ? '图案已配置' : '图案未配置',
+                          on: lockState.hasPattern,
                         ),
-                        const SizedBox(height: 12),
-                        _MethodCard(
-                          icon: Icons.gesture_outlined,
-                          title: '图案解锁',
-                          subtitle: lockState.hasPattern
-                              ? '已设置图案，解锁时按顺序点击已保存的点位即可通过验证。'
-                              : '设置一个 3x3 图案点位序列，适合快速本地解锁。',
-                          isLight: isLight,
-                          trailing: Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              OutlinedButton(
-                                onPressed: () => _configurePattern(
-                                  changing: lockState.hasPattern,
-                                ),
-                                child: Text(lockState.hasPattern ? '修改' : '设置'),
-                              ),
-                              if (lockState.hasPattern)
-                                OutlinedButton(
-                                  onPressed: _removePattern,
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: AppColors.red500,
-                                  ),
-                                  child: const Text('移除'),
-                                ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        _MethodCard(
-                          icon: Icons.fingerprint_outlined,
-                          title: '${lockState.biometricLabel}解锁',
-                          subtitle: lockState.biometricAvailable
-                              ? '调用设备系统级${lockState.biometricLabel}能力进行验证。'
-                              : '当前设备未检测到可用的指纹或人脸能力。',
-                          isLight: isLight,
-                          trailing: Switch.adaptive(
-                            value:
-                                lockState.config.biometricEnabled &&
-                                lockState.biometricAvailable,
-                            onChanged: lockState.biometricAvailable
-                                ? _toggleBiometric
-                                : null,
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        FilledButton.icon(
-                          onPressed: lockState.isEnabled
-                              ? () {
-                                  ref
-                                      .read(appLockProvider.notifier)
-                                      .lockIfEnabled();
-                                  _showSuccess('应用已立即锁定，可直接验证体验');
-                                }
-                              : null,
-                          icon: const Icon(Icons.lock_clock_outlined, size: 18),
-                          label: const Text('立即锁定并测试'),
+                        _StatusChip(
+                          label: lockState.hasBiometric
+                              ? '${lockState.biometricLabel}已开启'
+                              : '${lockState.biometricLabel}未开启',
+                          on: lockState.hasBiometric,
                         ),
                       ],
                     ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MethodCard extends StatelessWidget {
-  const _MethodCard({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.trailing,
-    required this.isLight,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final Widget trailing;
-  final bool isLight;
-
-  @override
-  Widget build(BuildContext context) {
-    return AppCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 22, color: AppColors.primary),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
                   ),
-                ),
+                  const SizedBox(height: 28),
+
+                  // ── 解锁方式 ──
+                  // 「设置 / 修改」点整行，「移除」单独成一行红字（iOS 设置的危险操作写法），
+                  // 逻辑与 v1.x 的两个描边按钮一一对应。
+                  AppGroupedList(
+                    header: '解锁方式',
+                    children: [
+                      AppGroupedRow(
+                        leading: AppIconTile(
+                          icon: Icons.password_rounded,
+                          color: palette.accent,
+                        ),
+                        title: '密码解锁',
+                        subtitle: lockState.hasPassword
+                            ? '已设置应用锁密码，可作为生物识别失败时的后备解锁方式。'
+                            : '设置一个仅用于本地 App 的二次验证密码。',
+                        trailing: Text(lockState.hasPassword ? '修改' : '设置'),
+                        showChevron: true,
+                        onTap: () =>
+                            _configurePassword(changing: lockState.hasPassword),
+                      ),
+                      if (lockState.hasPassword)
+                        AppGroupedRow(
+                          title: '移除密码',
+                          titleColor: palette.errInk,
+                          onTap: _removePassword,
+                        ),
+                      AppGroupedRow(
+                        leading: AppIconTile(
+                          icon: Icons.gesture_rounded,
+                          color: palette.purple,
+                        ),
+                        title: '图案解锁',
+                        subtitle: lockState.hasPattern
+                            ? '已设置图案，解锁时按顺序点击已保存的点位即可通过验证。'
+                            : '设置一个 3x3 图案点位序列，适合快速本地解锁。',
+                        trailing: Text(lockState.hasPattern ? '修改' : '设置'),
+                        showChevron: true,
+                        onTap: () =>
+                            _configurePattern(changing: lockState.hasPattern),
+                      ),
+                      if (lockState.hasPattern)
+                        AppGroupedRow(
+                          title: '移除图案',
+                          titleColor: palette.errInk,
+                          onTap: _removePattern,
+                        ),
+                      AppGroupedRow(
+                        leading: AppIconTile(
+                          icon: Icons.fingerprint_rounded,
+                          // 设备不支持时图标置灰
+                          color: lockState.biometricAvailable
+                              ? palette.ok
+                              : palette.text3,
+                        ),
+                        title: '${lockState.biometricLabel}解锁',
+                        subtitle: lockState.biometricAvailable
+                            ? '调用设备系统级${lockState.biometricLabel}能力进行验证。'
+                            : '当前设备未检测到可用的指纹或人脸能力。',
+                        trailing: Switch.adaptive(
+                          value:
+                              lockState.config.biometricEnabled &&
+                              lockState.biometricAvailable,
+                          onChanged: lockState.biometricAvailable
+                              ? _toggleBiometric
+                              : null,
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 28),
+                  AppPillButton(
+                    label: '立即锁定并测试',
+                    icon: Icons.lock_clock_rounded,
+                    expand: true,
+                    height: 52,
+                    onPressed: lockState.isEnabled
+                        ? () {
+                            ref
+                                .read(appLockProvider.notifier)
+                                .lockIfEnabled();
+                            _showSuccess('应用已立即锁定，可直接验证体验');
+                          }
+                        : null,
+                  ),
+                ],
               ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            subtitle,
-            style: TextStyle(
-              fontSize: 12,
-              height: 1.5,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 14),
-          trailing,
-        ],
       ),
     );
   }
 }
 
+/// 配置状态小标签：已配置用强调色浅底 + 墨色字，未配置用灰色填充 + 次要字。
 class _StatusChip extends StatelessWidget {
-  const _StatusChip({required this.label});
+  const _StatusChip({required this.label, required this.on});
 
   final String label;
+  final bool on;
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.palette;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: AppColors.primary.withAlpha(12),
+        color: on ? palette.tint(palette.accent) : palette.fill,
         borderRadius: BorderRadius.circular(AppRadius.pill),
-        border: Border.all(color: AppColors.primary.withAlpha(24)),
       ),
       child: Text(
         label,
-        style: TextStyle(
-          fontSize: 11,
+        style: AppText.caption.copyWith(
+          fontSize: 12,
           fontWeight: FontWeight.w600,
-          // 底色只有 alpha=12，比全库标准的 18 还淡，满强度 primary 在上面
-          // 只有 2.66:1。
-          color: context.surfaces.tintFg(AppColors.primary),
+          color: on ? palette.accentInk : palette.text2,
         ),
       ),
     );
@@ -624,7 +511,10 @@ class _PatternSetupDialogState extends State<_PatternSetupDialog> {
               const SizedBox(height: 10),
               Text(
                 _error!,
-                style: const TextStyle(color: AppColors.red500, fontSize: 12),
+                style: AppText.caption.copyWith(
+                  fontSize: 12,
+                  color: context.palette.errInk,
+                ),
                 textAlign: TextAlign.center,
               ),
             ],

@@ -81,6 +81,9 @@ class ScriptFindBar extends StatelessWidget {
                 style: const TextStyle(fontSize: 13),
                 decoration: InputDecoration(
                   isCollapsed: true,
+                  // v2.0 全局输入框改成灰色填充（以前填充色就是卡片色，套在卡片里看不出来），
+                  // 这里外层已是卡片，关掉填充，免得卡片里再套一块灰底。
+                  filled: false,
                   border: InputBorder.none,
                   hintText: '查找代码',
                   hintStyle: TextStyle(fontSize: 13, color: surfaces.mutedText),

@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/auth/auth_provider.dart';
 import '../../core/services/app_update_service.dart';
-import '../../core/theme/app_theme.dart';
 import '../../core/theme/design_tokens.dart';
 import 'app_snack.dart';
 
@@ -39,13 +38,12 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
     });
   }
 
+  /// 当前落在哪个 Tab。二级路由（如 `/tasks/new`）不在外壳里，这里只会看到 5 个 Tab 路径。
   int _currentIndex(BuildContext context) {
     final location = GoRouterState.of(context).matchedLocation;
-    if (location.startsWith('/dashboard')) return 0;
-    if (location.startsWith('/tasks')) return 1;
-    if (location.startsWith('/logs')) return 2;
-    if (location.startsWith('/envs')) return 3;
-    if (location.startsWith('/more')) return 4;
+    for (var i = 0; i < mainTabs.length; i++) {
+      if (location.startsWith(mainTabs[i].route)) return i;
+    }
     return 0;
   }
 
@@ -88,8 +86,6 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
         ref.read(authProvider.notifier).refreshUser();
       }
     });
-    final theme = Theme.of(context);
-    final isLight = theme.brightness == Brightness.light;
     final idx = _currentIndex(context);
 
     return PopScope<void>(
@@ -97,131 +93,188 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
       onPopInvokedWithResult: (didPop, _) => _handleBackPress(didPop),
       child: Scaffold(
         body: widget.child,
+        // 内容延伸到底栏下面（玻璃底栏透出内容）。Scaffold 会把底栏高度并进 body 的
+        // MediaQuery.padding.bottom，列表用 AppSpacing.listBottomOf(context) 就能让开底栏。
         extendBody: true,
-        bottomNavigationBar: ClipRRect(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-            child: Container(
-              decoration: BoxDecoration(
-                color: isLight
-                    ? Colors.white.withAlpha(230)
-                    : AppColors.slate900.withAlpha(230),
-                border: Border(
-                  top: BorderSide(
-                    color: isLight ? AppColors.slate200 : AppColors.slate800,
-                    width: 0.5,
-                  ),
-                ),
-              ),
-              child: SafeArea(
-                top: false,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 6,
-                  ),
-                  child: Row(
-                    children: [
-                      _NavItem(
-                        icon: Icons.space_dashboard_outlined,
-                        activeIcon: Icons.space_dashboard,
-                        label: '主页',
-                        isActive: idx == 0,
-                        onTap: () => context.go('/dashboard'),
-                      ),
-                      _NavItem(
-                        icon: Icons.schedule_outlined,
-                        activeIcon: Icons.schedule,
-                        label: '任务',
-                        isActive: idx == 1,
-                        onTap: () => context.go('/tasks'),
-                      ),
-                      _NavItem(
-                        icon: Icons.terminal_outlined,
-                        activeIcon: Icons.terminal,
-                        label: '日志',
-                        isActive: idx == 2,
-                        onTap: () => context.go('/logs'),
-                      ),
-                      _NavItem(
-                        icon: Icons.key_outlined,
-                        activeIcon: Icons.key,
-                        label: '变量',
-                        isActive: idx == 3,
-                        onTap: () => context.go('/envs'),
-                      ),
-                      _NavItem(
-                        icon: Icons.menu_outlined,
-                        activeIcon: Icons.menu,
-                        label: '更多',
-                        isActive: idx == 4,
-                        onTap: () => context.go('/more'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
+        bottomNavigationBar: _GlassTabBar(
+          currentIndex: idx,
+          onSelect: (i) {
+            if (i != idx) context.go(mainTabs[i].route);
+          },
         ),
       ),
     );
   }
 }
 
-class _NavItem extends StatelessWidget {
-  final IconData icon;
-  final IconData activeIcon;
+/// 底栏的一个 Tab。
+class MainTab {
+  final String route;
   final String label;
-  final bool isActive;
+  final IconData icon;
+
+  const MainTab(this.route, this.label, this.icon);
+}
+
+/// v2.0 底栏：任务（首页）/ 日志 / 概览 / 变量 / 设置。实心图标 + 文字。
+const List<MainTab> mainTabs = [
+  MainTab('/tasks', '任务', Icons.watch_later_rounded),
+  MainTab('/logs', '日志', Icons.receipt_long_rounded),
+  MainTab('/overview', '概览', Icons.bar_chart_rounded),
+  MainTab('/envs', '变量', Icons.key_rounded),
+  MainTab('/settings', '设置', Icons.settings_rounded),
+];
+
+/// 悬浮玻璃胶囊底栏（方案书 §2.4）。
+///
+/// - 选中项后面一块灰色药丸，切换时弹簧滑过去；
+/// - 系统开了「移除动画」时：药丸直接跳，玻璃不做模糊、换成 92% 不透明的实色
+///   （模糊是全屏最贵的一层绘制，顺带照顾低端机）。
+class _GlassTabBar extends StatelessWidget {
+  final int currentIndex;
+  final ValueChanged<int> onSelect;
+
+  const _GlassTabBar({required this.currentIndex, required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final reduce = AppMotion.reduce(context);
+    const radius = BorderRadius.all(
+      Radius.circular(AppTabBarMetrics.height / 2),
+    );
+
+    Widget bar = DecoratedBox(
+      decoration: BoxDecoration(
+        color: reduce ? palette.glassSolid : palette.glass,
+        borderRadius: radius,
+        border: Border.all(color: palette.glassBorder, width: 0.5),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(5),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final itemWidth = constraints.maxWidth / mainTabs.length;
+            return Stack(
+              children: [
+                // 选中药丸
+                AnimatedPositioned(
+                  duration: AppMotion.of(context, AppMotion.slide),
+                  curve: AppMotion.spring,
+                  left: itemWidth * currentIndex,
+                  top: 0,
+                  bottom: 0,
+                  width: itemWidth,
+                  child: DecoratedBox(
+                    key: const Key('main-tab-pill'),
+                    decoration: BoxDecoration(
+                      color: palette.fill,
+                      borderRadius: BorderRadius.circular(AppRadius.pill),
+                    ),
+                  ),
+                ),
+                Row(
+                  children: [
+                    for (var i = 0; i < mainTabs.length; i++)
+                      Expanded(
+                        child: _TabItem(
+                          tab: mainTabs[i],
+                          selected: i == currentIndex,
+                          onTap: () => onSelect(i),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+    if (!reduce) {
+      bar = BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: bar,
+      );
+    }
+
+    return SafeArea(
+      top: false,
+      minimum: const EdgeInsets.only(bottom: AppTabBarMetrics.bottomGap),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppTabBarMetrics.sideGap,
+        ),
+        child: Container(
+          height: AppTabBarMetrics.height,
+          decoration: const BoxDecoration(
+            borderRadius: radius,
+            // 悬浮感只靠一层很淡的下投影；这是全 App 唯一带投影的东西
+            boxShadow: [
+              BoxShadow(
+                color: Color(0x29000000),
+                blurRadius: 30,
+                spreadRadius: -10,
+                offset: Offset(0, 10),
+              ),
+            ],
+          ),
+          child: ClipRRect(borderRadius: radius, child: bar),
+        ),
+      ),
+    );
+  }
+}
+
+class _TabItem extends StatelessWidget {
+  final MainTab tab;
+  final bool selected;
   final VoidCallback onTap;
 
-  const _NavItem({
-    required this.icon,
-    required this.activeIcon,
-    required this.label,
-    required this.isActive,
+  const _TabItem({
+    required this.tab,
+    required this.selected,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final color = isActive
-        ? AppColors.primary
-        : Theme.of(context).colorScheme.onSurfaceVariant;
+    final palette = context.palette;
+    // 未选中的项稍微淡一点（效果演示是 .82），选中靠后面的药丸区分。
+    final color = selected
+        ? palette.text
+        : palette.text.withValues(alpha: 0.78);
 
-    return Expanded(
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: tab.label,
+      excludeSemantics: true,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onTap,
-        // 内容高只有 22 + 2 + 12 = 36dp。外层那 6dp 的竖向 padding 在 GestureDetector
-        // 之外，不计入命中区，所以底部导航实际是 36dp —— 全 App 点得最频繁的地方反而不达标。
-        // 用 minHeight 抬到 44：导航栏总高只涨 8dp，图标与标签的排布不变。
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: AppTapTarget.min),
-          child: Column(
-          mainAxisSize: MainAxisSize.min,
+        child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(isActive ? activeIcon : icon, size: 22, color: color),
+            Icon(tab.icon, size: 23, color: color),
             const SizedBox(height: 2),
+            // 大字号下标签缩小而不是撑破胶囊
             SizedBox(
-              height: 12,
+              height: 14,
               child: FittedBox(
                 fit: BoxFit.scaleDown,
                 child: Text(
-                  label,
+                  tab.label,
                   maxLines: 1,
                   style: TextStyle(
-                    fontSize: 11,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
                     color: color,
-                    fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
                   ),
                 ),
               ),
             ),
           ],
-        ),
         ),
       ),
     );

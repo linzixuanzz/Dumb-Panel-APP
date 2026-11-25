@@ -6,7 +6,7 @@ import 'package:daidai_app/core/router/default_landing_page.dart';
 import 'package:daidai_app/core/services/app_update_service.dart';
 import 'package:daidai_app/core/theme/app_theme.dart';
 import 'package:daidai_app/features/login/views/app_boot_page.dart';
-import 'package:daidai_app/features/settings/views/more_page.dart';
+import 'package:daidai_app/features/settings/views/settings_page.dart';
 import 'package:daidai_app/shared/models/user.dart';
 import 'package:daidai_app/shared/widgets/main_scaffold.dart';
 import 'package:flutter/material.dart';
@@ -45,7 +45,7 @@ class _AuthedNoUser extends AuthNotifier {
   }
 }
 
-/// 「更多」页要一个已登录用户。
+/// 「设置」页要一个已登录用户。
 class _AuthedWithUser extends AuthNotifier {
   _AuthedWithUser(super.authService) {
     state = AuthState(status: AuthStatus.authenticated, user: _user());
@@ -78,11 +78,11 @@ Future<void> _boot(WidgetTester tester, _CountingAuthService service) async {
         builder: (_, state, child) => MainScaffold(child: child),
         routes: [
           for (final entry in const {
-            '/dashboard': '主页占位',
             '/tasks': '任务占位',
             '/logs': '日志占位',
+            '/overview': '概览占位',
             '/envs': '变量占位',
-            '/more': '更多占位',
+            '/settings': '设置占位',
           }.entries)
             GoRoute(
               path: entry.key,
@@ -104,7 +104,7 @@ Future<void> _boot(WidgetTester tester, _CountingAuthService service) async {
   await _pumpFrames(tester);
 }
 
-/// APP #24：默认打开页面（主页 / 任务 / 日志 / 变量），存本机、所有面板共用，没设过是主页。
+/// APP #24：默认打开页面（任务 / 日志 / 概览 / 变量），存本机、所有面板共用，没设过是任务（v2.0 首页）。
 void main() {
   var updateChecks = 0;
 
@@ -132,19 +132,19 @@ void main() {
   });
 
   group('偏好读写', () {
-    test('没设过：主页', () async {
+    test('没设过：任务', () async {
       await DefaultLandingPage.load();
-      expect(DefaultLandingPage.value, 'dashboard');
-      expect(DefaultLandingPage.route, '/dashboard');
-      expect(DefaultLandingPage.label, '主页');
+      expect(DefaultLandingPage.value, 'tasks');
+      expect(DefaultLandingPage.route, '/tasks');
+      expect(DefaultLandingPage.label, '任务');
     });
 
-    test('存了不认识的值：回落主页', () async {
+    test('存了不认识的值：回落任务', () async {
       SharedPreferences.setMockInitialValues(<String, Object>{
         DefaultLandingPage.prefsKey: 'subscriptions',
       });
       await DefaultLandingPage.load();
-      expect(DefaultLandingPage.route, '/dashboard');
+      expect(DefaultLandingPage.route, '/tasks');
     });
 
     test('保存：内存立刻生效，也落了盘（下次启动读回来）', () async {
@@ -164,17 +164,17 @@ void main() {
   });
 
   group('启动落点', () {
-    testWidgets('没设过：落主页', (tester) async {
+    testWidgets('没设过：落任务', (tester) async {
       await DefaultLandingPage.load();
       await _boot(tester, _CountingAuthService());
-      expect(find.text('主页占位'), findsOneWidget);
+      expect(find.text('任务占位'), findsOneWidget);
       await _closePage(tester);
     });
 
     for (final (value, placeholder) in const [
-      ('dashboard', '主页占位'),
       ('tasks', '任务占位'),
       ('logs', '日志占位'),
+      ('overview', '概览占位'),
       ('envs', '变量占位'),
     ]) {
       testWidgets('设为 $value：落到 $placeholder', (tester) async {
@@ -201,8 +201,8 @@ void main() {
       await _boot(tester, service);
 
       expect(find.text('任务占位'), findsOneWidget);
-      expect(find.text('主页占位'), findsNothing);
-      expect(service.getUserCalls, 1, reason: '「更多」页的管理员分区靠这份用户信息');
+      expect(find.text('概览占位'), findsNothing);
+      expect(service.getUserCalls, 1, reason: '「设置」页的管理员分区靠这份用户信息');
       expect(updateChecks, 1);
 
       // 切到其它标签再切回来：主界面外壳不重建，也不会再检查一次
@@ -247,7 +247,7 @@ void main() {
     });
   });
 
-  group('「更多」页设置项', () {
+  group('「设置」页设置项', () {
     for (final textScale in [1.0, 1.3]) {
       testWidgets('360×800、字号 $textScale：不溢出，选「任务」后保存并显示', (tester) async {
         tester.view.physicalSize = const Size(360, 800);
@@ -257,7 +257,9 @@ void main() {
         addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
 
         final router = GoRouter(
-          routes: [GoRoute(path: '/', builder: (_, state) => const MorePage())],
+          routes: [
+            GoRoute(path: '/', builder: (_, state) => const SettingsPage()),
+          ],
         );
         await tester.pumpWidget(
           ProviderScope(
@@ -274,8 +276,8 @@ void main() {
         );
         await tester.pump(const Duration(milliseconds: 100));
 
-        // ListView 懒构建：这一项在屏幕外时还没建出来，要先滚过去
-        final item = find.byKey(const Key('more-default-landing-page'));
+        // 这一项可能在首屏外，先滚过去
+        final item = find.byKey(const Key('settings-default-landing-page'));
         await tester.scrollUntilVisible(
           item,
           200,
@@ -284,15 +286,15 @@ void main() {
         await tester.pump();
         expect(tester.takeException(), isNull);
         expect(
-          find.descendant(of: item, matching: find.text('主页')),
+          find.descendant(of: item, matching: find.text('任务')),
           findsOneWidget,
-          reason: '没设过时显示主页',
+          reason: '没设过时显示任务',
         );
 
         await tester.tap(item);
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
-        expect(find.byKey(const Key('default-landing-dashboard')), findsOneWidget);
+        expect(find.byKey(const Key('default-landing-overview')), findsOneWidget);
         expect(find.byKey(const Key('default-landing-envs')), findsOneWidget);
         // 四个选项都完整落在屏幕内
         for (final key in DefaultLandingPage.options.keys) {
@@ -301,14 +303,15 @@ void main() {
           expect(rect.right, lessThanOrEqualTo(360));
         }
 
-        await tester.tap(find.byKey(const Key('default-landing-tasks')));
+        // 默认值已经是「任务」，改选「日志」才能看出保存是否生效
+        await tester.tap(find.byKey(const Key('default-landing-logs')));
         await tester.pumpAndSettle();
 
-        expect(DefaultLandingPage.route, '/tasks');
+        expect(DefaultLandingPage.route, '/logs');
         final prefs = await SharedPreferences.getInstance();
-        expect(prefs.getString(DefaultLandingPage.prefsKey), 'tasks');
+        expect(prefs.getString(DefaultLandingPage.prefsKey), 'logs');
         expect(
-          find.descendant(of: item, matching: find.text('任务')),
+          find.descendant(of: item, matching: find.text('日志')),
           findsOneWidget,
         );
 

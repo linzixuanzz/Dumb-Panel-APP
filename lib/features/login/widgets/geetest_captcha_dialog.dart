@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
+import '../../../shared/widgets/app_icon_tile.dart';
 
 class GeeTestCaptchaDialog extends StatefulWidget {
   final String captchaId;
@@ -191,8 +191,7 @@ class _GeeTestCaptchaDialogState extends State<GeeTestCaptchaDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final isLight = Theme.of(context).brightness == Brightness.light;
-    final textColor = isLight ? AppColors.slate600 : AppColors.slate300;
+    final palette = context.palette;
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
       child: SizedBox(
@@ -205,19 +204,10 @@ class _GeeTestCaptchaDialogState extends State<GeeTestCaptchaDialog> {
             children: [
               Row(
                 children: [
-                  Container(
-                    width: 34,
-                    height: 34,
-                    decoration: BoxDecoration(
-                      color: AppColors.primary.withAlpha(20),
-                      // 图标底板一律走 sm，不跟外层弹窗（lg）同档。
-                      borderRadius: BorderRadius.circular(AppRadius.sm),
-                    ),
-                    child: const Icon(
-                      Icons.verified_user_outlined,
-                      size: 18,
-                      color: AppColors.primary,
-                    ),
+                  AppIconTile(
+                    icon: Icons.verified_user_rounded,
+                    color: palette.accent,
+                    size: 34,
                   ),
                   const SizedBox(width: 10),
                   const Expanded(
@@ -237,7 +227,10 @@ class _GeeTestCaptchaDialogState extends State<GeeTestCaptchaDialog> {
                 ],
               ),
               const SizedBox(height: 8),
-              Text(_status, style: TextStyle(fontSize: 13, color: textColor)),
+              Text(
+                _status,
+                style: AppText.caption.copyWith(color: palette.text2),
+              ),
               const SizedBox(height: 12),
               Expanded(
                 child: ClipRRect(
@@ -248,9 +241,9 @@ class _GeeTestCaptchaDialogState extends State<GeeTestCaptchaDialog> {
                     children: [
                       WebViewWidget(controller: _controller),
                       if (_loading)
-                        const Center(
+                        Center(
                           child: CircularProgressIndicator(
-                            color: AppColors.primary,
+                            color: palette.accent,
                           ),
                         ),
                     ],
