@@ -220,6 +220,30 @@ Color get solidFg      => isLight ? Colors.white : AppColors.slate950;
 
 ---
 
+## v2.0 设计令牌与共享组件（APP v2.0 起；新代码一律按这一节写）
+
+完整契约见归档任务 `11-24-app-ui-refresh-proposal/wave-a-handoff.md`，这里只记规则和坑。
+
+### 令牌
+- 颜色只用 `context.palette`（`AppPalette` ThemeExtension，`core/theme/app_palette.dart`，由 `design_tokens.dart` 导出）：`bg card card2 fill thumb text text2 text3 separator accent ok err warn purple onStatus primaryBtnBg primaryBtnFg glass glassBorder`，浅底用 `palette.tint(色)`。
+- **状态色当文字一律用墨色 `accentInk / okInk / errInk / warnInk / purpleInk`**（测试钉住 ≥ 4.5:1）；实色只给图标、圆点、图表、进度条。不再新增 `AppColors.*`、`Color(0x…)`、`Colors.*`（插画色、编辑器 / 日志内容色例外，要注释）。
+- 圆角：卡片 `AppRadius.card = 30`、小卡 `cardSm = 28`、图标方块 `tile = 15`、胶囊 `pill`；旧档 4 / 8 / 12 / 14 保留给既有组件。
+- 字号：`AppText.largeTitle / section / cardTitle / body / caption`；数字用 `AppText.tabular(style)`。
+- 动效：时长走 `AppMotion.of(context, d)`（减少动画时为 0），判断用 `AppMotion.reduce(context)`；唯一例外是「按住运行」的进度条（功能性）。
+- 明暗：`themeModeProvider`（本机键 `app_theme_mode`），`main.dart` 在 `runApp` 前 `ThemeModeNotifier.preload()`。
+- Tab 页底部留白：`AppSpacing.listBottomOf(context)`（在 ListView 外面读），不要写死 100。
+
+### 共享组件（`lib/shared/widgets/`）
+`AppLargeTitleHeader`（含 `.sliver`）、`AppGlassCircleButton`、`AppGroupedList` / `AppGroupedRow`、`AppIconTile`、`AppSegmented<T>`、`AppPillButton`（primary / secondary / danger）、`NotchedCard`、`HoldToRunButton`、`showAppSheet`（默认 `CupertinoSheetRoute`，`fullHeight: false` 回落 `showModalBottomSheet`）。页面优先拼这些，不要再各写一份胶囊 / 分组卡。
+- 上千行的懒加载列表不要直接用 `AppGroupedList`（它一次建完所有行）：参照变量页，组头 + 行摊平给 `ListView.builder`，行尺寸照 `AppGroupedRow`，传 `showSeparator`。
+
+### 踩过的坑（v2.0 实测）
+- **全局输入框是灰色填充**：放进白色卡片里的 `TextField` 要 `filled: false`，否则白卡套灰块（登录页、脚本查找条都踩过）。
+- **Flutter 3.27 起默认开启深链路由**：启动 Intent 里的 URI 会被推给 GoRouter。桌面小组件用 `daidai://…`，所以 `AndroidManifest.xml` 里保持 `flutter_deeplinking_enabled = false`，入口统一由 `IntegrationService` 解析。
+- **面板没有 `GET /tasks/:id`**：按 id 取任务用 `shared/api/task_lookup.dart` 的 `fetchTaskById`（拉 `GET /tasks?all=1` 再找），不要自己拼单条接口。
+- **`MissingPluginException` 不是 `PlatformException` 的子类**：调插件（尤其 local_auth）时两个都要接，否则网页版 / 测试环境会冒未捕获异常。
+- **验 Flutter web 构建时先清 Service Worker 缓存**（CDP `Storage.clearDataForOrigin` + `Network.setCacheDisabled`），否则浏览器继续跑旧的 `main.dart.js`，会把已修的问题误判成没修。网页版刷新会丢登录态，每轮要重新登录。
+
 ## 对话框与浮层
 
 全库 `showDialog` / `showModalBottomSheet` / `AlertDialog` 合计 **133 处 / 18 文件**，
