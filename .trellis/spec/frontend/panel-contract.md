@@ -472,7 +472,10 @@ APP（`setPinned(id, pinned)`）只按 `EnvVar.isPinned` 选其一：没置顶�
 
 - 没有 `id:` 帧、不读 `Last-Event-ID`：任何重连都从第一行重放整段历史（见 hook-guidelines.md「SSE」一节）。
 - 实时行会丢：每个订阅通道缓冲 100，满了直接丢（`service/tiny_log.go` 的 `broadcast`）；写历史期间的
-  新输出既不在已发的历史里，也还没进订阅。网页在流结束后回拉 latest-log 补齐，**APP 目前不补**。
+  新输出既不在已发的历史里，也还没进订阅。网页在流结束后回拉 latest-log 补齐，**APP 目前不补**：APP v3.0 起两个日志页流结束后
+  会查 latest-log / 日志详情，但**只取结果**（成功 / 失败 / 已终止）；正文是 SSE 来的就不拿它换，丢的行照样丢。
+- `done: finished` / `finished-late` **只表示这条流结束了，不带成败**：脚本成功、失败退出、被停止，TinyLog 关掉时发的都是 `finished`。
+  结果只在 `task_logs.status` 里，见下文「停止与结算的时序」。
 
 ### `GET /api/tasks/:id/live-logs`（`server/handler/task_logs.go` 的 `LiveLogs`）
 
@@ -484,7 +487,31 @@ APP（`setPinned(id, pinned)`）只按 `EnvVar.isPinned` 选其一：没置顶�
 
 ### `GET /api/tasks/:id/latest-log`
 
-最近一次运行的完整日志在 `content` 里；从没跑过、或被保留策略清理掉时回 404。
+最近一次运行的完整日志在 `content` 里，结果在 `status`（`task_logs.status`）；从没跑过、或被保留策略清理掉时回 404。
+
+### 停止与结算的时序（面板读码，2026-11-28）
+
+`PUT /api/tasks/:id/stop`（`server/handler/task_control.go` 的 `Stop`，`:216`）：
+
+1. 执行器 `StopTask`（`service/task_executor.go:395`）先打「手动停止」标记，再给整组进程发 SIGTERM，5 秒后组里还有进程才 SIGKILL
+   （补刀在单独的协程里，接口不等）。trap 了 TERM 的脚本可以在这 5 秒里收尾。
+2. **接口返回之前**就改库：任务 `status` 改成非运行（启用 / 禁用）、`last_run_status` 改成已终止、清 `pid` / `log_path`；
+   这次运行中的那条 `task_logs` 记成 Aborted（`status 3`，写 `ended_at` / `duration`）。所以停止一返回，live-logs 就回 `done: true`、
+   `status` 不再是运行中，日志详情 / latest-log 已经是「已终止」。
+3. 但 TinyLog 要等进程真正退出（脚本自己收尾，或宽限到点被杀）、后置脚本跑完、执行函数收尾的 defer 里才关：宽限期里的收尾输出、
+   `[执行后置脚本]`、终止提示照样写进 TinyLog、经 SSE 推下来，最后照常 `done: finished`。
+
+收尾 defer 的顺序（`service/task_executor.go:906-975`，正常跑完、失败、被停止都走这里）：`tinyLog.Close()`（订阅关闭 → SSE 发
+`done: finished`）→ 读文件、压缩 → `Updates(task_logs: status, content, ended_at, duration)` → 更新任务。也就是**流先结束、结果后落库**：
+刚收到 `done` 就查日志详情 / latest-log，几乎总是「运行中」，而运行中的详情是从 `log_path` 读的整份日志。手动停止的那次在这里按
+`runStopManual` 再写一次 Aborted，与第 2 步同口径；面板关停（`runStopHalt`）则按**失败**结算。
+
+APP 据此（实现见 [hook-guidelines.md](./hook-guidelines.md)「实时日志页」第 8、11 条与「`LogStreamPage` 的结算与停止」）：
+
+- 流结束后隔一会儿再查结果：每次查之前等 `kLogSettleRetryDelay`（500ms，第一次也等），还是运行中就再等再查，最多 `kLogSettleAttempts`（5）次；
+- 停止之后不关 SSE，收尾行只追加、不改状态，等 `done` 再结算；SSE 已经断了、页面在降级轮询时要**重连 SSE**，不能当场按 latest-log
+  结算——那时已经是 Aborted，第一次就收口，宽限期的收尾输出再也拿不到；
+- 「APP 目前不补」照旧：降级轮询期间正文已经是 SSE 的，结算时不拿 latest-log 的正文去替换。
 
 ### APP 据此必须遵守
 
@@ -493,18 +520,19 @@ APP（`setPinned(id, pinned)`）只按 `EnvVar.isPinned` 选其一：没置顶�
    「一次一行」的追加：缓冲区与视图必须扛得住逐行追加。依赖、订阅两页也依赖「一事件一行」，
    要改成按帧派发得四个页面一起改。
 3. 空 data 行一律丢弃（两个日志页都这么做）——脚本真实输出的空行也跟着丢了，已知未修。
-4. `finished-late` 对 APP 与 `finished` 同义。目前只有 `TaskLiveLogPage` 认它；`LogStreamPage` 的 done
-   分支只认 `finished`，遇到它会把原值显示在状态 Chip 里（罕见，已知未修）。
+4. `finished-late` 对 APP 与 `finished` 同义，两个日志页都认（`LogStreamPage` v3.0 起；之前它只认 `finished`，会把原值显示在状态胶囊里）。
+   两者都只说明流结束：先显示中性的「已结束」（停止过是「已停止」），结果去 latest-log / 日志详情结算，**不能当成功**。
 
 ### 面板关停时的结束事件（面板 v3.3.5 起）
 
 **结论**：面板**正常关停**时，三条流（实时日志、依赖安装、订阅拉取）都以 `event: done` / `data: reconnect` 收尾；
 没先发 TERM 的强杀仍是连接异常断开、没有结束帧。APP 四个 SSE 页面都不把 `reconnect` 当结束，`SseClient` 1 秒后
-重连一次：面板没起来就走 `onError`，依赖 / 订阅页显示红色「安装日志连接已断开 / 拉取日志连接已断开」，与配面板
-v3.3.4 被强杀时同一终态（只是正文末尾多一行字面量 `reconnect`）；两个任务日志页里只有 `TaskLiveLogPage` 能在
-面板回来后自己恢复。
-依赖 / 订阅页把 `reconnect` 以外的 `done` 一律显示成绿色「…完成」，**是 APP 既有问题，与关停无关、待 APP 修**：
-面板在非关停场景发 `timeout`（依赖流的硬上限、订阅流 5 分钟无输出）时，这两页照样显示「安装完成 / 拉取完成」。
+重连一次：面板没起来就走 `onError`，依赖 / 订阅页显示红色「连接已断开」胶囊 + 整宽横幅「安装日志连接已断开 / 拉取日志连接已断开」，
+与配面板 v3.3.4 被强杀时同一终态（APP v3.0 起 `reconnect` 不再进正文，v2.x 末尾会多一行字面量 `reconnect`）；两个任务日志页里只有
+`TaskLiveLogPage` 能在面板回来后自己恢复，依赖页可以点「重新连接」。
+依赖 / 订阅页把 `reconnect` 以外的 `done` 一律显示成绿色「…完成」的 APP 既有问题（与关停无关，面板在非关停场景发 `timeout`：
+依赖流的硬上限、订阅流 5 分钟无输出）：**两页 APP v3.0 都已修**（依赖页按结束值分别显示，订阅页按日志收尾行定成败；
+`timeout` 与没收到结束帧的 EOF 都是红色「连接已断开」+ 横幅），见第 4 节。
 
 > 面板 v3.3.5 开发中（第二波）曾让依赖 / 订阅流关停时发 `timeout`，会把这两页的关停表现从红色「连接已断开」
 > 变成绿色「…完成」（假成功）；本节复核发现后，面板改为三条流都发 `reconnect`（`deps.go` / `subscription.go`
@@ -538,7 +566,7 @@ v3.3.4 被强杀时同一终态（只是正文末尾多一行字面量 `reconnec
 面板侧：
 
 1. 三条流都复用旧值 `reconnect`，不是新协议：与会话撤销、`streamDoneEvent` 的「任务已经在跑」同值。
-   依赖 / 订阅流**不能**发 `timeout`：APP 依赖 / 订阅页（v1.0.2 起）对 `reconnect` 以外的 `done` 一律置
+   依赖 / 订阅流**不能**发 `timeout`：APP 依赖 / 订阅页（v1.0.2 ~ v2.x；线上老版本还在用）对 `reconnect` 以外的 `done` 一律置
    `_done = true`、显示绿色「…完成」，关停会变成假成功；`reconnect` 则让所有版本的 APP 重连一次、失败后显示红色
    「…连接已断开」，与 v3.3.4 被强杀时一致。网页依赖页对 `timeout` / `reconnect` 显示同一句「日志流已断开，
    任务可能仍在进行」，网页订阅页把 `finished` / `not_running` / `closed` 以外的值都当「连接中断」，换值对网页无影响。
@@ -558,39 +586,75 @@ v3.3.4 被强杀时同一终态（只是正文末尾多一行字面量 `reconnec
 
 APP 侧（必须保持）：
 
-1. `reconnect` 永远不当结束：不置 `_done = true`、不回落、不显示「…完成」（两个日志页还会把状态改回「运行中」）。
-   依赖 / 订阅页现在会把它当一行日志追加进正文（末尾多一行字面量 `reconnect`），修第 3 条时一起改掉。
+1. `reconnect` 永远不当结束：不置 `_done = true`、不回落、不显示「…完成」（两个日志页还会把状态改回「运行中」，
+   依赖 / 订阅页改回「实时安装中 / 实时输出」并清掉断线横幅）。`done` 帧的载荷一律不进正文（APP v3.0 起；v2.x 的依赖 / 订阅页
+   会在末尾多一行字面量 `reconnect`）。
 2. 恢复是页面的事：按面板侧第 4 条，`SseClient` 那一次 1 秒重连多半失败。`TaskLiveLogPage` 靠「`onError` →
    每秒轮询 live-logs」恢复，**失败的轮询不能计入放弃**（现在的放弃条件只认 live-logs 成功回来后才会设的
    「等待日志...」）。
 3. `timeout`（面板非关停场景发：依赖流硬上限、订阅流 5 分钟无输出）不是成功，载荷也不是日志行：不能出绿色
    「…完成」，不能把 `timeout` 追加进正文（即本文「『未知值』必须诚实」：兜底不许落到绿色成功）。
-   依赖 / 订阅页目前违反这一条，是 APP 既有问题（见第 4 节），待 APP 修。
+   APP v3.0 两页都已照做：`timeout` → 红色「连接已断开」+ 横幅「日志流已断开，安装（卸载 / 拉取）可能仍在进行」。
 4. 被打断那次运行的结果以 latest-log / 日志详情为准。要补就在面板回来、确认运行已结束之后拉；不要在收到
    `reconnect` 时拉——那时还没结算，面板也正在退出。
 5. 新旧面板要落到同一个终态：旧面板关停时只有 `onError`，新面板多一个结束帧。
 
-**4. 校验与错误矩阵**（APP v1.3.9 开发中工作区，2026-10-05）
+**4. 校验与错误矩阵**（APP v3.0.0 开发中工作区，2026-11-28 按代码复核；v1.3.9 时的版本见 git 历史）
 
 | 页面 | 收到结束帧 | 1 秒后重连失败、面板没回来 | 面板回来后 |
 |---|---|---|---|
-| `TaskLiveLogPage`（`task_list_page.dart`） | `reconnect` →「运行中」 | `onError` →「连接错误」+ 转圈，每秒轮询一次、不放弃 | live-logs 回「没在跑」→「等待日志...」→ 轮询满 15 跳（停机期间失败的也算）收口为「已完成」（正文空则「暂无日志」）：正文是 SSE 来的就停在断流那一刻，**缺契约第 3 条那两行**；否则回落 latest-log 拿全量 |
-| `LogStreamPage`（`log_stream_page.dart`） | `reconnect` →「运行中」 | `onError` →「连接错误」**终态**（`_done = true`，Chip 是对勾） | 不恢复，要退出重进（重进时这条日志已结束，正文是全量） |
-| `DepLogStreamPage`（`dep_list_page.dart`） | `reconnect` → 正文末尾多一行字面量 `reconnect`，不置 `_done`，仍是进行中 | `onError`（含 nginx 回 502）→ `_done = true` + 红色「安装日志连接已断开」**终态**，与配 v3.3.4 被强杀时相同 | 不恢复，要退出重进 |
-| `SubscriptionPullStreamPage`（`subscription_list_page.dart`） | 同上 | 同上 → 红色「拉取日志连接已断开」 | 不恢复，要退出重进 |
+| `TaskLiveLogPage`（`task_list_page.dart`） | `reconnect` →「运行中」 | `onError` →「连接错误」+ 转圈，每秒轮询一次、不放弃 | live-logs 回「没在跑」→「等待日志...」→ 轮询满 15 跳（停机期间失败的也算）收口，去 latest-log 结算：被打断的这次面板按失败结算 → 红色「失败」，拿不到结果就中性「已结束」（正文空则「暂无日志」）。正文是 SSE 来的就停在断流那一刻（结算只取结果），**缺契约第 3 条那两行**；否则回落 latest-log 拿全量 |
+| `LogStreamPage`（`log_stream_page.dart`） | `reconnect` →「运行中」 | `onError` →「连接错误」**终态**（`_done = true`，胶囊红叉，不去结算） | 不恢复，要退出重进（重进时这条日志已结束，正文是全量） |
+| `DepLogStreamPage`（`dep_list_page.dart`） | `reconnect` → 载荷不进正文，回「实时安装中」（卸载时「实时卸载中」）、清掉横幅 | `onError`（含 nginx 回 502）→ `_done = true` + 红色「连接已断开」胶囊 + 横幅「安装日志连接已断开」（卸载时「卸载日志…」），再查一次 `GET /api/deps/:id/status` 定底部按钮（停机时查不到就按列表页带进来的旧状态）；知道依赖状态时底部给「重新连接」；卸载这一轮查到 404（记录已删）就是卸完了，改成绿色「卸载完成」、清掉横幅、不给按钮 | 不自动恢复；点「重新连接」清空正文、从头连（只重连流，不发起安装），或退出重进 |
+| `SubscriptionPullStreamPage`（`subscription_list_page.dart`） | `reconnect` → 载荷不进正文，回「实时输出」、清掉横幅 | `onError` → 红色「连接已断开」胶囊 + 横幅「拉取日志连接已断开」**终态** | 不恢复，要退出重进 |
 
-- **APP 既有问题（与关停无关，待 APP 修）**：依赖 / 订阅页的 `onEvent` 先 `_logs.add(event.data)`，再对 `reconnect`
-  以外的一切 `done` 置 `_done = true`，于是面板在**非关停**场景发的 `timeout`（依赖流硬上限 = 依赖操作超时 + 5 分钟、
-  订阅流 5 分钟无输出）、依赖的 `failed` / `cancelled`、订阅的 `closed` 都显示绿色「…完成」，正文末尾还多一行载荷原文。
-  面板 v3.3.5 开发中曾让关停也发 `timeout`，会让这两页的关停表现从红变绿；已改成 `reconnect` 规避，关停不再触发它。
-  修 APP 时不能指望面板以后不发 `timeout`，见下文第 7 节的修复方向。
+- **依赖页的 APP 既有问题已修（APP v3.0，`dep_list_page.dart` 的 `_handleDone` / `_doneLabel` / `_markStreamLost`）**：`done` 载荷不进正文；
+  按结束值分别显示——`installed`（依赖流的成功值，从来不发 `finished`）绿色「安装完成」、`failed` 红色「安装失败」、`cancelled` 中性「已取消」、
+  `queued` / `installing` / `removing` 中性「排队中 / 仍在安装 / 仍在卸载」（面板直接收流，不是结束；没有日志时空态说「依赖还在等待执行，
+  稍后点「重新连接」查看」）、`timeout` 红色「连接已断开」+ 横幅「日志流已断开，安装可能仍在进行」（与网页依赖页同口径）、`closed` / 空串
+  中性「已结束」、不认识的值原样中性；**没收到结束帧就 EOF 也按断流处理**（红色「连接已断开」+ 同一句横幅），不再是「安装完成」。
+  `closed`、不认识的值、断流、出错时再查一次 `GET /api/deps/:id/status`（打开页面时也查一次）：`closed` 与不认识的值查到终态就把胶囊
+  改成对应结果（面板 `broadcaster.done()` 是非阻塞发送，输出密时结束帧会被丢，流里只剩 `closed`）；`timeout` 查状态只为定按钮，
+  胶囊不变；404（记录已删，如卸载成功）时两个底部按钮都不给。底部按钮按面板真实状态：只有 `installing` / `removing` 且流未收口才给
+  「取消安装 / 取消卸载」（PUT，提交后不收流，等 `done: cancelled`）；已定的终态且没有断流原因才给「重新安装」（PUT，清空正文后重连）；
+  断流后只给「重新连接」（只重连流、先清空正文，不写任何东西）。
+  **卸载与安装共用这条流、结束值也一样**（`deps.go` 卸载走 `runCmdWithSSE(cmd, id, installed, deleteOnSuccess=true)`：失败记 `failed`，
+  成功删记录、结束值是空串，取消记 `cancelled`），页面靠 `_removing`（见过 `removing` 就置上，只在确认开始安装 `installing` / `queued`
+  时清，结束帧把 `_depStatus` 覆盖成终态时不清）记住这一轮是卸载：标题「xxx 卸载日志」、胶囊「实时卸载中」、`failed` 红色「卸载失败」、
+  空串绿色「卸载完成」、`closed` 查到 404 也改成「卸载完成」，空态 / 断流横幅 / 复制提示 / 取消按钮都说「卸载」；卸载失败或取消后
+  包还装着，**不给「重新安装」**（会去重装一个用户正想卸掉的包），要再卸回列表页（那边卸载先确认）。改前只有「取消卸载」按钮认得卸载，
+  其余全按安装说。卸载这一轮查状态回 404（面板只在卸载成功时删记录）**不看结束值、也不看是不是断流**都改成绿色「卸载完成」并清掉
+  横幅：列表页不轮询，点完卸载快照停在 `removing`，pip 卸载一两秒就完、记录已删，这时点日志图标，流直接回 404 走 `onError`，改前是红色
+  「连接已断开」+ 横幅「卸载日志连接已断开」，把卸成功说成了失败；`timeout` 后查到 404 同理。
+  已知局限：卸载失败后**另开**这个页面时状态已经是 `failed`、看不出上一轮是卸载，仍按安装说。
+  测试 `test/features/deps/dep_log_stream_page_test.dart`（22 条）。
+- **订阅页的结束值（APP v3.0，`subscription_list_page.dart` 的 `SubscriptionPullStreamPage`）**：`done` 载荷不进正文；没正文时的
+  `not_running` 是「当前没有正在运行的拉取任务」；断线原因放进 `errorMessage` 横幅。**订阅流的结束值都不带成败**：`subscription.go` 的
+  `Pull` 在 `ExecuteSubscriptionPull` 返回后无条件 `broadcaster.done()`，拉错地址、拉取前指令失败、用户在列表里点停止都照样
+  `finished`；`closed` 是结束信号被丢（64 格订阅通道塞满，`done()` 非阻塞）后通道被关，**不是谁停的**（用户停止走的是 `finished`）。
+  成败只认面板在结束信号前写的最后一行 `[完成] 耗时 x 秒, 状态: 成功|失败`（`service/subscription.go`），页面只在正文**末尾 3 行**里找
+  （再往前的可能是拉取前指令的输出，碰巧长得像也不算）：
+  - `finished` / `finished-late` / `closed` / 有正文的 `not_running`：`成功` → 绿色「拉取完成」；`失败` 且是用户停的 → 中性「已停止」；
+    其余 `失败` → 红色「拉取失败」；找不到 → 中性「已结束」（`closed` 时连最后几行一起被丢是常事），不猜成成功；
+  - 「用户停的」两条认其一：收尾行前一行是 `[错误]` 且带「拉取已停止」（sparse-checkout 会包一层「… 失败: 拉取已停止」）；或从收尾行
+    往回、到这次的 `[开始拉取]` 为止有 `StopPull` 广播的 `[停止请求] 正在终止当前拉取任务...`（进了广播历史，回放也有）。要有后一条是因为
+    错误行不一定是「拉取已停止」：单文件订阅 curl 被杀后面板拿已取消的 ctx 再跑 wget（`service/git.go` `DownloadFileWithContext`），
+    错误是 exec 原文 `context canceled`。停止请求在收尾行**之后**才到的不算（拉取已经自己失败了，停止什么也没做）；`[开始拉取]` 之前的
+    属于上一次拉取（面板关停后 `reconnect` 重连到新的一次），也不算；
+  - `timeout`（5 分钟无输出，大仓库克隆可能还在跑）与没收到结束帧就 EOF：红色「连接已断开」+ 横幅「日志流已断开，拉取可能仍在进行」
+    （与依赖页、网页订阅页的「连接中断」同口径；改前分别是红色「拉取超时」无横幅、绿色「拉取完成」）。
+  
+  网页订阅页对 `finished` / `not_running` / `closed` 是去 SubLog 查最新一条的成败；APP 没查接口，读收尾行就够（面板总在结束信号前写它）。
+  **还没改**：没接 `SseReplayBuffer`，`done: reconnect` 自动重连成功时（面板 1 秒内就回来），整段历史会再显示一遍。依赖页同样没接；
+  依赖页手动「重新连接 / 重新安装」都先清空正文，所以只有自动重连这一条路受影响。
+- 面板 v3.3.5 开发中曾让关停也发 `timeout`，会让 v2.x 依赖 / 订阅页的关停表现从红变绿；已改成 `reconnect` 规避，关停不再触发它。
 - 两个日志页新旧面板殊途同归（旧面板直接 `onError`）。`LogStreamPage` 不恢复是既有局限，与 v3.3.4 被强杀时同一
   终态；要修就照 `TaskLiveLogPage`：`onError` 后定时重拉日志详情，结束了就换成详情正文。APP v1.3.8 及更早的
   `TaskLiveLogPage` 恢复时会被空快照清掉正文、停在「暂无日志」+ 转圈，v1.3.9 的 `_logFromSse` 守卫已修。
 - 面板 1 秒内就回来了（少见，例如 `systemctl restart`）：重连到的是新进程，这次运行已结算、TinyLog 不在 →
-  `done: finished`，两个日志页直接「已完成」，同样缺那两行。依赖 / 订阅页这时会把历史再显示一遍（这两页不做
-  重放去重），随后按新进程给的内容收口：依赖按启动对账后的状态（已结束的直接回终态，`failed` 也显示「安装完成」，
-  即上面的既有问题），订阅在新进程里没有这次拉取 → `not_running`，正文非空时同样显示「拉取完成」。
+  `done: finished`，两个日志页先「已结束」、再按 latest-log / 日志详情结算（被打断的这次按失败结算 → 红色「失败」），同样缺那两行。
+  依赖 / 订阅页这时会把历史再显示一遍（这两页不做重放去重），随后按新进程给的内容收口：依赖按启动对账后的状态（已结束的直接回终态，
+  按上面的映射显示，`failed` 是红色「安装失败」），订阅在新进程里没有这次拉取 → `not_running`，正文非空时显示中性「已结束」。
 - 面板回来后任务又跑起来（开机任务、定时到点）：`TaskLiveLogPage` 轮询看到「在跑」就再连，`SseReplayBuffer`
   第一行就对不上、整段放行，新一次运行接在旧内容后面、没有分隔（旧内容被裁过时，新运行开头还会按
   `droppedCount` 被跳过几行）。既有行为，与结束帧无关。
@@ -599,13 +663,17 @@ APP 侧（必须保持）：
 **5. 正常 / 基础 / 错误用例**
 
 - 正常：看着运行中任务的实时日志，在面板点「重启面板」（Docker）→「运行中」→ 约 1 秒后「连接错误」→ 面板约
-  2 秒后回来 →「等待日志...」→ 十几秒后「已完成」，正文保留断流前的内容。
+  2 秒后回来 →「等待日志...」→ 十几秒后按 latest-log 结算（被打断的这次面板按失败结算，红色「失败」；拿不到就中性「已结束」），
+  正文保留断流前的内容。
 - 基础：停容器后一直不拉起 → `TaskLiveLogPage` 一直「连接错误」+ 转圈、每秒一次请求，直到离开页面；
   `LogStreamPage` 停在「连接错误」。
-- 基础：依赖安装中停容器 → 依赖页末尾多一行 `reconnect`，约 1 秒后红色「安装日志连接已断开」（与配 v3.3.4 被强杀时
-  同一终态）；装没装好要等下次启动对账，退出重进依赖页看结果。
-- 错误（APP 既有问题，与关停无关）：依赖装了很久撞上面板的硬上限 → 面板发 `timeout` → 依赖页末尾一行 `timeout` +
-  绿色「安装完成」，其实装没装好不知道。
+- 基础：依赖安装中停容器 → 约 1 秒后依赖页红色「连接已断开」+ 横幅「安装日志连接已断开」（与配 v3.3.4 被强杀时同一终态），
+  正文没有多出的 `reconnect`；装没装好要等下次启动对账，面板回来后点「重新连接」或退出重进看结果。
+- 错误（与关停无关，APP v3.0 已修）：依赖装了很久撞上面板的硬上限 → 面板发 `timeout` → 依赖页红色「连接已断开」+ 横幅
+  「日志流已断开，安装可能仍在进行」，正文没有 `timeout` 这一行（v2.x 是末尾一行 `timeout` + 绿色「安装完成」）。
+- 错误（与关停无关，APP v3.0 已修）：订阅拉取 5 分钟没有输出 → 面板发 `timeout` → 红色「连接已断开」+ 横幅「日志流已断开，拉取可能
+  仍在进行」（改前是红色「拉取超时」，像是拉取本身的结果）。
+- 错误（APP v3.0 已修）：订阅仓库地址填错 → 面板写 `[完成] … 状态: 失败` 后照常 `done: finished` → 红色「拉取失败」（改前绿色「拉取完成」）。
 
 **6. 必须有的测试**
 
@@ -613,22 +681,30 @@ APP 侧（必须保持）：
   三个分支与依赖、订阅两条流共五行，都以 `event: done` + `data: reconnect` 结尾，`Shutdown` 后 1 秒内收流；
   删掉任一处结束帧、或依赖 / 订阅改回 `timeout`，对应那行变红。`server/service/shutdown_wiring_test.go` 钉 main 里的
   `BaseContext` 与 `RegisterOnShutdown`。
+- APP 已有（v3.0）：
+  - `test/features/deps/dep_log_stream_page_test.dart`：`done: timeout` → 红色「连接已断开」+ 完整原因、正文不进载荷；
+    `done: reconnect` 后重连失败 → 红色「连接已断开」、横幅整句可见；`done: installed` →「安装完成」、`failed` →「安装失败」；
+    没等到 `done` 就断 → 不是「安装完成」；`closed` / 不认识的值按查到的终态显示；记录已删不给按钮；卸载这一轮标题 / 胶囊按卸载说，
+    `failed` →「卸载失败」、`cancelled` →「已取消」且都不给「重新安装」，空串与 `closed` + 404 →「卸载完成」；列表快照是 `removing`
+    时流和状态都回 404 →「卸载完成」、没有横幅；快照是 `removing` 时输出到达前就按卸载说；没有快照时查到 `removing` 胶囊跟着改口。
+  - `test/features/subscriptions/subscription_log_pages_test.dart`：`done: reconnect` 后重连回 502 → 红色「连接已断开」+ 横幅
+    「拉取日志连接已断开」、正文没有 `reconnect`；`not_running` 两种情况；收尾行 `失败` + `finished` →「拉取失败」、用户停止 →「已停止」
+    （含单文件订阅错误行是 `context canceled`、停止请求那行不在正文里两种），停止请求在收尾行之后 / 属于上一次拉取 →「拉取失败」、
+    `成功` + `closed` →「拉取完成」、`closed` 丢了收尾行 / `finished` 没收尾行 / 长得像的行不在末尾 →「已结束」；`timeout` 与没收到结束帧
+    就 EOF → 红色「连接已断开」+ 横幅「日志流已断开，拉取可能仍在进行」。
 - APP（目前没有，改到相关代码时补）：
   1. `test/core/network/sse_client_test.dart`：第 1 次回
      `sseResponse('data: a\n\nevent: done\ndata: reconnect\n\n')`，第 2 次抛 `http.ClientException`（另一条用
      `emptyResponse(502)`）→ `onError` 恰 1 次、`requests.length == 2`、`onDone` 0 次。钉住「只重连一次，恢复归页面」。
   2. `test/features/tasks/task_live_log_page_test.dart`：首屏 live-logs 回「在跑」，SSE 推历史 + `done: reconnect`、
      之后的连接一律抛错；live-logs 接着失败 20 跳，再回 `{logs: [], done: true, status: 1}` → 停机期间有
-     「连接错误」、没有「已完成」；恢复后「已完成」、`lines == history`，放弃后 live-logs 调用数不再增加。
+     「连接错误」、没有任何结果；恢复后按 latest-log 结算（回失败就是红色「失败」）、`lines == history`，放弃后 live-logs 调用数不再增加。
      突变：给轮询加「失败 N 次就放弃」，这条应红。
-  3. 修依赖 / 订阅页时：`done: timeout` → 找不到「安装完成」/「拉取完成」、正文没有 `timeout` 这一行；
-     `done: reconnect` 后重连失败 → 红色「…连接已断开」、正文没有 `reconnect` 这一行；
-     `done: installed` / `finished` 仍显示「…完成」。
 
 **7. 错误 vs 正确**
 
 ```dart
-// ❌ 依赖页现状（_DepLogStreamPageState 的 onEvent）：载荷当一行日志，reconnect 以外一律算完成
+// ❌ v2.x 的依赖页（_DepLogStreamPageState 的 onEvent；订阅页同形）：载荷当一行日志，reconnect 以外一律算完成
 setState(() {
   _logs.add(event.data);                          // 末尾多一行载荷原文："timeout" / "reconnect" / "failed"
   if (event.event == 'done' && event.data != 'reconnect') {
@@ -648,18 +724,15 @@ case <-ctx.Done():
 ```
 
 ```dart
-// ✅ 修复方向（未实施）：done 先分辨载荷、不进正文；timeout 与 onError 同走红色 banner
+// ✅ 依赖页 APP v3.0 已实施（dep_list_page.dart 的 _handleDone / _doneLabel；订阅页同口径，成败另读收尾行）：
+//    done 先分辨载荷、不进正文；timeout 与 onError、没收到结束帧的 onDone 同走红色胶囊 + 横幅
 if (event.event == 'done') {
-  if (event.data == 'reconnect') return;          // 交给 SseClient 重连，也不进正文
-  setState(() {
-    _done = true;
-    if (event.data == 'timeout') {
-      _errorMessage = '日志流已断开，安装可能仍在进行';   // 与网页依赖页同口径
-    }
-  });
-  return;
+  _handleDone(event.data);                        // reconnect → 回「实时安装中」，交给 SseClient 重连
+  return;                                         // 其它值 → _doneLabel 映射，timeout 写横幅
 }
-setState(() => _logs.add(event.data));
+_log.append(lines);
+// _handleDone 里：
+_errorMessage = data == 'timeout' ? _streamLostMessage : null;   // 「日志流已断开，安装（卸载）可能仍在进行」
 ```
 
 ```dart

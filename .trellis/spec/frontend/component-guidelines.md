@@ -56,7 +56,9 @@ const _NavItem({
 - `_EnvCard` / `_HeaderChipButton` → `env_list_page.dart:1907 / 749`
 - `_LoginLogsTab` / `_SessionsTab` / `_IpWhitelistTab` / `_TwoFaTab` / `_VerifyCodeInput`
   → 全部在 `security_page.dart`（1249 行）
-- `_FileTreeItem` / `_ScriptVersionSheet` / `_ScriptDebugRunSheet` → 全部在 `script_list_page.dart`（2868 行）
+- `_FileTreeItem` / `_ScriptVersionSheet` → 全部在 `script_list_page.dart`（2887 行）。
+  脚本「调试运行」v3.0 起是独立页面 `ScriptDebugLogPage`（`script_debug_log_page.dart`，路由 `/scripts/debug-log`），
+  原来同文件的 `_ScriptDebugRunSheet` 已删
 
 只有 `dashboard` / `app_lock` / `login` 三个 feature 有 `widgets/` 目录。
 
@@ -76,7 +78,7 @@ const _NavItem({
 | `control` | 4 | **控件**（Checkbox 方框等尺寸恒定的东西） |
 | `sm` | 8 | 图标底板、微徽章 |
 | `md` | 12 | 输入框、内嵌块、按钮 |
-| `lg` | 14 | 卡片 |
+| `lg` | 16（v3.0 起；v1.x / v2.0 是 14） | 卡片 |
 | `pill` | 999 | chip、进度条 |
 
 改造前是 **11 种散装取值**（4/8/9/10/12/14/16/18/20/24/999，其中 9 和 24 各只出现一次
@@ -89,6 +91,12 @@ const _NavItem({
 >    （尺寸由内容撑开）。两者不同量纲，不要互相替代。
 > 3. 取值经用户拍板**保持当前值不变**——11 种收敛成 5 种的一致性收益已经拿到，
 >    再压绝对值只产生「不一样」不产生「更干净」。要改必须重新拍板。
+>
+> v3.0（Nordic Calm）重新拍板过一次：`lg` 14 → 16，v2.0 加的 `card / cardSm / tile` 三档也换了取值
+> （`design_tokens.dart:11-37`，见下文「v3.0 设计令牌与共享组件」）。第 1 条现在的意思是：只用这八个名字，
+> 不加第九个、不写字面量（v3.0 审查里分段滑块写过 `circular(9)`，已改成 `AppRadius.md - _inset`）。
+> ⚠️ 上面「活代码一处不剩」已不成立：`task_detail_sheet.dart:620` 的日志尾巴块写着 `circular(16)`（v2.0 起就有，v3.0 没改），
+> 改到那里时换成 `AppRadius.lg` / `cardSm`。
 
 ### ⚠️ `AppSpacing` 有同名档位，是最容易误删的一处
 
@@ -112,7 +120,8 @@ const _NavItem({
 `duration/curve/transform`）。
 
 `boxShadow` 与 `LinearGradient` 全库**均为 0**。扁平化不靠投影和渐变分层，
-靠 1px 边框 + 底色差。
+靠 1px 边框 + 底色差。（第 1 期的数字。v2.0 起底栏与分段滑块有投影，v3.0 又给白色浮层卡、分组列表加了 `softShadow`，
+现在 `lib/` 里 5 个文件写 `boxShadow`；新加投影取 `AppSurfaces.softShadow / tabBarShadow`（分段滑块那份还是内联的），见下文「v3.0 设计令牌」。）
 
 #### `AppCard` 有一处容易被当成手滑的实现细节
 
@@ -134,6 +143,11 @@ final effectivePadding = bordered
 > 实际内缩是 **21dp** 不是 20dp。算裁切/对齐几何时要记得。
 
 ### 颜色来源：`AppColors` 静态常量，不是 `ColorScheme`
+
+> ⚠️ **本节是 v1.x 的记录，表里的取值是 v3.0 之前的。** v3.0 把 `AppColors` 整体换成了 Nordic Calm 取值
+> （`primary` `#2B5BEE`、`success` `#15803D`、`danger` = `red500` `#DC2626`、`slate*` 换成暖石色，`app_theme.dart:10-76`），
+> 类注释写明：这些常量按浅色底调，放到深色卡片上当文字只有 3.1~3.5:1，**界面颜色一律走 `context.palette`**，
+> `AppColors` 只留给终端、编辑器这类自带底色的固定配色。新代码按下文「v3.0 设计令牌与共享组件」写。
 
 `lib/core/theme/app_theme.dart` 定义了主色 + Slate 色板
 （`AppColors.primary = #409EFF`、`slate50`…`slate950`、`red500`、`blue500`…）。
@@ -170,23 +184,25 @@ final effectivePadding = bordered
 > 4. 必须用固定色时统一走 `AppColors`，**不要写裸 `Color(0xFF...)`**；
 > 5. 不要新增第六档圆角。
 
-#### 第 2 条的例外：要和既有组件像素一致的**复刻件**
+#### 第 2 条的例外：复刻件（v3.0 起已无在用实例）
 
 「复刻件」指的是：因为 Dart 私有类 import 不到，只能在另一个文件里照抄一份的同款组件。
-这类组件**可以沿用 `isLight ? A : B`**，而且应该沿用。
+这类组件可以沿用 `isLight ? A : B`，好让两份逐字相同。
 
-已知这一对是 `more_page.dart` 的 `_SettingsItem` 与 `about_page.dart` 的 `_LinkItem`
-（v1.3.7 / APP issue #12）——后者是前者的跨文件复刻，两者并排出现在设置系页面里，
-配色必须逐字相同。
+历史上唯一的一对是 `more_page.dart` 的 `_SettingsItem` 与 `about_page.dart` 的 `_LinkItem`
+（v1.3.7 / APP issue #12）。v2.0 起两页的行都直接拼 `AppGroupedRow` + `AppIconTile`，
+`more_page.dart` 只转发到 `SettingsPage`，这两个类已不存在，例外目前没有适用对象。
 
-理由是**这里没有能完整替代三元的令牌**：
-`isLight ? slate500 : slate400`（副标题）恰好等于 `surfaces.mutedText`，
-但 trailing 图标的 `isLight ? slate400 : slate600` **没有对应令牌**。
-一半用令牌一半写三元，反而比两条都写三元更难看出「这两个文件必须一致」。
-
-> 🔴 **改任一侧都要同步改另一侧**。它们之间没有编译期约束，漂了只有肉眼能发现。
+新代码不要再造复刻件：可能被第二个页面用到的行，放进 `lib/shared/widgets/`。
+行里放的不是 `AppIconTile`（头像、首字母圆等）时，尺寸用 `AppGroupedRow.leadingWidth`，
+不要抄数字——关于页、赞助页的头像就是按这条改的（v3.0.0，`grouped_row_avatar_test`）。
 
 ### 前景色：淡底走 `tintFg`，实底走 `solidFg`，两者明暗方向**相反**
+
+> v3.0 改了系数：`tintFg` 22%、`solidBg` 35%、`tintBg` alpha 20 / 32、`tintBorder` 52 / 84（`design_tokens.dart:225-239`）。
+> 下面的 20% / 40% 推导与对比度数字是 v1.x 色板下量的，没有按 v3.0 重算。新代码里状态色当文字优先用
+> `palette.*Ink`（见下文「v3.0 设计令牌」）；`tintFg` / `solidBg` / `solidFg` 现在只有 `AppNotice`、`AppSnack`、
+> `app_buttons.dart` 三个共享组件在用。
 
 ```dart
 // 淡底（withAlpha 的徽章 / chip / 提示条）
@@ -220,25 +236,131 @@ Color get solidFg      => isLight ? Colors.white : AppColors.slate950;
 
 ---
 
-## v2.0 设计令牌与共享组件（APP v2.0 起；新代码一律按这一节写）
+## v3.0 设计令牌与共享组件（Nordic Calm，APP v3.0 起；新代码一律按这一节写）
 
-完整契约见归档任务 `11-24-app-ui-refresh-proposal/wave-a-handoff.md`，这里只记规则和坑。
+v2.0 立下的名字（`AppPalette`、`AppRadius.card`、`AppText` 等，契约见归档任务 `11-24-app-ui-refresh-proposal/wave-a-handoff.md`）
+没有变；v3.0（`176b460`，Nordic Calm 改版）换了取值，v3.0 审查修复又补了几条约定。这里只记规则、实际取值和坑。
+**取值以 `lib/core/theme/` 为准**，改了令牌就同步改这里。
 
 ### 令牌
-- 颜色只用 `context.palette`（`AppPalette` ThemeExtension，`core/theme/app_palette.dart`，由 `design_tokens.dart` 导出）：`bg card card2 fill thumb text text2 text3 separator accent ok err warn purple onStatus primaryBtnBg primaryBtnFg glass glassBorder`，浅底用 `palette.tint(色)`。
-- **状态色当文字一律用墨色 `accentInk / okInk / errInk / warnInk / purpleInk`**（测试钉住 ≥ 4.5:1）；实色只给图标、圆点、图表、进度条。不再新增 `AppColors.*`、`Color(0x…)`、`Colors.*`（插画色、编辑器 / 日志内容色例外，要注释）。
-- 圆角：卡片 `AppRadius.card = 30`、小卡 `cardSm = 28`、图标方块 `tile = 15`、胶囊 `pill`；旧档 4 / 8 / 12 / 14 保留给既有组件。
-- 字号：`AppText.largeTitle / section / cardTitle / body / caption`；数字用 `AppText.tabular(style)`。
+
+**色板**：只用 `context.palette`（`AppPalette` ThemeExtension，`app_palette.dart:108-162`，由 `design_tokens.dart` 导出）。
+
+| 令牌 | 浅色 | 深色 | 用途 |
+|---|---|---|---|
+| `bg` | `#F6F6F3` | `#121316` | 页面底 |
+| `card` / `card2` | `#FFFFFF` / `#EFECE6` | `#1B1D21` / `#25282E` | 卡片 / 卡内次级块。`card2` 也是全局输入框的默认填充（`app_theme.dart:166-167`） |
+| `fill` | `#1C1917` 8% | 白 14% | 分段底槽、搜索框、次要按钮、底栏选中态 |
+| `thumb` | `#FFFFFF`（带投影） | `#5A606B`（无投影，对 `card2` 底槽 2.34:1） | 分段滑块 |
+| `text` / `text2` / `text3` | `#1C1917` / `#68625D` / `#A8A29E` | `#F5F5F4` / `#A8A29E` / `#78716C` | 正文 / 次要 / 弱化 |
+| `separator` | `#1C1917` 7% | 白 8% | 发丝分隔线 |
+| `accent` `ok` `err` `warn` `purple` | `#2B5BEE` `#15803D` `#DC2626` `#D97706` `#6D5BD0` | `#6C93FF` `#22C55E` `#F87171` `#FBBF24` `#A78BFA` | 状态实色：图标、圆点、图表、进度条、实色底 |
+| `accentInk` … `purpleInk` | `#224BC9` `#147538` `#C81E1E` `#9A5200` `#5845BC` | 与实色同值 | 状态色**当文字** |
+| `onStatus` | `#FFFFFF` | `#121316`（与 `bg` 同值） | 状态实色底上的前景，见下 |
+| `primaryBtnBg` / `primaryBtnFg` | `#2B5BEE` / `#FFFFFF` | 同左（两套同值） | 钴蓝主按钮（5.48:1） |
+| `glass` / `glassBorder` | 白 88% / `#1C1917` 7% | `#1B1D21` 88% / 白 8% | 悬浮底栏、顶栏毛玻璃 |
+
+- 淡底用 `palette.tint(色)`（浅 9% / 深 16%，`app_palette.dart:167`）。
+- **状态色当文字一律用墨色 `*Ink`**（`test/core/theme/app_palette_test.dart` 钉住对 `card` / `bg` ≥ 4.5:1）；实色只给图标、圆点、
+  图表、进度条和实色底。不再新增 `AppColors.*`、`Color(0x…)`、`Colors.*`（插画色、编辑器 / 日志内容色例外，要注释）。
+
+**`onStatus`：状态实色底上的前景**（`app_palette.dart:89-95`）
+
+- 浅色白、深色深墨 `#121316`。深色的五个状态色都提亮了，白字压上去只有 1.7~2.9:1（红底按钮 2.77:1），换深墨后 ≥ 6.4:1。
+- **只给粗体短标签和图标**：红底确认按钮的文字、实色徽章的数字、`AppIconTile(solid: true)` 的图标。浅色 `warn` 实底配白只有
+  3.19:1（测试对这一组按非文字 3:1 放行），所以浅色 warn 实底上只放图标；要放文字就另定前景，或改用 tint 底配 `warnInk`。
+- **钴蓝主按钮不用它**：`primaryBtnBg` 两套都是 `#2B5BEE`，上面配 `primaryBtnFg`（白）；深墨压 `#2B5BEE` 只有 3.39:1。
+- 主题层跟着它走（`app_theme.dart`）：`ColorScheme` 的 `onPrimary / onSecondary / onError`（`:91`、`:93`、`:100`）、Checkbox 选中的勾
+  （`checkboxTheme.checkColor`，`:268-271`）、Switch 打开时的滑块（`switchTheme.thumbColor`，`:247-256`，关闭态仍是白）。
+  靠 `onPrimary` / `onError` 画前景的 M3 组件（Badge、DatePicker 选中日等）深色下都是深墨。页面单独给 Switch 传
+  `thumbColor` / `activeThumbColor` 时，打开态也要用 `onStatus`。
+- 已知未处理：`sliderTheme.thumbColor` 仍是白（`:284-288`），深色下压 accent 轨道 2.89:1；浅色关闭态 Switch 的白滑块压在 8% `fill`
+  轨道上（v2.0 起如此）。
+
+**🔴 底色取自状态色的实心按钮，必须显式写 `foregroundColor`**
+
+- 主题里 `FilledButton` / `ElevatedButton` 的前景是 `primaryBtnFg`（`app_theme.dart:181-201`，两套都是白），那是给钴蓝底配的。
+  `FilledButton.styleFrom(backgroundColor: palette.err)` 不写前景，深色下就是白字压提亮的红，只有 2.77:1。
+- 实色底写 `foregroundColor: palette.onStatus`，淡底（`palette.tint(...)`）写对应的墨色。拿 `palette.accent` 当底（深色是提亮的
+  `#6C93FF`）同样配 `onStatus`；要的是钴蓝主按钮就用 `primaryBtnBg` + 主题默认前景。
+- 守护测试 `test/core/theme/status_button_foreground_test.dart`：扫描整个 `lib/`（先剥掉注释和字符串），`*.styleFrom(` / `ButtonStyle(`
+  的 `backgroundColor` 里出现 `.accent / .ok / .err / .warn / .purple`（含 `*Ink` 与 `tint(...)`、三元式）而同一个调用没写
+  `foregroundColor`，就红。现有的点：`env_list_page` 4 处、`log_list_page` 3 处、`settings_page` 1 处、`task_list_page` 2 处，改这些页时别删。
+- 深色下的实测对比度另有 `test/core/theme/dark_mode_contrast_test.dart`（日志 / 变量页的红底删除按钮、替换导入、更新弹窗、视图编辑器）。
+
+**其余令牌**（`lib/core/theme/design_tokens.dart`）
+
+| 类 | 取值 | 位置 |
+|---|---|---|
+| `AppRadius` | `control 4`、`sm 8`、`md 12`、`lg 16`、`pill 999`；`card 20`（区块大卡、分组列表、底部弹层顶角、对话框）、`cardSm 16`（双列小卡、行级卡）、`tile 11`（按 46dp 方块定，`AppIconTile` 按 `tile * size / 46` 缩，34dp 时约 8.1） | `:11-37` |
+| `AppText` | `largeTitle 23 / w600`、`section 15 / w600`、`cardTitle 16 / w600`、`body 15 / w400`、`caption 13`、`meta 11.5 / w500`；最高字重 w600；数字用 `AppText.tabular(style)` | `:77-129` |
+| `AppSpacing` | `xxs 4`、`xs 6`、`sm 8`、`md 12`、`lg 16`、`xl 20`、`xxl 24`；`pageHorizontal 20`；兜底 `listBottom 108` | `:40-60` |
+| `AppTabBarMetrics` | 胶囊高 58、离底至少 10、左右 20 | `:63-74` |
+| `AppMotion` | `fast 120`、`normal 220`、`sheet 340`、`slide 360` ms；`spring = Cubic(0.22, 1.0, 0.36, 1.0)`（不再末段回弹） | `:132-149` |
+| `AppSurfaces` | `cardBorder`（浅 5% 暖黑 / 深 8% 白）；`softShadow`（白色浮层卡、分组列表）；`tabBarShadow`（悬浮底栏专用：浅 `0x140F172A` / 深 `0x47000000`，blur 28、spread −6、offset (0, 10)） | `:184-212` |
+
 - 动效：时长走 `AppMotion.of(context, d)`（减少动画时为 0），判断用 `AppMotion.reduce(context)`；唯一例外是「按住运行」的进度条（功能性）。
 - 明暗：`themeModeProvider`（本机键 `app_theme_mode`），`main.dart` 在 `runApp` 前 `ThemeModeNotifier.preload()`。
-- Tab 页底部留白：`AppSpacing.listBottomOf(context)`（在 ListView 外面读），不要写死 100。
+- 明暗分支的投影收进 `AppSurfaces`：底栏用 `context.surfaces.tabBarShadow`（`main_scaffold.dart:216-217`），不在页面里手写
+  `isLight ? A : B`。分段滑块浅色那份投影还写在 `app_segmented.dart:76-84`，没收进令牌。
+- Tab 页底部留白：`AppSpacing.listBottomOf(context)`（在 ListView 外面读），不要写死。
 
 ### 共享组件（`lib/shared/widgets/`）
-`AppLargeTitleHeader`（含 `.sliver`）、`AppGlassCircleButton`、`AppGroupedList` / `AppGroupedRow`、`AppIconTile`、`AppSegmented<T>`、`AppPillButton`（primary / secondary / danger）、`NotchedCard`、`HoldToRunButton`、`showAppSheet`（默认 `CupertinoSheetRoute`，`fullHeight: false` 回落 `showModalBottomSheet`）。页面优先拼这些，不要再各写一份胶囊 / 分组卡。
-- 上千行的懒加载列表不要直接用 `AppGroupedList`（它一次建完所有行）：参照变量页，组头 + 行摊平给 `ListView.builder`，行尺寸照 `AppGroupedRow`，传 `showSeparator`。
+`AppLargeTitleHeader`（含 `.sliver`）、`AppGlassCircleButton`、`AppGroupedList` / `AppGroupedRow`、`AppIconTile`、`AppSegmented<T>`、`AppPillButton`（primary / secondary / danger）、`NotchedCard`、`HoldToRunButton`、`showAppSheet`（默认 `CupertinoSheetRoute`，`fullHeight: false` 回落 `showModalBottomSheet`）、`FullscreenLogScaffold`（全屏日志页外壳，见下）。页面优先拼这些，不要再各写一份胶囊 / 分组卡 / 日志页。
 
-### 踩过的坑（v2.0 实测）
+| 组件 | 公开尺寸 / 约定 | 位置 |
+|---|---|---|
+| `AppGroupedRow` | 行尺寸的唯一真源：`hPad 16`、`gap 12`、`leadingWidth = AppIconTile.defaultSize`（34）、`textStart = hPad + leadingWidth + gap`（62）、`minHeight 52`。分隔线左端 = `textStart`（没有 leading 时是 `hPad`），右端 = 行宽 − `hPad` | `app_grouped_list.dart:117-135`、`:141`、`:217-233` |
+| `AppIconTile` | `static const defaultSize = 34`，构造默认值引用它；实色与浅底的圆角都按 `AppRadius.tile * size / 46` 缩（同组混排、选中态切实色时外形不跳）；实色底上的图标用 `onStatus` | `app_icon_tile.dart:12-43` |
+| `AppSegmented` | 整个控件占 `AppTapTarget.min`（44），每段点按区铺满这 44；看得见的底槽 `trackHeight = 38`（公开），滑块内缩 3、圆角 `AppRadius.md - _inset` 与底槽同心。测试 key：`app-segmented-track` / `app-segmented-thumb` | `app_segmented.dart:5-29`、`:43-75` |
+| `HoldToRunButton` | `radius`（默认 `AppRadius.pill`；与 `AppPillButton` 同处一个位置、状态一变就互换时传 `AppRadius.md`）。`width` / `height` 只是名义尺寸，外面给紧约束时按实际约束布局：图标圆按实际高度算（`h − 14`，夹在 24~38），离左边与离上下一样远（`(h − icon) / 2`，胶囊时与左端半圆同心）。测试 key：`hold-to-run-progress` / `hold-to-run-icon` | `hold_to_run_button.dart:6-33`、`:97-105` |
+| `NotchedCard` | `defaultNotchSize` 208×82、`defaultNotchGap` 12、`defaultSlotSize` 196×70（缺口减间隙，就是嵌入组件实际拿到的紧约束）。往缺口里放东西按 `defaultSlotSize` 给尺寸，别靠嵌入组件自己的默认值（常用任务卡 `favorite_task_cards.dart:255-281`） | `notched_card.dart:40-57` |
+
+- 上千行的懒加载列表不要直接用 `AppGroupedList`（它一次建完所有行）：参照变量页，组头 + 行摊平给 `ListView.builder`，传 `showSeparator`。
+  **行的内边距、文字起点、分隔线一律引用 `AppGroupedRow.hPad / gap / leadingWidth / textStart / minHeight`，不要抄数字**：v3.0 把
+  18 / 36 / 14 改成 16 / 34 / 12 时，抄了数字的变量页、任务页「所有任务」、日志列表三处全错开了（现已改成引用常量）。
+  这三处的分组容器还没补 `cardBorder` 描边与 `softShadow`，外观与 `AppGroupedList` 仍有差别（要另定首尾行的描边方案）。
+
+### `FullscreenLogScaffold`：全屏日志页外壳（v3.0 起）
+
+`lib/shared/widgets/fullscreen_log_scaffold.dart`。七个日志页都用它（清单见下文「日志正文」）：页面只持有 `LogLineBuffer`、状态文案和
+按钮回调，正文（`LogView`）、页内搜索、首处报错、复制、护眼暗底、底栏都在壳里。
+
+- **`errorMessage`**（`String?`，`:317-322`）：去掉首尾空白后非空时，在顶栏 / 搜索栏下方、正文上方显示一条整宽提示（`_buildErrorBanner`，
+  `:1052`）：错误图标 + 13 号字、不限行数不截断，底色 `tint(err)`，字用 `errInk` 经 `logTheme.readable` 保证 ≥ 4.5:1，带
+  `Semantics(liveRegion)`，key `fullscreen-log-error-banner`。日志空不空都显示，`emptyMessage` 照常居中。断线、接口失败这类原因放这里，
+  不要只塞进状态胶囊（96dp 宽、单行省略）或 `emptyMessage`（日志非空时看不见）。
+- **`menuBusy`**（默认 false，`:339-344`）：菜单里发起的慢操作（下载原始日志、兜底查任务命令）在跑时，`⋮`（key `fullscreen-log-menu`）
+  换成 18×18 小转圈，菜单照样能点开、复制等项照常可用。**只做反馈、不兼任锁**，防重入靠页面自己的状态位。`openScriptBusy` 同理：
+  「跳脚本」芯片图标换成转圈，且不响应点击。
+- **复制提示在点击那一刻现算**（`_copyAll`，`:568`）：`buffer.droppedCount > 0` 时一律「已复制最近 N 行」（N = `buffer.length`），
+  传了 `truncatedCopyHint` 就接成「已复制最近 N 行，<hint>」；没截断才用 `copySuccessToast ?? '日志已复制到剪贴板'`。底栏芯片与菜单里的
+  复制项截断后也写「复制最近 N 行」。页面**不要在 build 时算截断文案传进来**：流式追加不重建页面，build 时算的文案到点击时早过期了。
+- **底栏工具芯片只在缩成图标时才带 `Tooltip`**（`:1508`，同 `AppChipButton`：带字形态再套一层，TalkBack 会读两遍）。底栏按宽度分四档
+  依次把芯片缩成 44dp 图标、收起「复制」（`_buildFooterRow`，`:1200`），最窄一档也放不下才横向滚动，「首处报错」始终在最左。
+  **测试按 Key 找，不要 `find.byTooltip('复制全部')`**（带字形态找不到）：`fullscreen-log-first-error` / `fullscreen-log-copy` /
+  `fullscreen-log-open-script`；主按钮 `fullscreen-log-stop` / `fullscreen-log-rerun`；状态胶囊 `fullscreen-log-status-pill`；
+  搜索计数 `fullscreen-log-search-count`。
+- 顶栏「护眼暗底」按钮只在底色本来是浅色时出现（深色主题且面板没配色、或面板配了深色日志底时隐藏，`:1281`）；`⋮` 菜单里的
+  「独立护眼暗底 (#14161A)」一直在。深色主题下的页面测试要切它，改用浅色主题或走菜单。
+- 首处报错与搜索命中由 `FullscreenLogIndex`（`:175`）随追加增量维护，每行最多判两次，搜索不设命中上限。报错判定
+  `looksLikeLogErrorLine`（`:147`）的关键词是共享常量 `kLogErrorKeywords`（`lib/shared/utils/log_error_keywords.dart`），与面板
+  `attentionErrorKeywords`、日志列表的 `pickLogErrorLine` 逐项一致（含 `fail` / `timeout` / `refused` / `not found` / 超时 / 拒绝 /
+  不存在），改表要同步改面板；`log_error_line_test` 钉住两边一致。`pickLogErrorLine` 也像面板（#187）一样跳过 conc / desi 的账号说明行
+  （`[按账号并发]` / `[指定账号]` 开头），退回最后一条非空行时不拿它顶上。比那两处多一步先抹「没出错」的写法（它们只看失败日志，这里每份都判）：
+  带引号的键、`k=v`、带下划线的键、对象字面量里的一项、Node 多行对象里缩进且小写开头的属性行（`  error: null,`、`  errorCode: 0,`）、
+  单独的计数词（可带 count 后缀）加 0（`Errors: 0`、`failCount: 0`、`超时 0 次`）、超时配置（`timeout: 30`、`"timeout": 30000,`、
+  `超时时间：30 秒`，数后面紧跟分隔符或行尾才算）不算；不带引号或大写开头的「异常名: 0 / null / None / False」（`KeyError: 0`、
+  `    KeyError: 0`）、`timeout of 5000ms exceeded` 算报错。计数里的 0 紧挨着冒号、逗号、小数点时不算「0 个」：行首整点时间
+  （`08:00:00 ERROR …`、`08:00 失败`）、`ERROR: 00:00:05 …`、`1,000 errors` 照样算报错。
+- 日志表面配色 `resolveLogSurfaceTheme`（`log_background.dart:204`）保证 `mutedForeground` 压在日志底与栏底上都 ≥ 4.5:1
+  （`kLogMinTextContrast`；面板配了偏灰的底时用 `ensureLogContrast` 朝前景色挪，默认底上原样不动）；压在半透明填充（搜索框、胶囊）上的
+  文字用 `LogSurfaceTheme.readable(color, on: 合成后的实色)` 再校一次。
+
+### 踩过的坑（v2.0 / v3.0 实测）
 - **全局输入框是灰色填充**：放进白色卡片里的 `TextField` 要 `filled: false`，否则白卡套灰块（登录页、脚本查找条都踩过）。
+- **v3.0 起输入框默认填充是不透明的 `card2`**：放进 `card2` / `surfaces.subtle` 底的容器里会融成一片、看不出哪里能点。二选一：给输入框传
+  `fillColor: palette.card`，或者把容器改成 `card` 底（视图编辑器的规则卡片就是这么修的，`task_view_sheets.dart:536-539`）。
 - **Flutter 3.27 起默认开启深链路由**：启动 Intent 里的 URI 会被推给 GoRouter。桌面小组件用 `daidai://…`，所以 `AndroidManifest.xml` 里保持 `flutter_deeplinking_enabled = false`，入口统一由 `IntegrationService` 解析。
 - **面板没有 `GET /tasks/:id`**：按 id 取任务用 `shared/api/task_lookup.dart` 的 `fetchTaskById`（拉 `GET /tasks?all=1` 再找），不要自己拼单条接口。
 - **`MissingPluginException` 不是 `PlatformException` 的子类**：调插件（尤其 local_auth）时两个都要接，否则网页版 / 测试环境会冒未捕获异常。
@@ -342,7 +464,7 @@ String _extractTaskError(dynamic error, String fallback) => extractErrorMessage(
 snack (0,528)-(800,600) 完全落在 sheet (0,244)-(800,600) 之内）。所以：
 
 - 失败时弹层**不关**（免得用户重填）的入口，原因必须写回弹层内：新建弹层写变量名输入框的 `nameError`（`errorText`），
-  详情弹层写头部下方的 `sheetError`（`AppNotice(color: AppColors.danger, icon: Icons.error_outline, text: sheetError!, accentText: true)`）。
+  详情弹层写头部下方的 `sheetError`（`AppNotice(color: palette.err, icon: Icons.error_outline, text: sheetError!, accentText: true)`，`env_list_page.dart:2175-2180`）。
 - **一个弹层一个错误槽**：详情弹层的「置顶」「标为重要」「启用 / 禁用」「保存」失败都写进同一个 `sheetError`。
   不要同一个弹层里有的写回、有的只发 SnackBar（v1.3.5 遗留的正是这种不一致，v1.4.0 收口）。
 - `AppSnack.error(context, message)` 照旧发：用户把弹层关掉之后才露出来，与本页其它失败提示一致。
@@ -440,13 +562,32 @@ ConstrainedBox(
 
 ---
 
-## 日志正文：`LogView` + `LogLineBuffer`（#10 建立，APP #15 补逐行追加路径）
+## 日志正文：`LogView` + `LogLineBuffer`（#10 建立，APP #15 补逐行追加路径，v3.0 起全部日志页接入）
 
-三个页面共用：`TaskLiveLogPage`（`task_list_page.dart`，任务运行日志）、`LogStreamPage`
-（`log_stream_page.dart`，日志详情 / 运行中日志）、`PanelLogPage`（`panel_log_page.dart`，
-`follow: false` 的静态日志）。**新的日志页接这一套**，不要再把整段 `join('\n')` 铺成一棵
-`RichText` —— 那是 #10 之前几万行就卡死的写法（脚本「调试运行」弹窗 `_ScriptDebugRunSheet`
-还是它；依赖安装、订阅拉取两页是各自的 `ListView`、没有上限，都未迁，在 backlog）。
+v3.0 起所有日志页都经 `FullscreenLogScaffold`（见上文）用这一套，每页持有一个 `LogLineBuffer`：
+
+| 页面 | 文件 | 正文怎么进缓冲区 | `follow` |
+|---|---|---|---|
+| 任务实时日志 `TaskLiveLogPage` | `tasks/views/task_list_page.dart` | live-logs 快照 → SSE 逐行 `append`、重连去重（见 [hook-guidelines.md](./hook-guidelines.md)「实时日志页」） | 跟随 |
+| 日志详情 `LogStreamPage` | `logs/views/log_stream_page.dart` | 已结束：详情正文一次 `replaceAll`；运行中：先清空，SSE 逐行 `append`、重连去重 | 运行中跟随；已结束按账户偏好「定位到底部」，只在加载时定一次 |
+| 面板日志 `PanelLogPage` | `system/views/panel_log_page.dart` | 按筛选（级别 / 关键字 / 行数）重拉，整段 `replaceAll` | `false`（静态） |
+| 脚本调试 `ScriptDebugLogPage` | `scripts/views/script_debug_log_page.dart` | 每 700ms 轮询，面板每跳回整份日志：内容没变不动缓冲区、以现有内容开头就只 `append` 多出来的行、对不上（面板丢了头部）才 `replaceAll`（`_applyLogs`，`:187-206`） | 跟随 |
+| 依赖安装日志 `DepLogStreamPage` | `deps/views/dep_list_page.dart` | SSE 逐行 `append`；「重新连接 / 重新安装」先 `clear` 再从头连。**没接 `SseReplayBuffer`**（见 [panel-contract.md](./panel-contract.md)「面板关停时的结束事件」） | 跟随 |
+| 订阅拉取日志 `SubscriptionPullStreamPage` | `subscriptions/views/subscription_list_page.dart` | SSE 逐行 `append`，同样没接重放去重 | 跟随 |
+| 订阅拉取日志详情 `_StaticFullscreenLogPage` | 同上 | 一次 `replaceAll` | `false`（静态） |
+
+**新的日志页接这一套**，不要再把整段 `join('\n')` 铺成一棵 `RichText` —— 那是 #10 之前几万行就卡死的写法
+（v2.0 时脚本「调试运行」弹窗 `_ScriptDebugRunSheet` 还是它，依赖安装、订阅拉取两页是各自不设上限的 `ListView`；v3.0 已全部迁走）。
+
+**轮询拿整份日志的页面不要每跳都 `replaceAll`**：`generation` 一变，LogView 就当成换了一份日志——跟随中重建尾段并 `jumpTo`、
+选区被清、拖动被打断、上翻时「新增 N 行」被清零（v3.0 脚本调试页踩过）。照 `ScriptDebugLogPage._applyLogs` 做：没变不动、能追加就追加、
+对不上才整段替换；比对只比还留在内存里的行，从最后一行往前比。
+
+**默认日志底色有意与面板网页分叉**：面板留空 `log_background_color` 时，APP 按主题回落浅色 `#FAF9F6` 暖纸 / 深色 `#14161A` 护眼暗底
+（`AppColors.termBgLight / termBgDark`，`app_theme.dart:66-70`；`resolveLogSurfaceTheme`，`log_background.dart:204`）；面板网页
+`web/src/utils/panelAppearance.ts` 的默认是 `#0F172A` / `#F8FAFC`。APP v2.x 与网页逐字一致，v3.0 换成 Nordic Calm 后两端不再同色，
+`test/shared/utils/log_background_test.dart` 的「兜底色有意与面板 Web 分叉」钉住现值。仍然一致的是语义：面板留空 = 跟随当前主题、
+面板配了颜色就听面板的。要改回或再改，先同步面板侧。
 
 > #10（`ef8368e`）当时没有写进 spec，下面的「基线」是按现有代码补的。
 > 运行中日志的数据从哪来、怎么去重见 [hook-guidelines.md](./hook-guidelines.md)「实时日志页」一节；
@@ -462,7 +603,7 @@ ConstrainedBox(
 | 回到底部 | 不跳很远的偏移（懒加载列表要把中间每一行都排一遍），而是锚点挪到 `total - 200`（`_kTailWindow`）、`_sliverGeneration++` 换掉两个列表的 key、按估算行高先 `jumpTo` 到尾段附近，帧后再贴底校正 | `_jumpToLatest` |
 | 跟随 | 距底 ≤ `kLogFollowTolerance`（32px）才算在底部；「用户在滚」只认手势（拖动的 `ScrollStartNotification.dragDetails`、滚轮 / 触控板的 `UserScrollNotification`），程序贴底不算；手指还在屏幕上时绝不 `jumpTo`（会打断手势） | `_handleScrollNotification`、`_stickToBottom` |
 | 暂缓裁剪 | 不跟随时 `holdTrim = true`：上限放宽到 2 倍、超了一次裁回 `maxLines`，否则每来一行眼前的内容就被往上推一行；`dispose` / 换缓冲区时复位成 false（缓冲区归页面所有，比视图活得久） | `LogLineBuffer.holdTrim`、`_setFollowing`、`dispose` |
-| 静态日志 | `follow: false`：从顶部开始，无跟随、无「回到底部」、不挂选区回调 | `LogView.follow` |
+| 静态日志 | `follow: false`：从顶部开始，无跟随、无「回到底部」、不挂选区回调；按行号跳转过之后改按跳转锚点排布（`_jumpAnchored`），整段替换后回到顶部，见下文「按行号跳转的锚点」 | `LogView.follow`、`build` 里的 `useAnchor`（`log_view.dart:958`） |
 
 ### 契约：`LogLineBuffer` 用表头偏移裁剪（APP #15）
 
@@ -560,7 +701,7 @@ if (_head >= maxLines ~/ 10) {
 | 手指在屏幕上（`_userScrolling`） | 锚点不动、不贴底，新行接在下方列表末尾 |
 | 有选区（`_hasSelection`） | 同上，另外 `holdTrim = true`；`_following` 不变，不出「回到底部」按钮 |
 | 不跟随（用户上翻） | 锚点不动，`_glued = false`，`holdTrim = true` |
-| `generation` 变了（整段替换） | 跟随中 → `_jumpToLatest()`；否则把锚点夹进 `[dropped, total]`、原地不动 |
+| `generation` 变了（整段替换） | 跟随中 → `_jumpToLatest()`；静态日志跳转过（`_jumpAnchored`）→ 回到顶部（见下文「按行号跳转的锚点」）；否则把锚点夹进 `[dropped, total]`、原地不动 |
 
 `_glued` 的意思是「下方列表恰好是最后 200 行」：跟随模式的 `_resetAnchor()` 置 true，
 `_setFollowing(false)` 置 false，`_resumeAfterPause()` 发现下方超过 200 行时置 false。
@@ -608,6 +749,45 @@ if (_following && !_userScrolling) {
 if (_following && !_userScrolling && !_hasSelection) { /* 滑锚点，或走 _jumpToLatest() */ }
 widget.buffer.holdTrim = !_following || hasSelection;   // _handleSelectionChanged 里
 ```
+
+### 约定：按行号跳转的锚点（v3.0 审查修复）
+
+**入口**：`LogViewController.jumpToAbsoluteLine(absoluteLine)`（`log_view.dart:35`，签名不变），全屏日志壳的「上一处 / 下一处匹配」
+「首处报错」都走它，实现在 `_jumpToAbsoluteLine`（`:262`）→ `_showFromLine`（`:278`）。
+
+**是什么**：
+
+1. **静态日志也按锚点排布**：`follow: false` 平时锚点恒为 `droppedCount`、从顶部开始；跳转后置 `_jumpAnchored = true`，`build`
+   才改用跳转锚点（`useAnchor = widget.follow || _jumpAnchored`，`:958`）。不置它的话 `build` 无视 `_anchor`，面板日志、订阅日志详情、
+   关了「定位到底部」的已结束日志上，「下一处匹配」「首处报错」只会回到第一行。
+2. 目标行前 2 行放到视口顶上（`topLine = max(dropped, target − 2)`，`:273`），目标行落在视口靠上处。
+3. **跳到末尾一屏以内时锚点往前夹**：`nextAnchor = max(dropped, min(topLine, total − screenLines))`，`screenLines =
+   ceil(max(视口高, 窗口长边) / 最矮行高)`（`:305`）。锚点下方按最矮的行算也够一屏，滚动范围的末端就一定是「最后一行贴视口底边」，往末尾甩也滑不进空白。
+   「一屏」**按窗口长边（`MediaQuery.sizeOf(context).longestSide`）算、不按跳转那一刻的视口**：页内搜索是在键盘弹着时跳的，视口被压矮一大截，
+   收起键盘、关掉搜索栏后又变高，按矮视口夹的锚点下方又不够一屏（实测 400×800、键盘 300 时留白 248dp）；窗口尺寸不随键盘变、转屏长边不变。
+   偏移（`toTop` / `toEnd`）仍按当前视口算。窗口本身变大（分屏拖分隔条、桌面拉大窗口）让视口高过跳转时记下的上界 `_jumpClampExtent`、
+   且最大偏移成了 0 时，`_handleMetricsNotification`（`:550`）帧后重夹：还在跟随就 `_jumpToLatest()`，否则按实际排版找出眼下视口顶上那一行
+   （`_lineAtViewportTop`，`:609`）再交给 `_showFromLine`，**不按当初的跳转目标**（跳转后人可能已经往前翻走了，静态页上跳转锚点一直留着）；有选区时不动；
+   整段不满一屏时夹到最顶、不设 `center`，等同从头显示、不能滚。行高按「字号 × 行高」后**取整**估（引擎把 19.5 排成 20、18.2 排成 18），
+   空行还可能再矮 1px，所以最矮行高按「取整值 − 1」兜下限。
+4. 锚点被夹过（`topLine > nextAnchor`）时：先按估算行高 `jumpTo` 到 `topLine`（不超过估算的最大偏移），不换行时跳转那一帧就是最终位置、
+   不先画一帧空白；`topLine` 那一行挂 `_jumpTopKey`，帧后 `_revealJumpTop`（`:359`）用 `getOffsetToReveal` 按实际排版补正并夹进滚动范围；
+   软换行把中间的行撑高、目标还没排出来时往下翻一屏再找，每次一帧。
+5. **跟随模式里跳转 = 暂停跟随**：`_following = false`、`holdTrim = true`（锚点不再随尾部滑，不暂缓裁剪的话缓冲区会裁过锚点、眼前的行整体错位），
+   点「恢复跟随」胶囊走 `_jumpToLatest()`。有选区时先把 `_hasSelection` 置 false 再清选区（同 `_jumpToLatest`）。
+6. **整段替换后回到顶部**：静态日志跳转过之后 `generation` 变了（面板日志改筛选重拉），绝对行号从 0 重数、旧锚点对不上任何一行 →
+   `_resetAnchor()`（清 `_jumpAnchored`）、`_sliverGeneration++`、`jumpTo(0)`（`_handleBufferChanged`，`:198`）。**没跳转过**的静态日志
+   仍「原地不动」：轮询把同一份快照再推一遍是最常见的情况。
+
+**其它 v3.0 审查改动**（同一文件）：「恢复跟随」胶囊外包 `ConstrainedBox(minHeight: AppTapTarget.min)`，命中区 ≥ 44；行号直接用
+`mutedColor`、不再叠半透明（叠了之后默认暗底上只剩约 2.7:1），所以行号可读性由 `log_background.dart` 的 `mutedForeground` 决定；
+行号栏宽度按实际字形与字体缩放量（`_updateGutter`），大字号下不再折行；深色日志底上的**当前**搜索命中改成不透明 `#EAB308` 底 +
+`#1C1917` 字（约 9:1），其余命中与浅底不变。
+
+**测试**：`test/shared/widgets/log_view_jump_test.dart`（静态 9 条：目标行在视口靠上处、翻到中部后往前往后连跳、跳到末尾贴底不留白、
+跳转那一帧就排对、往末尾甩滑不进空白、不满一屏仍从第一行显示、软换行 / 末尾空行、整段替换后回到第一行；跟随 4 条：暂停跟随与暂缓裁剪、
+跳到最后一行贴底、跳到末尾再往末尾甩恢复跟随、选着字时跳转；键盘弹着跳到最后一行 / 倒数第 25 行、收起键盘后往末尾甩不留白且不靠帧后重建，
+静态与跟随各 2 条；窗口拉高后帧后重夹 6 条：静态、跟随暂停中、已恢复跟随、跳到中部不重建，以及跳转后往前翻走再拉高、视口顶上还是那一行（静态与跟随各 1 条））。
 
 测试写法见 [quality-guidelines.md](./quality-guidelines.md)「日志视图与实时日志页的测试约定」。
 

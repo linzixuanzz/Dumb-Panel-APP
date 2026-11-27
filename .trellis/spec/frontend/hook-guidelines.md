@@ -442,12 +442,13 @@ final msg = extractErrorMessage(error, '加载失败');   // api_utils.dart:44
 > 整个放行（宁可重复不能吞行），别的来源交给它只会叠成两份，或者恰好对上时把历史吞掉——
 > `live-logs` 的快照就是这种，见下一节。
 
-### 实时日志页：live-logs 快照与 SSE 的衔接（`TaskLiveLogPage`，APP #15 R3′）
+### 实时日志页：live-logs 快照与 SSE 的衔接、结果结算与停止（`TaskLiveLogPage`，APP #15 R3′；v3.0 审查补结算）
 
 **1. 范围与触发**：`_TaskLiveLogPageState`（`lib/features/tasks/views/task_list_page.dart`）里任何改动
-「正文 `_log` 从哪来、何时整段替换、何时去重、轮询何时放弃 / 回落」的地方。这个页面同时消费面板
-三个接口（形状见 [panel-contract.md](./panel-contract.md)「实时日志」一节）。`LogStreamPage` 不在此列：
-它运行中先清空正文、只用 SSE。
+「正文 `_log` 从哪来、何时整段替换、何时去重、轮询何时放弃 / 回落」「流结束后状态胶囊写什么、结果从哪来」
+「停止之后怎么收尾」的地方。这个页面同时消费面板三个接口（形状见 [panel-contract.md](./panel-contract.md)「实时日志」一节）。
+`LogStreamPage` 的**正文**不在此列（运行中先清空、只用 SSE），但它的**结果结算与停止**与本页同一套口径，见本节末
+「`LogStreamPage` 的结算与停止」。
 
 **2. 签名**
 
@@ -455,11 +456,24 @@ final msg = extractErrorMessage(error, '加载失败');   // api_utils.dart:44
 |---|---|
 | `GET ApiEndpoints.taskLiveLogs(id)` → `{logs, done, status}` | 首屏快照与状态；没在运行、或 SSE 出错后，每秒轮询一次 |
 | SSE `ApiEndpoints.logStream(id)`（`autoReconnect: true`，`onReconnect: _resetReplayBuffer`） | 运行中的正文：先整段历史，再实时行 |
-| `GET ApiEndpoints.taskLatestLog(id)` → `{content, …}` / 404 | 运行已结束、手里只有快照或什么都没有时回落一次 |
+| `GET ApiEndpoints.taskLatestLog(id)` → `{content, status, …}` / 404 | 运行结束后**结算这次运行的结果**（`status`：0 成功 / 1 失败 / 2 运行中 / 3 已终止）；手里只有快照或什么都没有时顺带换正文 |
+| `PUT ApiEndpoints.taskStop(id)`（经 `taskProvider.stopTask`，之后还要等任务列表重拉） | 「停止运行」 |
 
 页面状态：`_logFromSse`（正文是不是 SSE 来的）、`_liveStatus`（最近一次 live-logs 的 `status`）、
-`_pollTimer` / `_pollAttempts`；方法 `_applyLiveSnapshot`、`_startPolling`、`_fallbackToLatestLog`、
-`_resetReplayBuffer`、`_connectSSE`。
+`_pollTimer` / `_pollAttempts`、`_runResult`（latest-log 结算出的 `task_logs.status`，null = 还不知道）、
+`_stopRequested`（本页点过停止、请求已发出）、`_sseDropped`（SSE 出错断开、或没等到 done 就收口过，页面在降级轮询）、
+`_settling` / `_settleRetryTimer`（结算在途）、`_runGeneration`（每次「重新运行」+1，上一次在途的结算作废）。
+方法 `_applyLiveSnapshot`、`_startPolling`、`_fallbackToLatestLog`（`:3491`，回落正文 + 结算结果）、`_waitBeforeSettle`、
+`_resetReplayBuffer`、`_connectSSE`（`:3574`）、`_stoppable`（`:3688`）、`_stopLiveTask`（`:3691`）、`_resolveLiveTone`（`:3817`）。
+
+结算节奏是两个顶层常量，定义在 `lib/features/logs/views/log_stream_page.dart:29-35`，两个日志页共用
+（任务页 `import … show kLogSettleAttempts, kLogSettleRetryDelay`，`task_list_page.dart:41-42`；两页都
+`import 'package:dio/dio.dart' show DioException` 用来认 4xx）：
+
+```dart
+const int kLogSettleAttempts = 5;                                  // 最多查几次
+const Duration kLogSettleRetryDelay = Duration(milliseconds: 500); // 每次查之前等多久（第一次也等）
+```
 
 **3. 契约**
 
@@ -469,19 +483,47 @@ final msg = extractErrorMessage(error, '加载失败');   // api_utils.dart:44
 3. 第一条 SSE data（`SseClient` 每条 `data:` 行回调一次，所以就是历史第一行）：
    `_logFromSse = true` + `_log.replaceAll(newLines)`，**不过** `consume`；之后照常 `consume` → `append`。
 4. `_applyLiveSnapshot` 只在 `!_logFromSse` 时 `replaceAll(logs)`：SSE 出错降级轮询、再连上时，
-   正文仍是 SSE 的内容，重放去重对得上。
-5. `done`：`finished`、`finished-late`（面板 v3.2.0 起）都算结束 → `_done = true`、「已完成」；
-   这时若 `!_logFromSse`（这条流一行数据都没送来：live-logs 时还在跑，连上 SSE 时已经结束），
-   **保留快照**并调 `_fallbackToLatestLog()`。`reconnect` → 运行中；其它值不算结束
-   （`timeout` 显示「等待日志...」，不认识的值原样显示，见 `_statusFromStreamDone`）。
+   正文仍是 SSE 的内容，重放去重对得上。快照说「还有内容、任务已不在跑、也不在排队」（别处点了停止，宽限期里 TinyLog 还在）时
+   停掉轮询、调 `_fallbackToLatestLog()` 结算。
+5. **`done: finished` / `finished-late` 只表示流结束，不带成败**（`finished-late` 面板 v3.2.0 起才有，对 APP 同义）：
+   → `_done = true`，状态写中性的「已结束」（停止过写「已停止」，已结算过直接写结果），**然后一律调 `_fallbackToLatestLog()` 结算**。
+   `!_logFromSse`（这条流一行数据都没送来：live-logs 时还在跑，连上 SSE 时已经结束）时**保留快照**，结算拿到 latest-log 正文再换；
+   `_logFromSse` 时只取结果、不换正文。`reconnect` → `_done = false`、「运行中」；其它值不算结束（`timeout` 显示「等待日志...」，
+   不认识的值原样显示，见 `_statusFromStreamDone`）。**停止之后只认 `finished` / `finished-late`**，`reconnect` 等一律忽略
+   （按钮不能变回「停止运行」）。
 6. 轮询每一跳在 `await` live-logs 之后、动任何状态之前先判 `identical(timer, _pollTimer)`，
    不是当前这一轮就整跳作废；放弃分支同样只许当前这一轮执行。
-7. 放弃（`_pollAttempts >= 15` 且状态仍是「等待日志...」）：停轮询 →
-   `!_logFromSse && _liveStatus != kTaskStatusQueued` 时 `await _fallbackToLatestLog()` →
-   `_done = true`（不再跟着「有没有日志」走）、状态 `_log.isEmpty ? '暂无日志' : '已完成'`。
-8. `_fallbackToLatestLog()` 吞掉一切错误；`await` 之后 `!mounted || _logFromSse || content.isEmpty`
-   都不动正文（SSE 已经来了就以 SSE 为准）；否则归一 `\r\n`、去掉结尾空行后 `replaceAll`。
-9. `SseAuthFailure` 不降级轮询（同上一节）。
+7. 放弃（`_pollAttempts >= 15` 且状态仍是「等待日志...」）：停轮询 → `_liveStatus != kTaskStatusQueued` 时
+   `await _fallbackToLatestLog()`（**不再要求 `!_logFromSse`**：结果总是要结算，正文换不换由第 8 条决定）→
+   `_done = true`（不再跟着「有没有日志」走）、状态 `已结算 ? 结果 : (_log.isEmpty ? '暂无日志' : '已结束')`。
+8. `_fallbackToLatestLog()`：已在结算（`_settling`）或已有 `_runResult` 就直接返回——done、轮询收口、停止、快照都可能触发，只查一轮。
+   最多 `kLogSettleAttempts` 次，**每次请求之前先等 `kLogSettleRetryDelay`（第一次也等）**：面板先关 TinyLog（SSE 随即发 done），
+   再读文件、压缩，最后才把结果写进 `task_logs`（见 panel-contract.md「停止与结算的时序」），刚收到 done 就查几乎总是「运行中」。每次回来：
+   - `status` 不是运行中（2）才算结算出来：写 `_runResult`；已收口（`_done`）就把状态写成结果（`_runResultLabel`）——成功「已完成」（绿）、
+     失败「失败」（红）、已终止「已终止」（中性）；
+   - 正文**最多换一次**：`!_logFromSse` 且 `content` 非空时归一 `\r\n`、去掉结尾空行后 `replaceAll`；等结果期间 SSE 送来了内容就以 SSE 为准，
+     重试拿到的正文不换第二遍（免得正在看的位置被重排两次）；
+   - 还是运行中 → 等一拍再查；面板没给 `status` → 停；**4xx（`DioException`，如 404 从没跑过 / 被保留策略清理）不重试**，其它错误下一轮再查；
+   - 查满次数仍是运行中：保持中性「已结束」，不报错、不猜成败。每次 `await` 之后 `!mounted` 或 `_runGeneration` 变了都整次作废。
+9. **状态胶囊的绿 / 红只认 `_runResult`**（`_resolveLiveTone`）：流结束、轮询收口、停止本身都说不出成败，一律中性；
+   「连接错误」「登录已失效」是红。
+10. **只有 live-logs 报告运行中或排队中才给「停止运行」**：`_stoppable` = `_liveStatus == kTaskStatusRunning || _liveStatus == kTaskStatusQueued`，
+    `onStop: !_done && _stoppable && canOperate`（`:3890`）。不能只看 `!_done`：几秒就跑完的任务进来时 live-logs 已经是空的，页面会在
+    「等待日志...」里轮询最多 15 秒（`_done` 一直是 false），这时任务早就结束了。
+11. **停止之后不关 SSE**（`_stopLiveTask`）：
+    - 请求发出**之前**先置 `_stopRequested = true`：停止接口还要等任务列表重拉，这期间 done 先到也只能显示「已停止」，不能先闪别的结果；
+    - `_stopRequested` 期间 SSE 送来的行（TERM 收尾、后置脚本、终止提示）只追加正文，**不改状态**；
+    - 成功：停掉轮询、`_done = true`、胶囊「已停止」（已结算过写结果），等随后的 `done: finished` 触发结算（面板已把这次记成已终止）；
+    - 成功时 SSE 已经出错断开、页面在降级轮询（`_sseDropped`）：**重连 SSE**，不当场结算——面板 Stop 返回前就把日志行记成 Aborted，
+      当场结算第一次就收口，宽限期里的收尾输出再也拿不到；重连从头重放（去重后只补新行），最后照常 `done` 触发结算；
+    - 停止之后 SSE 出错（`onError`）、或没收到 done 流就断了（`onDone`）：不报「连接错误」，直接结算；
+    - 排队中停止（一直在轮询、没连过 SSE）：停掉轮询，不连 SSE、不结算（那时 latest-log 是上一次运行的）；
+    - 失败：`_stopRequested = false`；在途期间 done 先到、写成了「已停止」的改回「已结束」，结果仍由那次结算给。
+12. `SseAuthFailure` 不降级轮询（同上一节）：`_done = true`、「登录已失效」。
+13. **没收到 done 流就收口（`onDone` 且 `!_done`，反代掐了长连接这类）与 `onError` 的非鉴权分支同等处理**：
+    `_sseDropped = true`、胶囊「连接结束」、停掉旧轮询再 `_startPolling()`。轮询发现还在跑会重连 SSE，跑完了就结算；
+    之后（或在途时）点停止，第 11 条按 `_sseDropped` 重连 SSE 接回收尾输出，`done` 后结算。改前这里只写「连接结束」：
+    不轮询、不置 `_sseDropped`，「停止运行」还在，点了既不重连也不结算，胶囊永远是「已停止」、收尾输出一行也拿不到。
 
 **4. 校验与错误矩阵**
 
@@ -489,28 +531,47 @@ final msg = extractErrorMessage(error, '加载失败');   // api_utils.dart:44
 |---|---|---|
 | 运行中：几十行快照（首行半截）+ SSE 300 行历史 | 300 行，首行是历史第 1 行 | 「复制全部」= 这 300 行 |
 | 快照恰好从历史第 2 行开始、每行完整 | 历史一行不少 | — |
-| SSE 只回 `done: finished` / `finished-late` | 先留着快照，再换成 latest-log 全量 | latest-log 恰 1 次，不出现「无日志内容」 |
-| 同上，latest-log 404 | 保留快照（日志不到 4KB 时它就是全量） | 不空白 |
-| SSE 断线 → 轮询 → 再连（面板重放 305 行） | 305 行、无重复 | 共 2 条 SSE，「已完成」 |
-| 刚跑完（live-logs `logs: []`、`status: 1`） | 第 15 跳放弃时换成 latest-log | latest-log 恰 1 次，「已完成」 |
+| SSE 只回 `done: finished` / `finished-late` | 先留着快照，再换成 latest-log 全量 | latest-log 恰 1 次，不出现「无日志内容」；结算为成功时「已完成」 |
+| 同上，latest-log 404 | 保留快照（日志不到 4KB 时它就是全量） | 不空白；4xx 不重试，停在「已结束」 |
+| SSE 推完历史 + `done: finished`，latest-log 回失败（`status: 1`） | SSE 的内容，不换 | 先中性「已结束」、latest-log 0 次；约 0.5 秒后红色「失败」、latest-log 1 次，没有绿色对勾 |
+| latest-log 一直回运行中（面板还没写完结果） | 不变 | latest-log 恰 `kLogSettleAttempts` 次，停在中性「已结束」，没有对勾也没有叉 |
+| SSE 断线 → 轮询 → 再连（面板重放 305 行） | 305 行、无重复（latest-log 的正文不拿来换） | 共 2 条 SSE；结算为成功时「已完成」 |
+| 刚跑完（live-logs `logs: []`、`status: 1`） | 第 15 跳放弃时换成 latest-log | latest-log 恰 1 次；结算为成功时「已完成」 |
 | 刚跑完 + live-logs 每次 1.5 秒 | 同上 | 放弃后 live-logs 调用数不再增加 |
-| 刚跑完、latest-log 404 | 「无日志内容」 | AppBar「暂无日志」、不再转圈、正文不挂「等待日志输出...」 |
+| 刚跑完、latest-log 404 | 「无日志内容」 | 胶囊「暂无日志」、不再转圈、正文不挂「等待日志输出...」 |
 | 一直排队（`status: 0.5`） | 「无日志内容」 | **不回落**（拿到的会是上一次运行的日志），「暂无日志」 |
+| 刚跑完、还在「等待日志...」里轮询 | — | **不给**「停止运行」；排队中的照样给 |
+| 运行中点停止，SSE 不断 | 收尾输出照常追加 | 「已停止」不改回「运行中」；随后的 `done` → latest-log 结算成「已终止」 |
+| 停止之后 SSE 没等到 done 就断了 | 不变 | 不报「连接错误」，直接结算成「已终止」 |
+| SSE 出错降级轮询时点停止 | 重连 SSE，接回宽限期的收尾输出 | `done` 之后再结算 |
+| SSE 没等到 done 就收口（`onDone`）后点停止 | 重连 SSE，接回宽限期的收尾输出 | 共 2 条 SSE；`done` 之后结算成「已终止」、latest-log 恰 1 次 |
+| SSE 没等到 done 就收口、任务其实已经跑完 | SSE 的内容，不换 | 降级轮询；live-logs 空了第 15 跳放弃时去 latest-log 结算，不再连 SSE |
+| 排队中点停止 | — | 停掉轮询，不连 SSE、latest-log 0 次 |
+| 降级轮询拿到「快照还在、任务已不在跑」 | — | 停掉轮询，去 latest-log 结算 |
+| 停止请求在途时 `done` 先到、停止却失败 | — | 结算拿不到结果就是「已结束」，不停在「已停止」 |
 
 **5. 正常 / 基础 / 错误用例**
 
-- 正常：打开运行中任务 → 先看到快照 → 历史第一行到达时整段换成 SSE 内容 → 实时追加。
-- 基础：从任务列表点「运行」一个几秒就结束的任务 → live-logs 已经是空的 → 约 15 秒后回落 latest-log。
+- 正常：打开运行中任务 → 先看到快照 → 历史第一行到达时整段换成 SSE 内容 → 实时追加 → `done: finished` → 中性「已结束」→
+  约 0.5 秒后按 latest-log 显示「已完成 / 失败 / 已终止」。
+- 基础：从任务列表点「运行」一个几秒就结束的任务 → live-logs 已经是空的 → 约 15 秒后回落 latest-log；这段时间里没有「停止运行」。
 - 错误：live-logs 说还在跑、SSE 连上时已经结束（短任务常见）→ 只回 done → 不得空白。
   调研原案 R3「运行中不展示快照」就会在这里显示「无日志内容」，已否决。
+- 错误：脚本失败退出 → 面板照样只发 `done: finished` → **不得出绿色对勾**（v3.0 改版初版把 finished 硬写成「已完成」，失败的任务也显示成功）。
 
-**6. 必须有的测试**（`test/features/tasks/task_live_log_page_test.dart`；造数与注入写法见
+**6. 必须有的测试**（`test/features/tasks/task_live_log_page_test.dart`，22 条；造数与注入写法见
 [quality-guidelines.md](./quality-guidelines.md)「日志视图与实时日志页的测试约定」）
 
 - 快照 + 300 行历史：`totalCount == 300`、`lines.first == history.first`、剪贴板 == `history.join('\n')`；
 - 快照恰好从第 2 行开始：先自检 `snapshot == [...history.skip(1), '']`，再断言 `lines == history`。
   它钉的是契约第 2 条——快照首行是半截时第一处就对不上，就算把快照交给去重也不会吞行，钉不住；
-- `finished`、`finished-late` 各一条：没有「无日志内容」、有「已完成」、`countOf(latestLog) == 1`、`lines == history`；
+- `finished`、`finished-late` 各一条：没有「无日志内容」、latest-log（回成功）结算后有「已完成」、`countOf(latestLog) == 1`、`lines == history`；
+- 脚本失败退出：结算前胶囊里是「已结束」、latest-log 0 次，结算后红色「失败」、没有对勾；latest-log 一直运行中：
+  `countOf(latestLog) == kLogSettleAttempts`、停在「已结束」、既没有对勾也没有叉。**推进结算要按节奏 pump**：
+  `for (var i = 0; i < kLogSettleAttempts + 2; i++) await tester.pump(kLogSettleRetryDelay);`；
+- 停止相关：刚跑完不给停止 / 排队中能停、停止后 SSE 不断（收尾行照常追加、不回「运行中」、结算「已终止」）、停止后 SSE 断、
+  降级轮询时停止要重连 SSE、`onDone` 收口后停止同样要重连 SSE（`connections == 2`、收尾两行在、「已终止」）、
+  排队中停止不连 SSE 不结算、在途时 done 先到停止却失败；状态文字用 `_inPill(find.text(...))` 只在胶囊里找；
 - 矩阵其余各行各一条；慢网那条要在放弃后再推 20 秒，断言 live-logs 调用数不变、latest-log 仍是 1 次。
 
 **7. 错误 vs 正确**
@@ -544,6 +605,50 @@ _applyLiveSnapshot(extractData(resp.data));
 // ✅ await 之后、动任何状态之前：
 if (!identical(timer, _pollTimer)) return;
 ```
+
+```dart
+// ❌ v3.0 改版初版：把流结束当成功，「已完成」配绿色对勾（两个日志页都是；v2.0 只是文案写「已完成」、胶囊中性）
+if (event.data == 'finished') {
+  setState(() { _done = true; _statusText = '已完成'; });   // 脚本失败退出也是绿色对勾
+}
+// ❌ 刚收到 done 就查结果：面板还没写库，几乎总是「运行中」；不等就连查几遍，运行中的详情每次都是整份日志
+// ✅ 先说「已结束」，结果去 latest-log 结算（每次查之前等 kLogSettleRetryDelay，status 不是运行中才算数，4xx 不重试）
+setState(() { _done = true; _statusText = _stopRequested ? '已停止' : '已结束'; });
+_fallbackToLatestLog();
+```
+
+```dart
+// ❌ 停止成功就关 SSE、停轮询，当场写终态（v3.0 改版新加「停止运行」时的写法）：宽限期里的收尾输出和真实结果都丢了
+_sseClient.close(); _pollTimer?.cancel(); setState(() { _done = true; _statusText = '已停止'; });
+// ✅ SSE 不关，收尾行只追加、不改状态，等 done 再结算；SSE 已经断了（降级轮询中）就重连，不当场结算
+// 「断了」包括 onError 和没等到 done 的 onDone：两处都要置 _sseDropped、降级轮询，只置一处另一条路就卡在「已停止」
+final reconnect = _sseDropped;
+setState(() { _done = true; _statusText = _runResult != null ? _runResultLabel(_runResult!) : '已停止'; });
+if (reconnect) _connectSSE(widget.taskId);
+```
+
+**已知、未处理**：`_applyLiveSnapshot` 的「快照还在、任务已不在跑」分支用 `_statusFromLiveTask(1, done: true)` 生成文案，
+结算回来之前胶囊会短暂显示「已启用」（任务状态的叫法），结算拿不到结果时一直停在这里。v3.0 之前就是这样；要改就在这个分支里写「已结束」。
+
+#### `LogStreamPage` 的结算与停止（同一套口径，`lib/features/logs/views/log_stream_page.dart`）
+
+日志详情页的正文只从 SSE 来，结果从**日志详情**（`GET ApiEndpoints.logById(id)`）结算：
+
+- 状态：`_logStatus`（`task_logs.status`，只从日志详情取，`_resultKnown` = 不是 null 也不是运行中，`:195`）、`_stopRequested`、
+  `_statusIfStopFails`（停止请求在途时流先收口了，原本该显示的状态记在这里）、`_settling` / `_settleRetryTimer`、`_loadGeneration`。
+- `done: reconnect` → 「运行中」（停止之后忽略）。其它 `done` → `_done = true`；`finished` / `finished-late` 先写中性「已结束」，
+  不认识的值原样显示；停止过就显示「已停止」并把上面那个值记进 `_statusIfStopFails`；已结算过不改。随后 `_settleFromDetail()`（`:206`）：
+  每次查之前等 `kLogSettleRetryDelay`，还在运行就再等再查，最多 `kLogSettleAttempts` 次，4xx 不重试；结算后写详情的 `statusText`
+  （成功 / 失败 / 已终止）和耗时。**正文不换**：SSE 送来的就是这次运行的输出，换成详情正文会把正在看的位置整个重排。
+- `onDone` 时还没收到过 done（状态仍是「运行中 / 连接中...」，反代掐了长连接等）：任务多半还在跑 → 「连接结束」，只查**一次**详情，
+  不按收口的节奏连查（运行中的详情每次都是整份日志）。
+- `onError`：「连接错误」/「登录已失效」终态（红）；停止过则显示「已停止」并结算，停止请求还在途时把出错记进 `_statusIfStopFails`。
+- 停止（`_stopTask`，`:442`）：同样请求前先置 `_stopRequested`、成功后**不关 SSE**、收尾行只追加；在途期间流已经收口的，成功后补一次结算；
+  失败时把 `_statusIfStopFails` 补回（「已结束」「连接错误」等），已结算出结果的不改。
+- 胶囊绿 / 红只认 `_logStatus`（`_resolveTone`，`:561`）；「已结束」「已停止」「连接结束」一律中性。
+- 测试：`test/features/logs/log_stream_result_test.dart`（13 条：失败退出显示红色「失败」、正常跑完绿色「成功」、结果晚一拍写库要隔一会儿再查、
+  一直运行中停在「已结束」、停止后收尾输出与 done、停止在途 done 先到、先等一拍再查、没收到 done 就断只查一次、停止后 SSE 断、
+  停止在途 SSE 断且停止失败、停止在途 done 先到且停止失败、下载原始日志时 `⋮` 转圈、截断后复制提示现算）。
 
 ---
 

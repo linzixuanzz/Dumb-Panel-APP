@@ -22,7 +22,11 @@ include: package:flutter_lints/flutter.yaml
 
 ## 告警基线：7 个 info（不得增加）
 
-`flutter analyze` 当前输出 **7 个 info，0 warning，0 error**，全部是既有问题：
+> **现状（2026-11-28 实跑，v3.0.0 开发中）：`flutter analyze` 0 issue。** 本节下面的 7 条是 v1.4.0 时的清单，留作历史：
+> `_User` 影子模型在 v2.0 改版时已删；乙类那处所在的 `_ScriptDebugRunSheetState` v3.0 已删（脚本调试改成独立页面 `ScriptDebugLogPage`）。
+> 「修掉旧的可以，新增的不行」照旧——基线现在是 0，新增任何一条都算违反。
+
+`flutter analyze` 当时输出 **7 个 info，0 warning，0 error**，全部是既有问题：
 
 | 规则 | 数量 | 已定位的成因 |
 |---|---|---|
@@ -147,16 +151,22 @@ test/
 └── widget_test.dart                     空态 vs 错误态的渲染差异
 ```
 
-> ⚠️ **上面这棵树不是全量**，它停在第 0/1 期的形态。`test/` 下实际有 **43 个 `*_test.dart`、619 个用例**
-> （2026-10-09 glob + 实跑，v1.4.0 开发中），树里只画了 7 个。没画进来的包括：`features/system/system_config_schema_test.dart`、
+> ⚠️ **上面这棵树不是全量**，它停在第 0/1 期的形态。`test/` 下实际有 **95 个 `*_test.dart`、1103 个用例**
+> （2026-11-28 glob + 实跑，v3.0.0 开发中；v1.4.0 时是 43 个 / 619 个），树里只画了 7 个。没画进来的包括：`features/system/system_config_schema_test.dart`、
 > `features/notifications/notify_field_schema_test.dart`、`features/tasks/cron_schema_test.dart`、
 > `features/subscriptions/subscription_auth_test.dart`、`features/envs/env_transfer_test.dart`、
 > `features/logs/raw_log_download_test.dart`、`shared/panel_enums_test.dart`、
-> `shared/duration_utils_test.dart`、`shared/utils/api_utils_test.dart`，日志视图那三份：
-> `shared/utils/log_line_buffer_test.dart`、`shared/widgets/log_view_test.dart`、
-> `features/tasks/task_live_log_page_test.dart`（写法见下方「日志视图与实时日志页的测试约定」），
-> 以及 v1.4.0 新增的 `features/envs/env_sort_test.dart`、`features/envs/env_important_test.dart`、
-> `features/dashboard/trend_chart_test.dart`（写法见下方「widget 测试的写法约束」）。
+> `shared/duration_utils_test.dart`、`shared/utils/api_utils_test.dart`，日志视图与日志页那一组（写法见下方
+> 「日志视图与实时日志页的测试约定」）：`shared/utils/log_line_buffer_test.dart`、`shared/widgets/log_view_test.dart`、
+> `features/tasks/task_live_log_page_test.dart`，以及 v3.0 起的 `shared/widgets/log_view_jump_test.dart`（按行号跳转的锚点）、
+> `shared/widgets/fullscreen_log_scaffold_test.dart`（全屏日志壳）、`features/logs/log_stream_result_test.dart`（日志详情页的结算与停止）、
+> `features/scripts/script_debug_log_page_test.dart`、`features/system/panel_log_page_test.dart`、
+> `features/deps/dep_log_stream_page_test.dart`、`features/subscriptions/subscription_log_pages_test.dart`；
+> v1.4.0 新增的 `features/envs/env_sort_test.dart`、`features/envs/env_important_test.dart`、
+> `features/dashboard/trend_chart_test.dart`（v2.0 改版 `5f5798d` 时已删）（写法见下方「widget 测试的写法约束」）；v3.0 起的主题守护
+> `core/theme/dark_mode_contrast_test.dart`（深色下红底按钮、更新弹窗、视图编辑器的实测对比度）、
+> `core/theme/status_button_foreground_test.dart`（扫描 `lib/`：底色取自状态色的按钮样式必须写 `foregroundColor`，见
+> component-guidelines.md「v3.0 设计令牌」），以及 `features/envs/env_reenable_test.dart`（APP #29：编辑已禁用变量改了值，保存后自动启用）。
 > **判断某条链路有没有测试请直接 glob `test/**/*_test.dart`，不要只看这棵树。**
 
 > `TokenRefresher` 是单例，`setUp` 里必须调 `resetForTest()`：
@@ -232,7 +242,21 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 目的：让「卡不卡」「选区跑没跑」这类以前只能上真机看的东西，在 `flutter test` 里有稳定的断言。
 现成写法在 `test/shared/widgets/log_view_test.dart`、`test/shared/utils/log_line_buffer_test.dart`、
 `test/features/tasks/task_live_log_page_test.dart`；契约本身见 component-guidelines.md「日志正文」
-与 hook-guidelines.md「实时日志页」。
+与 hook-guidelines.md「实时日志页」。v3.0 起的日志页与日志壳测试：
+
+| 文件 | 钉什么 |
+|---|---|
+| `test/shared/widgets/log_view_jump_test.dart` | 按行号跳转的锚点（静态 / 跟随各一组）：目标行在视口靠上处、末尾一屏内贴底不留白、跳转那一帧就排对、整段替换后回顶部、跳转暂停跟随 |
+| `test/shared/widgets/fullscreen_log_scaffold_test.dart` | 胶囊四态、页内搜索与护眼暗底、`FullscreenLogIndex` 增量维护（5 万行逐行追加每行最多判两次）、首处报错判定、底栏芯片窄屏不被挤出与 Tooltip 规则、44dp 命中区、`errorMessage` / `menuBusy` / `openScriptBusy` / 复制提示现算 |
+| `test/features/logs/log_stream_result_test.dart` | 日志详情页流结束后按详情结算（失败不打绿勾、结果晚一拍写库要再查、查满停在「已结束」）、停止后的各种收口、`⋮` 转圈、截断后复制提示 |
+| `test/features/scripts/script_debug_log_page_test.dart` | 轮询整份日志时没变不动 / 只追加 / 对不上才替换（选区与「新增 N 行」保留）、在途保护、停止后晚到的旧回包作废 |
+| `test/features/system/panel_log_page_test.dart` | 筛选弹层 360dp + 1.3 倍字号与键盘、自定义行数、同帧两次提交、改筛选后旧回包不覆盖 |
+| `test/features/deps/dep_log_stream_page_test.dart` | 依赖流各结束值的胶囊与横幅、断流不是「安装完成」、按面板真实状态给按钮、取消 / 重装走 PUT |
+| `test/features/subscriptions/subscription_log_pages_test.dart` | 订阅流 `not_running`、断线横幅；拉取详情副标题不写「耗时 -」 |
+
+结算（等 `kLogSettleRetryDelay` 再查）要按节奏推：`for (var i = 0; i < kLogSettleAttempts + 2; i++) await tester.pump(kLogSettleRetryDelay);`，
+用 `FakeHttpAdapter.countOf(latestLog / logById)` 断言查了几次。底栏芯片按 Key 找（`fullscreen-log-copy` 等），**不要 `find.byTooltip`**：
+带字形态不套 Tooltip（component-guidelines.md「`FullscreenLogScaffold`」）。深色主题下顶栏没有护眼暗底按钮，要切它就用浅色主题或走 `⋮` 菜单。
 
 1. **只做结构性断言，不计时。** JIT debug 的耗时同一个用例跑两次能差 ±30%。该断言的是：
    - 下方列表行数：key 以 `log-below-` 开头的 `SliverPadding`（`skipOffstage: false`）下的 `SliverList`，
@@ -388,7 +412,7 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 
 改动提交前逐条自检：
 
-- [ ] `flutter analyze` ≤ 7 个 info，且没有新增类型
+- [ ] `flutter analyze` 不超过基线（v3.0.0 起是 0 issue；v1.4.0 时是 7 个 info），且没有新增类型
 - [ ] `flutter test` 全绿
 - [ ] 新增/修改的请求路径在 `ApiEndpoints` 里
 - [ ] 响应解包走 `api_utils.dart` 而不是手写 `['data']`
@@ -399,7 +423,8 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
 - [ ] 如果动了 `dio_client.dart` 的 `validateStatus`，**所有**受影响调用点都逐个确认过
 - [ ] 如果动了 `android/`（Kotlin / Manifest），另跑过 `flutter build apk --debug` 或 `gradlew :app:compileDebugKotlin`——analyze 与 test 都看不见那一侧
 - [ ] 如果动了平台通道的错误码，Dart 侧 `_installErrorText` 与原生侧同步改过
-- [ ] 如果动了 `LogView` / `LogLineBuffer` / 实时日志页：`log_view_test`、`log_line_buffer_test`、`task_live_log_page_test` 全过；新加的「跟随但锚点不滑」分支同时设了 `holdTrim`（见 component-guidelines.md「日志正文」）
+- [ ] 如果动了 `LogView` / `LogLineBuffer` / 实时日志页：`log_view_test`、`log_view_jump_test`、`log_line_buffer_test`、`task_live_log_page_test`、`log_stream_result_test` 全过；新加的「跟随但锚点不滑」分支同时设了 `holdTrim`（见 component-guidelines.md「日志正文」）
+- [ ] 如果加了底色取自状态色的按钮：写了 `foregroundColor`（`status_button_foreground_test` 会扫出来，见 component-guidelines.md「v3.0 设计令牌」）
 
 ---
 
@@ -409,6 +434,9 @@ Dio get _dio => _injectedDio ?? DioClient.instance.dio;
   **路径含空格会让 `flutter test` 在 native assets 构建阶段失败**
   （hook runner 未给 dart 可执行文件加引号）。
   当前用目录联接 `D:\flutter-nospace` 绕过。
+- **在 bash（Git Bash）脚本里不要把变量命名为 `TMP`**：Git Bash 里 `TMP` 本来就是导出的环境变量，赋值就改掉了子进程看到的值，
+  Windows 找系统临时目录又先看 `TMP`，于是 `flutter test` 直接报 `system temp directory does not exist`，看起来像 SDK 坏了。
+  临时目录变量换个名字（如 `WORK_DIR`）。（v3.0 审查修复时实测踩到。）
 
 ### ★ `JAVA_HOME` 指着 Java 8，跑 Gradle 前必须先改（本机实测，v1.3.7）
 
