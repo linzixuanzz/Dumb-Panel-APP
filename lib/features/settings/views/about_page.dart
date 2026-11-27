@@ -148,10 +148,12 @@ class _AboutPageState extends State<AboutPage> {
                   leading: ClipOval(
                     // 裸 Image.network 打第三方域名在本 APP 已经线上跑着
                     // （赞助页头像打的就是 dumblist.linzixuan.top），照它写。
+                    // 边长取 leadingWidth：分隔线起点按这个槽宽算，
+                    // 头像大一号，标题就会比分隔线靠右。
                     child: Image.network(
                       _kAuthorAvatar,
-                      width: 36,
-                      height: 36,
+                      width: AppGroupedRow.leadingWidth,
+                      height: AppGroupedRow.leadingWidth,
                       fit: BoxFit.cover,
                       // 没网 / 被墙时不要留白洞，退回首字母圆底。
                       errorBuilder: (_, error, stackTrace) =>
@@ -211,8 +213,8 @@ class _AboutPageState extends State<AboutPage> {
 
 /// 作者头像的兜底。
 ///
-/// 尺寸必须和 `Image.network` 的 36 逐像素一致：不一致的话，图加载失败的那一刻
-/// 整行会当场跳一下。
+/// 尺寸必须和 `Image.network` 一样取 [AppGroupedRow.leadingWidth]：不一致的话，
+/// 图加载失败的那一刻整行会当场跳一下，标题也会和分隔线错开。
 class _AuthorFallbackAvatar extends StatelessWidget {
   const _AuthorFallbackAvatar();
 
@@ -220,8 +222,8 @@ class _AuthorFallbackAvatar extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.palette;
     return Container(
-      width: 36,
-      height: 36,
+      width: AppGroupedRow.leadingWidth,
+      height: AppGroupedRow.leadingWidth,
       decoration: BoxDecoration(
         color: palette.tint(palette.accent),
         shape: BoxShape.circle,

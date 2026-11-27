@@ -5,6 +5,7 @@ import 'package:daidai_app/core/network/dio_client.dart';
 import 'package:daidai_app/core/services/app_update_service.dart';
 import 'package:daidai_app/core/storage/secure_storage.dart';
 import 'package:daidai_app/core/theme/app_theme.dart';
+import 'package:daidai_app/core/theme/design_tokens.dart';
 import 'package:daidai_app/core/theme/theme_mode_provider.dart';
 import 'package:daidai_app/features/settings/views/settings_page.dart';
 import 'package:daidai_app/shared/models/user.dart';
@@ -137,6 +138,55 @@ void main() {
 
     await _closePage(tester);
   });
+
+  for (final dark in [false, true]) {
+    testWidgets('${dark ? '深色' : '浅色'}个人卡：面板地址用次要文字色；'
+        '没有不反映真实状态的「在线」绿点；头像框圆角走令牌', (tester) async {
+      final container = await _open(tester);
+      if (dark) {
+        container.read(themeModeProvider.notifier).set(ThemeMode.dark);
+        await tester.pumpAndSettle();
+      }
+      await tester.pump(const Duration(milliseconds: 100));
+      final p = dark ? AppPalette.dark : AppPalette.light;
+
+      // 地址是面板未命名时卡上唯一的标识：text2（对卡片约 6:1），不是 text3（约 2.5:1）
+      final host = tester.widget<Text>(find.text('nas.example.com:5700'));
+      expect(host.style!.color, p.text2);
+
+      // 设置页拿不到连通状态：卡片上不该有常亮的 ok 色圆点
+      final card = find.ancestor(
+        of: find.text('tester'),
+        matching: find.byType(InkWell),
+      );
+      final dots = find.descendant(
+        of: card,
+        matching: find.byWidgetPredicate((w) {
+          final deco = w is Container
+              ? w.decoration
+              : w is DecoratedBox
+              ? w.decoration
+              : null;
+          return deco is BoxDecoration &&
+              deco.shape == BoxShape.circle &&
+              deco.color == p.ok;
+        }),
+      );
+      expect(dots, findsNothing);
+
+      // 头像框：外层 cardSm，内层减去 1dp 描边，内外同心
+      final clip = tester.widget<ClipRRect>(
+        find.descendant(of: card, matching: find.byType(ClipRRect)).first,
+      );
+      expect(
+        clip.borderRadius,
+        BorderRadius.circular(AppRadius.cardSm - AppBorderWidth.hairline),
+      );
+      expect(tester.takeException(), isNull);
+
+      await _closePage(tester);
+    });
+  }
 
   testWidgets('管理员：管理 / 系统分区的入口都在，备份可直达', (tester) async {
     await _open(tester);

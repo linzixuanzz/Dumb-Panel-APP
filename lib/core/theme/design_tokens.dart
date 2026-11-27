@@ -184,7 +184,17 @@ class AppSurfaces {
   Color get cardBorder =>
       isLight ? const Color(0x0D1C1917) : const Color(0x14FFFFFF);
 
-  /// 极轻弥散阴影（仅用于白色浮层卡与底栏）。
+  /// 悬浮底栏的投影：比 [softShadow] 更深、更收（spread -6），让玻璃底栏浮在列表上方。
+  List<BoxShadow> get tabBarShadow => [
+    BoxShadow(
+      color: isLight ? const Color(0x140F172A) : const Color(0x47000000),
+      blurRadius: 28,
+      spreadRadius: -6,
+      offset: const Offset(0, 10),
+    ),
+  ];
+
+  /// 极轻弥散阴影（仅用于白色浮层卡）。
   List<BoxShadow> get softShadow => isLight
       ? const [
           BoxShadow(

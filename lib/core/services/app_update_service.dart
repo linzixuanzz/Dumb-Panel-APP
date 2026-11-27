@@ -9,7 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../shared/widgets/app_snack.dart';
 import '../network/app_user_agent.dart';
-import '../theme/app_theme.dart';
+import '../theme/design_tokens.dart';
 
 const _kGitHubRepo = 'linzixuanzz/Dumb-Panel-APP';
 const _kGitHubDownloadHost = 'github.com';
@@ -354,29 +354,20 @@ class AppUpdateService {
     bool fromAutoCheck = false,
   }) async {
     if (!context.mounted) return;
-    final isLight = Theme.of(context).brightness == Brightness.light;
 
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogCtx) => _UpdateDialog(
-        info: info,
-        isLight: isLight,
-        fromAutoCheck: fromAutoCheck,
-      ),
+      builder: (dialogCtx) =>
+          _UpdateDialog(info: info, fromAutoCheck: fromAutoCheck),
     );
   }
 }
 
 class _UpdateDialog extends StatefulWidget {
   final AppUpdateInfo info;
-  final bool isLight;
   final bool fromAutoCheck;
-  const _UpdateDialog({
-    required this.info,
-    required this.isLight,
-    this.fromAutoCheck = false,
-  });
+  const _UpdateDialog({required this.info, this.fromAutoCheck = false});
 
   @override
   State<_UpdateDialog> createState() => _UpdateDialogState();
@@ -483,6 +474,9 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   @override
   Widget build(BuildContext context) {
     final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+    // 颜色全走色板：AppColors 是按浅色调的常量，深色弹窗上版本号只有
+    // 3.08:1、报错文字 3.49:1，进度条底轨更是与弹窗同色。
+    final palette = context.palette;
 
     return AlertDialog(
       title: const Text('发现新版本'),
@@ -494,12 +488,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
             children: [
               Text(
                 'v${widget.info.currentVersion}',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: widget.isLight
-                      ? AppColors.slate500
-                      : AppColors.slate400,
-                ),
+                style: TextStyle(fontSize: 13, color: palette.text2),
               ),
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 8),
@@ -507,10 +496,10 @@ class _UpdateDialogState extends State<_UpdateDialog> {
               ),
               Text(
                 'v${widget.info.latestVersion}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
-                  color: AppColors.primary,
+                  color: palette.accentInk,
                 ),
               ),
             ],
@@ -529,9 +518,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
                   widget.info.releaseNotes,
                   style: TextStyle(
                     fontSize: 12,
-                    color: widget.isLight
-                        ? AppColors.slate600
-                        : AppColors.slate300,
+                    color: palette.text2,
                     height: 1.5,
                   ),
                 ),
@@ -542,10 +529,9 @@ class _UpdateDialogState extends State<_UpdateDialog> {
             const SizedBox(height: 16),
             LinearProgressIndicator(
               value: _progress,
-              color: AppColors.primary,
-              backgroundColor: widget.isLight
-                  ? AppColors.slate200
-                  : AppColors.slate800,
+              color: palette.accent,
+              // 底轨用半透明 fill：0% 时也看得出进度条有多长
+              backgroundColor: palette.fill,
             ),
             const SizedBox(height: 6),
             Center(
@@ -562,7 +548,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
             const SizedBox(height: 12),
             Text(
               _error!,
-              style: const TextStyle(fontSize: 12, color: AppColors.red500),
+              style: TextStyle(fontSize: 12, color: palette.errInk),
             ),
           ] else ...[
             const SizedBox(height: 12),
@@ -571,9 +557,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
               '更新包通过 GitHub 加速镜像下载，校验包名与签名后交给系统安装。若安装失败，可按提示重试或去开启安装权限。',
               style: TextStyle(
                 fontSize: 12,
-                color: widget.isLight
-                    ? AppColors.slate600
-                    : AppColors.slate300,
+                color: palette.text2,
                 height: 1.4,
               ),
             ),

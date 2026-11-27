@@ -3,6 +3,10 @@ import 'package:flutter/material.dart';
 import 'design_tokens.dart';
 
 /// 全局色值与终端语义色 —— 对齐 v3.0 Nordic Calm 设计系统。
+///
+/// 这些是不分明暗的常量，钴蓝 / 红 / 绿 / 紫都是按浅色底调的：放到深色
+/// 卡片上当文字只有 3.1~3.5:1，[slate800] 还与深色卡片同值。界面颜色一律走
+/// `context.palette`，这里只留给终端、编辑器这类自带底色的固定配色。
 class AppColors {
   // Primary（Nordic Cobalt 钴蓝体系）
   static const primary = Color(0xFF2B5BEE);
@@ -78,20 +82,22 @@ class AppTheme {
   static ThemeData dark() => _buildTheme(AppPalette.dark, Brightness.dark);
 
   static ThemeData _buildTheme(AppPalette p, Brightness brightness) {
+    // primary / error 就是状态实色 accent / err，压在上面的前景跟 onStatus 走：
+    // 深色下它们提亮了，写死白色时 Checkbox 的勾只有 2.89:1。
     final cs = ColorScheme.fromSeed(
       seedColor: p.accent,
       brightness: brightness,
       primary: p.accent,
-      onPrimary: Colors.white,
+      onPrimary: p.onStatus,
       secondary: p.accent,
-      onSecondary: Colors.white,
+      onSecondary: p.onStatus,
       surface: p.bg,
       onSurface: p.text,
       onSurfaceVariant: p.text2,
       outline: p.separator,
       outlineVariant: p.separator,
       error: p.err,
-      onError: Colors.white,
+      onError: p.onStatus,
       surfaceContainerLowest: p.card,
       surfaceContainerLow: p.card,
       surfaceContainer: p.card,
@@ -239,7 +245,14 @@ class AppTheme {
         shape: const StadiumBorder(),
       ),
       switchTheme: SwitchThemeData(
-        thumbColor: WidgetStateProperty.all(Colors.white),
+        // 打开时滑块压在 accent 轨道上，和 Checkbox 的勾一样跟 onStatus 走：
+        // 深色 accent 提亮后，白滑块只剩 2.89:1，不到非文字的 3:1。
+        // 关闭时轨道是半透明 fill，白滑块照旧。
+        thumbColor: WidgetStateProperty.resolveWith((states) {
+          return states.contains(WidgetState.selected)
+              ? p.onStatus
+              : Colors.white;
+        }),
         trackColor: WidgetStateProperty.resolveWith((states) {
           return states.contains(WidgetState.selected) ? p.accent : p.fill;
         }),
@@ -251,6 +264,10 @@ class AppTheme {
         ),
         fillColor: WidgetStateProperty.resolveWith((states) {
           return states.contains(WidgetState.selected) ? p.accent : null;
+        }),
+        // 勾压在 accent 实底上，与 fillColor 成对写明，不靠 onPrimary 间接推。
+        checkColor: WidgetStateProperty.resolveWith((states) {
+          return states.contains(WidgetState.selected) ? p.onStatus : null;
         }),
         side: BorderSide(color: p.text3, width: 1.5),
       ),

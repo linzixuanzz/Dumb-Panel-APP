@@ -487,7 +487,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   };
 }
 
-/// Nordic Calm 温润节点与个人卡：洁净纸感底、柔和描边与在线绿点，彻底取代刺眼星空紫卡。
+/// Nordic Calm 温润节点与个人卡：洁净纸感底、柔和描边，彻底取代刺眼星空紫卡。
+///
+/// 不画「在线」绿点：这页拿不到面板的连通状态（服务器地址只是本机存的），
+/// 常亮的绿点在面板宕机、断网时也是绿的，和概览页的红点自相矛盾（同 aa884e0）。
 class _NordicProfileCard extends StatelessWidget {
   const _NordicProfileCard({
     required this.username,
@@ -539,11 +542,17 @@ class _NordicProfileCard extends StatelessWidget {
                     width: 56,
                     height: 56,
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: palette.separator),
+                      borderRadius: BorderRadius.circular(AppRadius.cardSm),
+                      border: Border.all(
+                        color: palette.separator,
+                        width: AppBorderWidth.hairline,
+                      ),
                     ),
                     child: ClipRRect(
-                      borderRadius: BorderRadius.circular(15),
+                      // 描边占掉一圈：内层圆角减去描边宽，内外同心不露缝
+                      borderRadius: BorderRadius.circular(
+                        AppRadius.cardSm - AppBorderWidth.hairline,
+                      ),
                       child: Image.asset(
                         'assets/icon.png',
                         width: 56,
@@ -558,33 +567,16 @@ class _NordicProfileCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Row(
-                          children: [
-                            Flexible(
-                              child: Text(
-                                username ?? '未获取到用户信息',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w600,
-                                  letterSpacing: -0.2,
-                                  color: palette.text,
-                                ),
-                              ),
-                            ),
-                            if (host != null && host.isNotEmpty) ...[
-                              const SizedBox(width: 8),
-                              Container(
-                                width: 7,
-                                height: 7,
-                                decoration: BoxDecoration(
-                                  color: palette.ok,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                            ],
-                          ],
+                        Text(
+                          username ?? '未获取到用户信息',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: -0.2,
+                            color: palette.text,
+                          ),
                         ),
                         if (line2.isNotEmpty) ...[
                           const SizedBox(height: 3),
@@ -604,7 +596,9 @@ class _NordicProfileCard extends StatelessWidget {
                             host,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: AppText.meta.copyWith(color: palette.text3),
+                            // 面板没起名字时这是卡上唯一认得出当前面板的东西：
+                            // 用 text2（对卡片约 6:1），text3 只给占位和箭头
+                            style: AppText.meta.copyWith(color: palette.text2),
                           ),
                         ],
                       ],

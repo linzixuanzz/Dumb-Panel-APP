@@ -48,7 +48,8 @@ class AppPalette extends ThemeExtension<AppPalette> {
   /// 次级半透明填充：分段控件底槽、搜索框、次要按钮、底栏选中态。
   final Color fill;
 
-  /// 分段控件滑块底色。
+  /// 分段控件滑块底色。浅色是白块加投影；深色没有投影，只能靠底色和
+  /// [card2] 底槽拉开（≥ 2.3:1），太暗就看不出选中的是哪一段。
   final Color thumb;
 
   /// 一级正文文字（暖深石黑 / 暖柔白）。
@@ -85,7 +86,12 @@ class AppPalette extends ThemeExtension<AppPalette> {
   final Color warnInk;
   final Color purpleInk;
 
-  /// 状态实色徽章上的反白文字。
+  /// 状态实色（[accent] / [ok] / [err] / [warn] / [purple]）底上的前景：
+  /// 红底确认按钮的文字、实色徽章的数字、实色图标方块里的图标。
+  ///
+  /// 浅色是白；深色的状态色都提亮了，白字压上去只有 1.7~2.9:1，
+  /// 所以改用与 [bg] 同值的深墨（≥ 6.4:1）。只给粗体短标签和图标用；
+  /// 钴蓝主按钮底 [primaryBtnBg] 上用的是 [primaryBtnFg]，不是它。
   final Color onStatus;
 
   /// 主操作按钮底色与前景色（Nordic Cobalt 钴蓝配纯白文字，对比度 5.48:1）。
@@ -132,7 +138,8 @@ class AppPalette extends ThemeExtension<AppPalette> {
     card: Color(0xFF1B1D21),
     card2: Color(0xFF25282E),
     fill: Color(0x24FFFFFF), // rgba(255, 255, 255, 0.14)
-    thumb: Color(0xFF32363F),
+    // 对 card2 底槽 2.34:1，选中文字 text 压在上面仍有 5.8:1。
+    thumb: Color(0xFF5A606B),
     text: Color(0xFFF5F5F4),
     text2: Color(0xFFA8A29E),
     text3: Color(0xFF78716C),
@@ -147,7 +154,7 @@ class AppPalette extends ThemeExtension<AppPalette> {
     errInk: Color(0xFFF87171),
     warnInk: Color(0xFFFBBF24),
     purpleInk: Color(0xFFA78BFA),
-    onStatus: Color(0xFFFFFFFF),
+    onStatus: Color(0xFF121316),
     primaryBtnBg: Color(0xFF2B5BEE),
     primaryBtnFg: Color(0xFFFFFFFF),
     glass: Color(0xE01B1D21), // rgba(27, 29, 33, 0.88)

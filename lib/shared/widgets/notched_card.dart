@@ -37,13 +37,32 @@ class NotchedCard extends StatelessWidget {
   /// 卡片底色，默认 `palette.card`。
   final Color? color;
 
+  static const double _defaultNotchWidth = 208;
+  static const double _defaultNotchHeight = 82;
+
+  /// 默认缺口尺寸（效果演示同款）。
+  static const Size defaultNotchSize = Size(
+    _defaultNotchWidth,
+    _defaultNotchHeight,
+  );
+
+  /// 默认缺口间隙。
+  static const double defaultNotchGap = 12;
+
+  /// 默认缺口里 [notch] 实际拿到的大小（196 × 70，紧约束）。
+  /// 嵌入组件要按它给尺寸，别靠自己的默认值去碰运气。
+  static const Size defaultSlotSize = Size(
+    _defaultNotchWidth - defaultNotchGap,
+    _defaultNotchHeight - defaultNotchGap,
+  );
+
   const NotchedCard({
     super.key,
     required this.child,
     required this.notch,
-    this.notchSize = const Size(208, 82),
+    this.notchSize = defaultNotchSize,
     this.radius = AppRadius.card,
-    this.notchGap = 12,
+    this.notchGap = defaultNotchGap,
     this.color,
   });
 

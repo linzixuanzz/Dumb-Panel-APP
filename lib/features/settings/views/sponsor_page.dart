@@ -241,10 +241,12 @@ class _SponsorRow extends StatelessWidget {
     return AppGroupedRow(
       leading: avatarUrl.isNotEmpty
           ? ClipOval(
+              // 边长取 leadingWidth：分隔线起点按这个槽宽算，
+              // 头像大一号，标题就会比分隔线靠右。
               child: Image.network(
                 avatarUrl,
-                width: 36,
-                height: 36,
+                width: AppGroupedRow.leadingWidth,
+                height: AppGroupedRow.leadingWidth,
                 fit: BoxFit.cover,
                 errorBuilder: (context, error, stackTrace) =>
                     _FallbackAvatar(initial: sponsor.initial),
@@ -266,7 +268,8 @@ class _SponsorRow extends StatelessWidget {
   }
 }
 
-/// 头像兜底：首字母圆底。尺寸与 `Image.network` 的 36 一致，加载失败那一刻不跳。
+/// 头像兜底：首字母圆底。尺寸与 `Image.network` 一样取
+/// [AppGroupedRow.leadingWidth]，加载失败那一刻不跳，标题也不和分隔线错开。
 class _FallbackAvatar extends StatelessWidget {
   final String initial;
 
@@ -276,8 +279,8 @@ class _FallbackAvatar extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.palette;
     return Container(
-      width: 36,
-      height: 36,
+      width: AppGroupedRow.leadingWidth,
+      height: AppGroupedRow.leadingWidth,
       decoration: BoxDecoration(
         color: palette.tint(palette.accent),
         shape: BoxShape.circle,

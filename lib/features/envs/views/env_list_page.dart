@@ -15,6 +15,7 @@ import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_buttons.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_glass_circle_button.dart';
+import '../../../shared/widgets/app_grouped_list.dart';
 import '../../../shared/widgets/app_icon_tile.dart';
 import '../../../shared/widgets/app_large_title_header.dart';
 import '../../../shared/widgets/app_notice.dart';
@@ -842,8 +843,11 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                   height: 44,
                   child: FilledButton(
                     onPressed: () => Navigator.of(dialogCtx).pop(true),
+                    // 红底要配 onStatus：主题给的 primaryBtnFg 是钴蓝底上的白字，
+                    // 深色下压在提亮的红上不到 3:1。
                     style: FilledButton.styleFrom(
                       backgroundColor: dialogCtx.palette.err,
+                      foregroundColor: dialogCtx.palette.onStatus,
                     ),
                     // 按钮上写明实际删几个，免得用户以为选中的全删了。
                     child: Text(skipped > 0 ? '删除 $count 个' : '删除'),
@@ -893,6 +897,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                     onPressed: () => Navigator.of(dialogCtx).pop(true),
                     style: FilledButton.styleFrom(
                       backgroundColor: dialogCtx.palette.err,
+                      foregroundColor: dialogCtx.palette.onStatus,
                     ),
                     child: Text(important ? '仍要删除' : '删除'),
                   ),
@@ -3229,6 +3234,7 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
                     onPressed: () => Navigator.of(dialogCtx).pop(true),
                     style: FilledButton.styleFrom(
                       backgroundColor: dialogCtx.palette.err,
+                      foregroundColor: dialogCtx.palette.onStatus,
                     ),
                     child: const Text('清空并导入'),
                   ),
@@ -3532,6 +3538,10 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
                       backgroundColor: _mode == EnvImportMode.replace
                           ? palette.err
                           : null,
+                      // 替换模式是红底，前景随之换 onStatus；追加模式仍走主题
+                      foregroundColor: _mode == EnvImportMode.replace
+                          ? palette.onStatus
+                          : null,
                     ),
                   ),
                 ),
@@ -3546,7 +3556,8 @@ class _EnvImportSheetState extends State<_EnvImportSheet> {
 
 /// 变量列表里的一行（v2.0 分组列表）。
 ///
-/// 外观对齐 `AppGroupedRow`：左右内边距 18、36dp 的 [AppIconTile]、缩进到文字起点的发丝分隔线；
+/// 外观对齐 `AppGroupedRow`：同样的左右内边距、[AppIconTile] 尺寸与间距（引用它的常量）、
+/// 缩进到文字起点的发丝分隔线；
 /// 一组的第一行带上圆角、最后一行带下圆角（[first] / [last]），连起来就是一张白色大圆角卡片。
 /// 不直接用 `AppGroupedRow`：它的标题只能是一段字（这里要跟图钉和「重要」标记），
 /// 也没有左滑露出启用 / 删除 / 禁用；而且页面要懒加载（最多 5000 条），不能整组包进 `AppGroupedList`。
@@ -3597,10 +3608,10 @@ class _EnvCardState extends State<_EnvCard> {
   /// 三个按钮 + 两道间隔 + 左右各 8 的留白。
   static const double _actionsWidth = _actionWidth * 3 + _actionGap * 2 + 16;
 
-  /// 与 AppGroupedRow 同一套尺寸：分隔线从文字起点画起。
-  static const double _hPad = 18;
-  static const double _leadingSize = 36;
-  static const double _leadingGap = 14;
+  /// 与 AppGroupedRow 同一套尺寸（引用它的常量，不抄数字）：分隔线从文字起点画起。
+  static const double _hPad = AppGroupedRow.hPad;
+  static const double _leadingSize = AppGroupedRow.leadingWidth;
+  static const double _leadingGap = AppGroupedRow.gap;
 
   double _dragOffset = 0;
   bool _dragging = false;
@@ -3799,6 +3810,7 @@ class _EnvCardState extends State<_EnvCard> {
                             // 置顶 = 橙（同图钉），已禁用 = 紫（演示稿），其余 = 蓝。
                             AppIconTile(
                               icon: Icons.key_rounded,
+                              size: _leadingSize,
                               color: env.isPinned
                                   ? palette.warn
                                   : (env.enabled
@@ -3963,7 +3975,7 @@ class _EnvCardState extends State<_EnvCard> {
   }
 }
 
-/// 行顶部的缩进分隔线（同 AppGroupedRow 的画法：0.5 宽、从文字起点画到最右边）。
+/// 行顶部的缩进分隔线（同 AppGroupedRow 的画法：从文字起点画到右侧内边距处）。
 class _EnvRowSeparatorPainter extends CustomPainter {
   final Color color;
   final double start;
@@ -3975,7 +3987,11 @@ class _EnvRowSeparatorPainter extends CustomPainter {
     final paint = Paint()
       ..color = color
       ..strokeWidth = 0.5;
-    canvas.drawLine(Offset(start, 0.25), Offset(size.width, 0.25), paint);
+    canvas.drawLine(
+      Offset(start, 0.25),
+      Offset(size.width - AppGroupedRow.hPad, 0.25),
+      paint,
+    );
   }
 
   @override

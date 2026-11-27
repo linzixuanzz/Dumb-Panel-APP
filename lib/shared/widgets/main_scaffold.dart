@@ -213,16 +213,8 @@ class _GlassTabBar extends StatelessWidget {
           height: AppTabBarMetrics.height,
           decoration: BoxDecoration(
             borderRadius: radius,
-            boxShadow: [
-              BoxShadow(
-                color: palette.isLight
-                    ? const Color(0x140F172A)
-                    : const Color(0x47000000),
-                blurRadius: 28,
-                spreadRadius: -6,
-                offset: const Offset(0, 10),
-              ),
-            ],
+            // 底栏投影由令牌 AppSurfaces.tabBarShadow 给，这里不手写 isLight 分支
+            boxShadow: context.surfaces.tabBarShadow,
           ),
           child: ClipRRect(borderRadius: radius, child: bar),
         ),

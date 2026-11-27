@@ -1620,7 +1620,13 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
     final logStatus = log['status'];
     final success = logStatus == 0 || logStatus == 'success';
     final failed = logStatus == 1 || logStatus == 'failed';
-    final dur = formatDurationSeconds(log['duration'] as num?);
+    // 拿不到耗时（老记录没这个字段、null、负数）就整段不写。直接看原始值，
+    // 不拿格式化结果去比占位符：formatDurationSeconds 的占位是 ASCII「-」，
+    // 比错一个字符副标题就会出现「耗时 -」。
+    final rawDur = log['duration'];
+    final dur = rawDur is num && rawDur.isFinite && rawDur >= 0
+        ? formatDurationSeconds(rawDur)
+        : null;
     final time = log['created_at']?.toString();
     final parsedTime = time == null ? null : DateTime.tryParse(time);
     final subParts = <String>[
@@ -1628,7 +1634,7 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
         formatTimeCn(parsedTime)
       else if (time != null && time.isNotEmpty)
         time,
-      if (dur != '—') '耗时 $dur',
+      if (dur != null) '耗时 $dur',
     ];
 
     Navigator.of(context, rootNavigator: true).push<void>(
@@ -1872,6 +1878,65 @@ class _SubscriptionPullStreamPageState
   String? _errorMessage;
   Color? _logBackgroundColor;
 
+  /// 流没等到结果就断了（timeout、连接被掐）：拉取在面板上不随断流停下。
+  static const _streamLostMessage = '日志流已断开，拉取可能仍在进行';
+
+  /// 面板每次拉取最后写的收尾行（service/subscription.go
+  /// ExecuteSubscriptionPull）：`[完成] 耗时 x 秒, 状态: 成功|失败`。
+  static final _finishLine = RegExp(r'^\[完成\].*状态:\s*(成功|失败)$');
+
+  /// 每次拉取的第一行（`[开始拉取] 名称 (类型)`），往回找停止请求时到这
+  /// 里为止，不把上一次拉取的内容算进来。
+  static const _startPrefix = '[开始拉取]';
+
+  /// 用户点停止时面板先广播的一行（handler/subscription.go StopPull），
+  /// 记进了广播历史，中途打开或重连回放都看得到。
+  static const _stopRequestLine = '[停止请求] 正在终止当前拉取任务...';
+
+  /// 从正文末尾读出这次拉取的结果，读不到返回 null。
+  ///
+  /// 收尾行是面板在结束信号前写的最后一行，只看末尾几行：再往前的可能是
+  /// 拉取前指令的输出，碰巧长得像也不能算。closed 时结束信号连同最后几行
+  /// 一起被丢是常事，这时就是读不到，调用方只说「已结束」，不猜成败。
+  (String, FullscreenLogTone)? _outcomeFromLog() {
+    final end = _log.length;
+    final start = end > 3 ? end - 3 : 0;
+    for (var i = end - 1; i >= start; i--) {
+      final match = _finishLine.firstMatch(_log.lineAt(i).trim());
+      if (match == null) continue;
+      if (match.group(1) == '成功') {
+        return ('拉取完成', FullscreenLogTone.success);
+      }
+      return _wasStopped(i)
+          ? ('已停止', FullscreenLogTone.neutral)
+          : ('拉取失败', FullscreenLogTone.failed);
+    }
+    return null;
+  }
+
+  /// 收尾行在 [finishIndex] 的这次失败是不是用户停的。
+  ///
+  /// 停止时的错误行并不总是「[错误] 拉取已停止」：单文件订阅 curl 被杀后
+  /// 面板还会拿已取消的 ctx 再跑一次 wget，错误是 exec 原文（如 context
+  /// canceled）；sparse-checkout 会包一层「… 失败: 拉取已停止」。所以先
+  /// 看紧挨着的错误行带不带「拉取已停止」，再往回找停止请求那一行。只找
+  /// 收尾行之前的：停止请求在收尾之后才到，说明拉取在那之前已经自己失败
+  /// 了。
+  bool _wasStopped(int finishIndex) {
+    if (finishIndex > 0) {
+      final error = _log.lineAt(finishIndex - 1).trim();
+      if (error.startsWith('[错误]') && error.contains('拉取已停止')) {
+        return true;
+      }
+    }
+    for (var i = finishIndex - 1; i >= 0; i--) {
+      final line = _log.lineAt(i).trim();
+      if (line == _stopRequestLine) return true;
+      if (line.startsWith(_startPrefix)) return false;
+    }
+    return false;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1895,6 +1960,7 @@ class _SubscriptionPullStreamPageState
           if (event.data == 'reconnect') {
             setState(() {
               _done = false;
+              _errorMessage = null;
               _statusLabel = '实时输出';
               _statusTone = FullscreenLogTone.running;
             });
@@ -1909,17 +1975,30 @@ class _SubscriptionPullStreamPageState
               return;
             }
             switch (event.data) {
+              // 这几个都是「拉取已经返回」，但都不带成败：面板不管拉取成没成
+              // 都照常 broadcaster.done()，finished 也可能是拉错了地址、被
+              // 用户停了。closed 是结束信号被丢（64 格订阅通道塞满）后通道
+              // 被关，也不是谁停的。not_running 是正文已有内容时面板很快重启
+              // 回来、新进程里没有这次拉取（panel-contract.md「面板关停时的
+              // 结束事件」），不能落到下面回吐协议原文的兜底。
+              // 结果只认面板写进日志的收尾行，读不到就只说「已结束」。
               case 'finished':
               case 'finished-late':
-                _statusLabel = '拉取完成';
-                _statusTone = FullscreenLogTone.success;
+              case 'closed':
+              case 'not_running':
+                final (label, tone) =
+                    _outcomeFromLog() ?? ('已结束', FullscreenLogTone.neutral);
+                _statusLabel = label;
+                _statusTone = tone;
+              // 面板 5 分钟没等到新输出就收流，大仓库克隆这时可能还在跑：
+              // 这是断流，不是拉取的结果。
               case 'timeout':
-                _statusLabel = '拉取超时';
+                _statusLabel = '连接已断开';
                 _statusTone = FullscreenLogTone.failed;
+                _errorMessage = _streamLostMessage;
               case 'failed':
                 _statusLabel = '拉取失败';
                 _statusTone = FullscreenLogTone.failed;
-              case 'closed':
               case 'cancelled':
                 _statusLabel = '已停止';
                 _statusTone = FullscreenLogTone.neutral;
@@ -1939,11 +2018,14 @@ class _SubscriptionPullStreamPageState
         }
       },
       onDone: () {
+        // 正常收尾时面板一定先发 done 帧（上面已经置了 _done）。没收到就断了，
+        // 是代理或网络把连接掐了，拉取不随断流停下，不能说成「拉取完成」。
         if (!mounted || _done) return;
         setState(() {
           _done = true;
-          _statusLabel = '拉取完成';
-          _statusTone = FullscreenLogTone.success;
+          _errorMessage = _streamLostMessage;
+          _statusLabel = '连接已断开';
+          _statusTone = FullscreenLogTone.failed;
         });
       },
       onError: (error) {
@@ -1975,8 +2057,11 @@ class _SubscriptionPullStreamPageState
       statusTone: _statusTone,
       buffer: _log,
       loading: false,
-      emptyMessage:
-          _errorMessage ?? _statusMessage ?? (_done ? '无日志内容' : '等待拉取输出...'),
+      // 断线原因放进 errorMessage：只写进空态文案的话，正文有日志时就看不见。
+      emptyMessage: _errorMessage != null
+          ? '没有收到拉取日志'
+          : _statusMessage ?? (_done ? '无日志内容' : '等待拉取输出...'),
+      errorMessage: _errorMessage,
       configuredBackgroundColor: _logBackgroundColor,
     );
   }

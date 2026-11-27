@@ -35,8 +35,10 @@ import 'app_card.dart';
 class AppNotice extends StatelessWidget {
   /// 语义强调色，淡底 / 淡边 / 图标 全部由它推导。
   ///
-  /// 传满强度色即可（`AppColors.danger` / `warning` / `info` / `blue500`），
-  /// 变淡与加深由 [AppSurfaces] 负责，调用方不要自己 `withAlpha`。
+  /// 传色板里满强度的状态实色即可（`palette.err` / `palette.warn` /
+  /// `palette.accent` 等，`palette` 即 `context.palette`），不要传 `AppColors.*`：
+  /// 那些常量按浅色底调，深色下对比度不够。变淡与加深由 [AppSurfaces] 负责，
+  /// 调用方不要自己 `withAlpha`，也不要先换成 `*Ink` 墨色再传进来。
   final Color color;
 
   /// 正文。全部 11 个站点都只有一段纯文本，所以这里收 `String` 不收 `Widget`。

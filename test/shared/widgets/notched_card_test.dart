@@ -1,5 +1,9 @@
 import 'package:daidai_app/core/theme/app_theme.dart';
 import 'package:daidai_app/core/theme/design_tokens.dart';
+import 'package:daidai_app/features/tasks/widgets/favorite_task_cards.dart';
+import 'package:daidai_app/shared/models/task.dart';
+import 'package:daidai_app/shared/widgets/app_pill_button.dart';
+import 'package:daidai_app/shared/widgets/hold_to_run_button.dart';
 import 'package:daidai_app/shared/widgets/notched_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -77,9 +81,83 @@ void main() {
     expect(notch.right, card.right);
     expect(notch.bottom, card.bottom);
     expect(notch.size, const Size(208 - 12, 82 - 12));
+    expect(notch.size, NotchedCard.defaultSlotSize);
     final box = tester.widget<ColoredBox>(
       find.ancestor(of: find.text('内容'), matching: find.byType(ColoredBox)).first,
     );
     expect(box.color, AppPalette.light.card);
+  });
+
+  group('常用任务卡的缺口按钮', () {
+    Task task({required double status}) => Task.fromJson({
+      'id': 7,
+      'name': '京东签到',
+      'command': 'task jd.py',
+      'cron_expression': '0 8 * * *',
+      'task_type': 'cron',
+      'status': status,
+    });
+
+    Future<void> pumpCard(WidgetTester tester, Task t, {bool canRun = true}) {
+      return tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light(),
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: FavoriteTaskSection(
+                tasks: [t],
+                favoriteCount: 1,
+                canRun: canRun,
+                now: ValueNotifier(DateTime(2026, 11, 27, 8)),
+                onRun: (_) {},
+                onOpen: (_) {},
+                onViewLog: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    /// 按钮最外层带底色的那个 Container 的圆角。
+    BorderRadiusGeometry? radiusOf(WidgetTester tester, Type type) {
+      final box = tester.widget<Container>(
+        find
+            .descendant(of: find.byType(type), matching: find.byType(Container))
+            .first,
+      );
+      return (box.decoration! as BoxDecoration).borderRadius;
+    }
+
+    testWidgets('按住运行：正好填满缺口，图标居中，圆角与 AppPillButton 一致', (
+      tester,
+    ) async {
+      await pumpCard(tester, task(status: 1));
+      final card = tester.getRect(find.byType(NotchedCard));
+      final button = tester.getRect(find.byType(HoldToRunButton));
+      expect(button.size, NotchedCard.defaultSlotSize);
+      expect(button.right, card.right);
+      expect(button.bottom, card.bottom);
+      final icon = tester.getRect(find.byKey(const Key('hold-to-run-icon')));
+      expect(icon.center.dy, moreOrLessEquals(button.center.dy));
+      expect(
+        radiusOf(tester, HoldToRunButton),
+        BorderRadius.circular(AppRadius.md),
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('运行中换成「实时日志」：尺寸、外形与按住运行相同', (tester) async {
+      await pumpCard(tester, task(status: 2));
+      expect(find.byType(HoldToRunButton), findsNothing);
+      expect(find.text('实时日志'), findsOneWidget);
+      final pill = tester.getRect(find.byType(AppPillButton));
+      expect(pill.size, NotchedCard.defaultSlotSize);
+      expect(
+        radiusOf(tester, AppPillButton),
+        BorderRadius.circular(AppRadius.md),
+      );
+      expect(tester.takeException(), isNull);
+    });
   });
 }

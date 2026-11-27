@@ -1,3 +1,7 @@
+import 'dart:math' as math;
+
+import 'package:daidai_app/core/theme/app_theme.dart';
+import 'package:daidai_app/core/theme/design_tokens.dart';
 import 'package:daidai_app/shared/utils/log_line_buffer.dart';
 import 'package:daidai_app/shared/widgets/log_view.dart';
 import 'package:flutter/gestures.dart';
@@ -426,6 +430,64 @@ void main() {
       expect(slideLayouts, everyElement(lessThanOrEqualTo(100)));
     });
 
+    testWidgets('选着字时下方攒了行，再点「全选」：不跳到底、全选生效；清掉后接着跟随', (
+      tester,
+    ) async {
+      final buffer = await _pumpLogView(tester, initial: _lines(0, 300));
+      final rect = tester.getRect(find.text('line 290'));
+      final mouse = await tester.startGesture(
+        rect.centerLeft + const Offset(1, 0),
+        kind: PointerDeviceKind.mouse,
+      );
+      addTearDown(mouse.removePointer);
+      await tester.pump();
+      await mouse.moveTo(rect.centerRight - const Offset(1, 0));
+      await tester.pump();
+      await mouse.up();
+      await tester.pump();
+      expect(_selectedTexts(tester), ['line 290']);
+
+      // 选区期间锚点不滑：来 1 行，下方列表就超过尾段窗口（201 行）。
+      buffer.append(_lines(300, 1));
+      await tester.pump(const Duration(milliseconds: 16));
+      final pixelsBefore = _position(tester).pixels;
+      final keyBefore = _belowKey(tester);
+
+      // 工具栏「全选」= 先清选区、再全选：中间那次「清掉」的回调不能当场重建，
+      // 否则全选落在马上要被回收的旧行上，「有选区」的标记再也清不掉。
+      tester
+          .state<SelectableRegionState>(find.byType(SelectableRegion))
+          .selectAll(SelectionChangedCause.keyboard);
+      for (var i = 0; i < 3; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+
+      expect(_belowKey(tester), keyBefore, reason: '没有重建、没有跳到底');
+      expect(_position(tester).pixels, pixelsBefore);
+      expect(_selectedTexts(tester), contains('line 290'));
+      expect(buffer.holdTrim, isTrue);
+      expect(_backToBottom, findsNothing);
+
+      // 选区清掉：帧后再判，接着跟随；下一批新行来时因不紧贴尾部走重建。
+      tester
+          .state<SelectableRegionState>(find.byType(SelectableRegion))
+          .clearSelection();
+      await tester.pumpAndSettle();
+      expect(_selectedTexts(tester), isEmpty);
+      expect(buffer.holdTrim, isFalse);
+      _expectAtBottom(tester);
+      expect(find.text('line 300'), findsOneWidget);
+
+      buffer.append(_lines(301, 1));
+      final layouts = await _pumpFramesCountingLayouts(tester);
+      await tester.pumpAndSettle();
+      expect(_belowKey(tester), isNot(keyBefore));
+      expect(_belowChildCount(tester), lessThanOrEqualTo(200));
+      _expectAtBottom(tester);
+      expect(find.text('line 301'), findsOneWidget);
+      expect(layouts, everyElement(lessThanOrEqualTo(_rebuildLayoutLimit)));
+    });
+
     testWidgets('选着字往上翻、再点「回到底部」：选区一并清掉，之后照常跟随', (tester) async {
       final buffer = await _pumpLogView(tester, initial: _lines(0, 300));
       final rect = tester.getRect(find.text('line 290'));
@@ -496,4 +558,185 @@ void main() {
       expect(layouts, everyElement(lessThanOrEqualTo(_rebuildLayoutLimit)));
     });
   });
+
+  group('行号栏、搜索高亮与「恢复跟随」胶囊', () {
+    testWidgets('1.3 倍字号下行号栏跟着放宽：3 位、4 位行号都整行放得下', (tester) async {
+      tester.platformDispatcher.textScaleFactorTestValue = 1.3;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      final buffer = await _pumpStyledLogView(
+        tester,
+        initial: _lines(0, 300),
+        showLineNumbers: true,
+      );
+
+      // 栏宽不够时 Text 会按字符硬折行（「300」变「30 / 0」），整行日志被撑高；
+      // 现在一行放不下也只会被裁。所以比的是「排成一行要多宽」和实际给的宽度。
+      void expectFits(String number) {
+        final paragraph = tester.renderObject<RenderParagraph>(
+          find.text(number),
+        );
+        expect(
+          paragraph.getMaxIntrinsicWidth(double.infinity),
+          lessThanOrEqualTo(paragraph.size.width + 0.01),
+          reason: '行号 $number 放不下',
+        );
+      }
+
+      expectFits('300');
+      expectFits('285');
+
+      // 越过 1000 行变成 4 位，栏宽随之重量。
+      buffer.append(_lines(300, 900));
+      await tester.pumpAndSettle();
+      expectFits('1200');
+      expectFits('1185');
+    });
+
+    testWidgets('行号直接用次要文字色、不再叠半透明：暗底上对比度 ≥ 4.5:1', (tester) async {
+      // 与日志页按暗底给的次要文字色同一量级的冷灰。
+      const muted = Color(0xFF8A8F98);
+      await _pumpStyledLogView(
+        tester,
+        initial: _lines(0, 300),
+        brightness: Brightness.dark,
+        style: _style.copyWith(color: const Color(0xFFE7E5E4)),
+        showLineNumbers: true,
+        mutedColor: muted,
+      );
+
+      final color = tester.widget<Text>(find.text('300')).style!.color!;
+      expect(color, muted);
+      expect(
+        _contrast(color, AppColors.termBgDark),
+        greaterThanOrEqualTo(4.5),
+      );
+    });
+
+    testWidgets('深色日志底的当前命中：不透明黄底 + 深墨字，正文和 ANSI 着色上都 ≥ 4.5:1', (
+      tester,
+    ) async {
+      const foreground = Color(0xFFE7E5E4);
+      final lines = [
+        for (var i = 0; i < 20; i++) 'line $i needle',
+        '\x1B[34mblue needle\x1B[0m',
+      ];
+      for (final (active, plain) in [
+        (5, 'line 5 needle'),
+        (20, 'blue needle'),
+      ]) {
+        await _pumpStyledLogView(
+          tester,
+          initial: lines,
+          brightness: Brightness.dark,
+          style: _style.copyWith(color: foreground),
+          follow: false,
+          searchQuery: 'needle',
+          activeMatchAbsoluteLine: active,
+        );
+
+        final hit = _styleOfWord(tester, plain, 'needle');
+        expect(hit.backgroundColor!.a, 1.0, reason: '不透明，不受行底色叠加影响');
+        expect(
+          _contrast(hit.color!, hit.backgroundColor!),
+          greaterThanOrEqualTo(4.5),
+          reason: plain,
+        );
+      }
+
+      // 其余命中维持淡黄底、原有字色（深底上约 6:1）。
+      final other = _styleOfWord(tester, 'line 6 needle', 'needle');
+      expect(other.backgroundColor, AppColors.searchMatch);
+      expect(other.color, foreground);
+    });
+
+    testWidgets('浅色日志底的当前命中维持原样：半透明黄底、原有字色', (tester) async {
+      await _pumpStyledLogView(
+        tester,
+        initial: [for (var i = 0; i < 20; i++) 'line $i needle'],
+        follow: false,
+        searchQuery: 'needle',
+        activeMatchAbsoluteLine: 5,
+      );
+
+      final hit = _styleOfWord(tester, 'line 5 needle', 'needle');
+      expect(hit.backgroundColor, AppColors.searchMatchCurrent);
+      expect(hit.color, _style.color);
+      final composite = Color.alphaBlend(
+        hit.backgroundColor!,
+        AppColors.termBgLight,
+      );
+      expect(_contrast(hit.color!, composite), greaterThanOrEqualTo(4.5));
+    });
+
+    testWidgets('「恢复跟随」胶囊的命中区不小于 44dp', (tester) async {
+      await _pumpLogView(tester, initial: _lines(0, 300));
+      await _scrollUp(tester, 300);
+
+      final pill = find.ancestor(
+        of: find.text('恢复跟随'),
+        matching: find.byType(InkWell),
+      );
+      expect(pill, findsOneWidget);
+      expect(
+        tester.getSize(pill).height,
+        greaterThanOrEqualTo(AppTapTarget.min),
+      );
+    });
+  });
+}
+
+/// 带行号 / 搜索高亮 / 明暗参数的版本；默认浅底、跟随。
+Future<LogLineBuffer> _pumpStyledLogView(
+  WidgetTester tester, {
+  required List<String> initial,
+  Brightness brightness = Brightness.light,
+  TextStyle style = _style,
+  bool follow = true,
+  bool showLineNumbers = false,
+  Color? mutedColor,
+  String searchQuery = '',
+  int? activeMatchAbsoluteLine,
+}) async {
+  final buffer = LogLineBuffer()..replaceAll(initial);
+  addTearDown(buffer.dispose);
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: LogView(
+          buffer: buffer,
+          follow: follow,
+          textStyle: style,
+          brightness: brightness,
+          showLineNumbers: showLineNumbers,
+          mutedColor: mutedColor,
+          searchQuery: searchQuery,
+          activeMatchAbsoluteLine: activeMatchAbsoluteLine,
+        ),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+  return buffer;
+}
+
+/// WCAG 对比度；前景带透明度时先叠到底色上再算。
+double _contrast(Color foreground, Color background) {
+  final fg = Color.alphaBlend(foreground, background).computeLuminance();
+  final bg = background.computeLuminance();
+  return (math.max(fg, bg) + 0.05) / (math.min(fg, bg) + 0.05);
+}
+
+/// 找出 [line] 这一行里文字恰为 [word] 的那一段（搜索命中）的样式。
+TextStyle _styleOfWord(WidgetTester tester, String line, String word) {
+  final text = tester.widget<Text>(find.text(line));
+  TextStyle? found;
+  text.textSpan!.visitChildren((span) {
+    if (span is TextSpan && span.text == word) {
+      found = span.style;
+      return false;
+    }
+    return true;
+  });
+  expect(found, isNotNull, reason: '$line 里没有高亮出 $word');
+  return found!;
 }

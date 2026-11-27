@@ -1666,14 +1666,54 @@ class DepLogStreamPage extends ConsumerStatefulWidget {
 }
 
 class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
+  /// 依赖记录的状态取值（面板 model/dependency.go）。
+  static const _busyStatuses = {'queued', 'installing', 'removing'};
+  static const _settledStatuses = {'installed', 'failed', 'cancelled'};
+
   final _sseClient = SseClient();
   final _log = LogLineBuffer();
   bool _loading = true;
   bool _done = false;
   bool _actionBusy = false;
+
+  /// 取消请求已提交、还在等终态。面板只是发出取消信号（回「取消请求已提交」），
+  /// 进程退出后流里才有 `done: cancelled` 和最后几行日志。
+  bool _cancelRequested = false;
   String _statusLabel = '实时安装中';
   FullscreenLogTone _statusTone = FullscreenLogTone.running;
+
+  /// 断线、超时这类要让用户看全的原因，交给 scaffold 显示在正文顶上。
+  /// 状态胶囊只有 96dp 宽、单行省略，放不下整句；只写进空态文案，
+  /// 有日志时又看不见，空着时还像是「本来就没有日志」。
+  String? _errorMessage;
+
+  /// 依赖在面板上的真实状态（queued / installing / installed / failed /
+  /// removing / cancelled），null 表示不知道。
+  ///
+  /// 底部按钮按它判断，不按本地 [_done]：流断了（onError、连接被掐、
+  /// `done: timeout`）不等于装完了，依赖多半还在装；反过来打开一个早就
+  /// 装好的依赖，`done` 帧到达之前 [_done] 也是 false。
+  /// 与列表页按 `dep.isBusy` 控制「取消 / 重新安装」同一个口径。
+  String? _depStatus;
+
+  /// 每次改 [_depStatus]、每次发起查询都自增。查询回来时对不上，
+  /// 说明流里已经来了更新的状态（或又发起了一次查询），丢掉这次结果。
+  int _depStatusSeq = 0;
   Color? _logBackgroundColor;
+
+  /// 这一轮日志是卸载的（见过 removing），标题、胶囊、终态和按钮都按卸载说。
+  ///
+  /// 不能现看 [_depStatus]：结束帧一到它就被覆盖成 failed / cancelled /
+  /// null，卸载失败会被说成「安装失败」，底栏还给「重新安装」，去重装一个
+  /// 用户正想卸掉的包。卸载和安装共用同一条日志流（deps.go runCmdWithSSE），
+  /// 结束值也一样，只能靠这里记住。只在确认开始安装（installing / queued）
+  /// 时清掉，终态不清。
+  bool _removing = false;
+
+  /// 正文里说的是哪件事：「安装」或「卸载」。
+  String get _verb => _removing ? '卸载' : '安装';
+
+  String get _runningLabel => '实时$_verb中';
 
   @override
   void initState() {
@@ -1684,6 +1724,18 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
         setState(() => _logBackgroundColor = color);
       }
     });
+    // 先用列表页的快照顶着，再向面板确认一次：列表页不轮询，
+    // 快照可能是几分钟前的。
+    _setDepStatus(
+      ref
+          .read(depListProvider)
+          .items
+          .where((item) => item.id == widget.depId)
+          .firstOrNull
+          ?.status,
+    );
+    _statusLabel = _runningLabel;
+    _refreshDepStatus();
     _connectStream();
   }
 
@@ -1695,31 +1747,7 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
       onEvent: (event) {
         if (!mounted) return;
         if (event.event == 'done') {
-          if (event.data == 'reconnect') {
-            setState(() {
-              _done = false;
-              _loading = false;
-              _statusLabel = '实时安装中';
-              _statusTone = FullscreenLogTone.running;
-            });
-            return;
-          }
-          final (label, tone) = switch (event.data) {
-            'finished' || 'finished-late' => (
-              '安装完成',
-              FullscreenLogTone.success,
-            ),
-            'cancelled' => ('已取消', FullscreenLogTone.neutral),
-            'timeout' => ('安装超时', FullscreenLogTone.failed),
-            'failed' => ('安装失败', FullscreenLogTone.failed),
-            _ => ('已结束', FullscreenLogTone.neutral),
-          };
-          setState(() {
-            _done = true;
-            _loading = false;
-            _statusLabel = label;
-            _statusTone = tone;
-          });
+          _handleDone(event.data);
           return;
         }
 
@@ -1733,56 +1761,226 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
           setState(() {
             _loading = false;
             _done = false;
-            _statusLabel = '实时安装中';
+            _statusLabel = _runningLabel;
             _statusTone = FullscreenLogTone.running;
           });
         }
       },
       onDone: () {
+        // 正常收尾时面板一定先发 done 帧（上面已经置了 _done）。
+        // 没收到就断了，是代理或网络把连接掐了，安装 / 卸载不随断流取消，
+        // 不能说成「安装完成」。
         if (!mounted || _done) return;
-        setState(() {
-          _done = true;
-          _loading = false;
-          if (_log.isEmpty) {
-            _statusLabel = '暂无日志';
-            _statusTone = FullscreenLogTone.neutral;
-          } else {
-            _statusLabel = '安装完成';
-            _statusTone = FullscreenLogTone.success;
-          }
-        });
+        _markStreamLost(_streamLostMessage);
       },
       onError: (error) {
         if (!mounted) return;
-        setState(() {
-          _done = true;
-          _loading = false;
-          _statusLabel = error is SseAuthFailure
-              ? error.message
-              : '安装日志连接已断开';
-          _statusTone = FullscreenLogTone.failed;
-        });
+        if (error is SseAuthFailure) {
+          // 会话没了，SseClient 已经通知去登录页；再查状态只会再吃一次 401。
+          _markStreamLost(error.message, label: '登录已失效', refresh: false);
+          return;
+        }
+        _markStreamLost('$_verb日志连接已断开');
       },
     );
   }
 
+  String get _streamLostMessage => '日志流已断开，$_verb可能仍在进行';
+
+  void _handleDone(String data) {
+    if (data == 'reconnect') {
+      // 面板关停时发的，SseClient 1 秒后自己重连一次，不是结束
+      // （panel-contract.md「面板关停时的结束事件」）。
+      setState(() {
+        _done = false;
+        _loading = false;
+        _errorMessage = null;
+        _statusLabel = _runningLabel;
+        _statusTone = FullscreenLogTone.running;
+      });
+      return;
+    }
+    final isDepStatus =
+        _busyStatuses.contains(data) || _settledStatuses.contains(data);
+    setState(() {
+      // 先改状态再定文案：结束值是 installing / queued 时这已经不是卸载了，
+      // 终态不会清掉 _removing。
+      if (isDepStatus) {
+        _setDepStatus(data);
+      } else if (data.isEmpty) {
+        _setDepStatus(null);
+      }
+      final (label, tone) = _doneLabel(data, removing: _removing);
+      _done = true;
+      _loading = false;
+      _cancelRequested = false;
+      _statusLabel = label;
+      _statusTone = tone;
+      _errorMessage = data == 'timeout' ? _streamLostMessage : null;
+    });
+    // closed 和不认识的值说明不了结果，查到终态后胶囊一起改；
+    // timeout 是断流，胶囊和横幅保持「连接已断开」，查状态只为定按钮。
+    if (!isDepStatus && data.isNotEmpty) {
+      _refreshDepStatus(syncPill: data != 'timeout');
+    }
+  }
+
+  /// `done` 帧的值 → 状态胶囊。
+  ///
+  /// 依赖流的结束值就是依赖记录的 status（deps.go LogStream 发的是
+  /// dep.Status / latest.Status），装成功是 installed，从来不发 finished；
+  /// 另外还有 closed（广播通道关了）和 timeout（硬上限到点，安装可能还在跑）。
+  /// 卸载完成后记录已删，读到的是空串。
+  ///
+  /// [removing] 为 true 时是卸载的结束值：卸载失败面板同样记成 failed，
+  /// 成功则删掉记录（空串）。closed 说明不了结果，仍是「已结束」，
+  /// 等 [_refreshDepStatus] 查到记录没了再改成「卸载完成」。
+  static (String, FullscreenLogTone) _doneLabel(
+    String data, {
+    bool removing = false,
+  }) => switch (data) {
+    'failed' when removing => ('卸载失败', FullscreenLogTone.failed),
+    '' when removing => ('卸载完成', FullscreenLogTone.success),
+    'installed' || 'finished' || 'finished-late' => (
+      '安装完成',
+      FullscreenLogTone.success,
+    ),
+    'failed' => ('安装失败', FullscreenLogTone.failed),
+    'cancelled' => ('已取消', FullscreenLogTone.neutral),
+    // 排队中，或在装却还没有可订阅的输出：面板直接收流，并不是结束。
+    'queued' => ('排队中', FullscreenLogTone.neutral),
+    'installing' => ('仍在安装', FullscreenLogTone.neutral),
+    'removing' => ('仍在卸载', FullscreenLogTone.neutral),
+    'timeout' => ('连接已断开', FullscreenLogTone.failed),
+    '' || 'closed' => ('已结束', FullscreenLogTone.neutral),
+    // 不认识的值照原样显示，不猜成某个已知结果
+    // （panel-contract.md「未知值必须诚实」）。
+    _ => (data, FullscreenLogTone.neutral),
+  };
+
+  /// 流没等到面板的结束帧就断了：显示原因，再向面板问一次依赖的真实状态，
+  /// 决定底部给「重新连接」还是「重新安装 / 重新卸载」。
+  void _markStreamLost(
+    String message, {
+    String label = '连接已断开',
+    bool refresh = true,
+  }) {
+    setState(() {
+      _done = true;
+      _loading = false;
+      _cancelRequested = false;
+      _errorMessage = message;
+      _statusLabel = label;
+      _statusTone = FullscreenLogTone.failed;
+    });
+    if (refresh) _refreshDepStatus();
+  }
+
+  void _setDepStatus(String? status) {
+    _depStatusSeq++;
+    _depStatus = status;
+    if (status == 'removing') {
+      _removing = true;
+    } else if (status == 'installing' || status == 'queued') {
+      _removing = false;
+    }
+  }
+
+  /// 向面板查一次依赖的真实状态，更新 [_depStatus]（决定底部按钮）。
+  ///
+  /// [syncPill] 为 true 时，查到已定的终态（installed / failed / cancelled）
+  /// 就连状态胶囊一起改。用于 `done: closed` 和不认识的结束值：面板
+  /// broadcaster.done() 是非阻塞发送，pip 输出密、64 格的订阅通道塞满时
+  /// 结束帧会被丢掉，随后通道被关、流里只剩 closed。装失败了胶囊却是
+  /// 中性的「已结束」，旁边还给「重新安装」。面板先把结果写库再发结束
+  /// 信号，所以这里查到的就是这次的结果。卸载这一轮查到 404（记录已删）
+  /// 不看 [syncPill]，流断了也改成「卸载完成」，见下面 404 分支。
+  ///
+  /// 注意 GetStatus 回的是 ToDictWithLog，会把整段日志再下一遍；面板没有
+  /// 只回状态的接口，所以只在打开页面和流没正常收尾时查。
+  Future<void> _refreshDepStatus({bool syncPill = false}) async {
+    final seq = ++_depStatusSeq;
+    try {
+      final data = await ref
+          .read(depListProvider.notifier)
+          .getStatus(widget.depId);
+      if (!mounted || seq != _depStatusSeq) return;
+      final status = data['status'];
+      if (status is String && status.isNotEmpty) {
+        setState(() {
+          _setDepStatus(status);
+          if (syncPill && _done && _settledStatuses.contains(status)) {
+            final (label, tone) = _doneLabel(status, removing: _removing);
+            _statusLabel = label;
+            _statusTone = tone;
+          }
+          // 列表快照过时、这里才知道是在卸载：还在跑的胶囊跟着改口。
+          if (!_done) _statusLabel = _runningLabel;
+        });
+      }
+    } on DioException catch (error) {
+      // 记录没了（卸载成功会删记录，结束帧又被丢时流里只剩 closed）：
+      // 没有可重连、可重装的对象，按钮都收起来。
+      if (error.response?.statusCode != 404) return;
+      if (!mounted || seq != _depStatusSeq) return;
+      setState(() {
+        _setDepStatus(null);
+        // 卸载这一轮记录没了，就是卸成功了（面板只在卸载成功时删记录）。
+        // 不看 syncPill：断流也一样。列表页不轮询，点完卸载快照停在
+        // removing，pip 卸载一两秒就完，这时再点日志，流直接回 404、走的
+        // 是断流那条路；timeout 后查到记录没了也是卸完了。结果已经确定，
+        // 盖过「连接已断开」和横幅，不把卸成功说成失败。
+        if (_done && _removing) {
+          final (label, tone) = _doneLabel('', removing: true);
+          _statusLabel = label;
+          _statusTone = tone;
+          _errorMessage = null;
+        }
+      });
+    } catch (_) {
+      // 查不到就保留原来的判断：按钮按旧状态走，面板收到请求时还会再校验。
+    }
+  }
+
+  /// 从头重连日志流。面板没有断点续传，连上就从第一行重放整段日志，
+  /// 所以先清空正文。
+  void _restartStream({String? status}) {
+    setState(() {
+      _log.clear();
+      _loading = true;
+      _done = false;
+      _cancelRequested = false;
+      _errorMessage = null;
+      // 先改状态：重新安装传进来的 installing 会把卸载的口径清掉。
+      if (status != null) _setDepStatus(status);
+      _statusLabel = _runningLabel;
+      _statusTone = FullscreenLogTone.running;
+    });
+    _connectStream();
+  }
+
+  /// 流断了、或面板说还在排队 / 在装：只重新连上流看，不再发起一次安装。
+  void _reconnect() {
+    if (_actionBusy) return;
+    _restartStream();
+    _refreshDepStatus();
+  }
+
   Future<void> _cancelInstall() async {
-    if (_actionBusy || _done) return;
+    if (_actionBusy || _cancelRequested || _done) return;
     setState(() => _actionBusy = true);
     try {
-      await DioClient.instance.dio.post(ApiEndpoints.depCancel(widget.depId));
+      // 走 provider，与列表页同一条路：面板这个接口只注册了 PUT
+      // （deps.go RegisterRoutes），成功后顺带重拉列表。
+      await ref.read(depListProvider.notifier).cancel(widget.depId);
       if (!mounted) return;
-      _sseClient.close();
-      setState(() {
-        _done = true;
-        _loading = false;
-        _statusLabel = '已取消';
-        _statusTone = FullscreenLogTone.neutral;
-      });
-      AppSnack.show(context, '已取消依赖安装');
+      // 不收流、不自己定终态：终态和最后几行日志都等流里的 done 帧，
+      // 在那之前按钮一直转圈。
+      setState(() => _cancelRequested = !_done);
+      AppSnack.success(context, '取消请求已提交');
     } catch (error) {
       if (mounted) {
-        AppSnack.error(context, extractErrorMessage(error, '取消安装失败'));
+        AppSnack.error(context, extractErrorMessage(error, '取消$_verb失败'));
       }
     } finally {
       if (mounted) setState(() => _actionBusy = false);
@@ -1793,18 +1991,10 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
     if (_actionBusy) return;
     setState(() => _actionBusy = true);
     try {
-      await DioClient.instance.dio.post(
-        ApiEndpoints.depReinstall(widget.depId),
-      );
+      // 同上走 provider：PUT，并顺带重拉列表。
+      await ref.read(depListProvider.notifier).reinstall(widget.depId);
       if (!mounted) return;
-      setState(() {
-        _log.clear();
-        _loading = true;
-        _done = false;
-        _statusLabel = '实时安装中';
-        _statusTone = FullscreenLogTone.running;
-      });
-      _connectStream();
+      _restartStream(status: 'installing');
     } catch (error) {
       if (mounted) {
         AppSnack.error(context, extractErrorMessage(error, '重新安装失败'));
@@ -1829,11 +2019,43 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
         .where((item) => item.id == widget.depId)
         .firstOrNull;
     final title = dep != null && dep.name.trim().isNotEmpty
-        ? '${dep.name} 安装日志'
-        : '安装日志';
+        ? '${dep.name} $_verb日志'
+        : '$_verb日志';
     final subtitle = dep != null
         ? '依赖 #${widget.depId} · ${dep.type.toUpperCase()}'
         : '依赖 #${widget.depId}';
+
+    final status = _depStatus;
+    // 只有面板确认在装 / 在卸时才给「取消」：排队中的依赖面板不让取消
+    // （deps.go Cancel 回「当前依赖任务未在处理中」）。
+    final cancellable = status == 'installing' || status == 'removing';
+    VoidCallback? onRerun;
+    var rerunLabel = '重新安装';
+    if (_done && status != null) {
+      if (_settledStatuses.contains(status) && _errorMessage == null) {
+        // 卸载失败 / 取消后包还装着，「重新安装」会去重装一个用户正想卸掉
+        // 的包。这里不给；再卸一次回列表（那边卸载要先确认）。
+        if (!_removing) onRerun = _reinstall;
+      } else {
+        onRerun = _reconnect;
+        rerunLabel = '重新连接';
+      }
+    }
+
+    final String emptyMessage;
+    if (_errorMessage != null) {
+      emptyMessage = '没有收到$_verb日志';
+    } else if (_done && status == 'queued') {
+      emptyMessage = '依赖还在排队，开始安装后点「重新连接」查看';
+    } else if (_done && (status == 'installing' || status == 'removing')) {
+      // 在装却还没有可订阅的输出：node / linux 依赖在等包管理器的锁，
+      // 或刚点了重装、日志已清空。说成「无安装日志内容」像是什么都没在做。
+      emptyMessage = '依赖还在等待执行，稍后点「重新连接」查看';
+    } else if (_done) {
+      emptyMessage = '无$_verb日志内容';
+    } else {
+      emptyMessage = '等待依赖$_verb输出...';
+    }
 
     return FullscreenLogScaffold(
       title: title,
@@ -1842,15 +2064,17 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
       statusTone: _statusTone,
       buffer: _log,
       loading: _loading,
-      emptyMessage: _done ? '无安装日志内容' : '等待依赖安装输出...',
+      emptyMessage: emptyMessage,
+      errorMessage: _errorMessage,
       configuredBackgroundColor: _logBackgroundColor,
-      onStop: !_done ? _cancelInstall : null,
-      stopBusy: _actionBusy,
-      stopLabel: '取消安装',
-      onRerun: _done ? _reinstall : null,
+      onStop: !_done && cancellable ? _cancelInstall : null,
+      stopBusy: _actionBusy || _cancelRequested,
+      stopLabel: '取消$_verb',
+      onRerun: onRerun,
       rerunBusy: _actionBusy,
-      rerunLabel: '重新安装',
-      copySuccessToast: '安装日志已复制到剪贴板',
+      rerunLabel: rerunLabel,
+      // 只在没截断时用：截断后 scaffold 在点击那一刻改报「已复制最近 N 行」。
+      copySuccessToast: '$_verb日志已复制到剪贴板',
     );
   }
 }

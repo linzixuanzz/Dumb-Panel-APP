@@ -1,4 +1,5 @@
 import 'package:daidai_app/core/theme/app_theme.dart';
+import 'package:daidai_app/core/theme/design_tokens.dart';
 import 'package:daidai_app/shared/widgets/hold_to_run_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -146,6 +147,72 @@ void main() {
     await tester.pumpAndSettle();
     expect(confirmed, 0);
     expect(progress(tester), 0);
+  });
+
+  testWidgets('被外面的紧约束撑大（缺口 196 × 70）：图标圆按实际高度算、上下居中、不被裁', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: Scaffold(
+          body: Center(
+            // 名义尺寸是默认的 164 × 46，外面强制 196 × 70
+            child: SizedBox(
+              width: 196,
+              height: 70,
+              child: HoldToRunButton(
+                label: '按住运行',
+                radius: AppRadius.md,
+                onConfirmed: () {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    final button = tester.getRect(find.byType(HoldToRunButton));
+    expect(button.size, const Size(196, 70));
+    final icon = tester.getRect(find.byKey(const Key('hold-to-run-icon')));
+    expect(icon.height, 38, reason: '(70 - 14) 夹到上限 38，不是按名义高度 46 算的 32');
+    expect(icon.center.dy, moreOrLessEquals(button.center.dy));
+    // 离左边与离上下一样远
+    expect(icon.left - button.left, moreOrLessEquals(icon.top - button.top));
+    final deco =
+        tester
+                .widget<Container>(
+                  find
+                      .descendant(
+                        of: find.byType(HoldToRunButton),
+                        matching: find.byType(Container),
+                      )
+                      .first,
+                )
+                .decoration
+            as BoxDecoration;
+    expect(deco.borderRadius, BorderRadius.circular(AppRadius.md));
+  });
+
+  testWidgets('默认外形仍是胶囊，名义尺寸下图标圆与左端半圆同心', (tester) async {
+    await pump(tester, onConfirmed: () {});
+    final button = tester.getRect(find.byType(HoldToRunButton));
+    expect(button.size, const Size(164, 46));
+    final icon = tester.getRect(find.byKey(const Key('hold-to-run-icon')));
+    expect(icon.center.dy, moreOrLessEquals(button.center.dy));
+    expect(icon.center.dx - button.left, moreOrLessEquals(button.height / 2));
+    final deco =
+        tester
+                .widget<Container>(
+                  find
+                      .descendant(
+                        of: find.byType(HoldToRunButton),
+                        matching: find.byType(Container),
+                      )
+                      .first,
+                )
+                .decoration
+            as BoxDecoration;
+    expect(deco.borderRadius, BorderRadius.circular(AppRadius.pill));
   });
 
   testWidgets('读屏：长按动作直接确认', (tester) async {

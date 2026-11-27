@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/design_tokens.dart';
+import 'app_icon_tile.dart';
 
 /// 分组卡片列表（v3.0 Nordic Calm：20dp 克制圆角、极轻暖纸边界与弥散阴影）。
 class AppGroupedList extends StatelessWidget {
@@ -113,23 +114,39 @@ class AppGroupedRow extends StatelessWidget {
     this.showSeparator,
   });
 
-  static const double _hPad = 16;
-  static const double _gap = 12;
-  static const double _leadingWidth = 34;
+  // ── 行尺寸：唯一真源 ──
+  // 懒加载列表（变量页、任务页「所有任务」、日志列表）不用 AppGroupedList，
+  // 行是照这里手写的；它们的内边距、文字起点、分隔线一律引用下面几个常量，
+  // 不要再抄数字（v3.0 把 18/36/14 改成 16/34/12 时，抄数字的三处全错开了）。
+
+  /// 行左右内边距；分隔线右端也缩进同样的距离。
+  static const double hPad = 16;
+
+  /// leading 与标题之间的间距。
+  static const double gap = 12;
+
+  /// leading 槽宽，等于 [AppIconTile.defaultSize]。
+  static const double leadingWidth = AppIconTile.defaultSize;
+
+  /// 有 leading 时标题（以及分隔线左端）的起点。
+  static const double textStart = hPad + leadingWidth + gap;
+
+  /// 行最小高度。
+  static const double minHeight = 52;
 
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
     final separator = showSeparator ?? (_GroupedIndex.of(context) ?? 0) > 0;
-    final textStart = leading == null ? _hPad : _hPad + _leadingWidth + _gap;
+    final start = leading == null ? hPad : textStart;
 
     final content = ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 52),
+      constraints: const BoxConstraints(minHeight: minHeight),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: _hPad, vertical: 11),
+        padding: const EdgeInsets.symmetric(horizontal: hPad, vertical: 11),
         child: Row(
           children: [
-            if (leading != null) ...[leading!, const SizedBox(width: _gap)],
+            if (leading != null) ...[leading!, const SizedBox(width: gap)],
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -181,7 +198,7 @@ class AppGroupedRow extends StatelessWidget {
 
     return CustomPaint(
       foregroundPainter: separator
-          ? _TopSeparatorPainter(color: palette.separator, start: textStart)
+          ? _TopSeparatorPainter(color: palette.separator, start: start)
           : null,
       child: onTap == null && onLongPress == null
           ? content
@@ -208,7 +225,11 @@ class _TopSeparatorPainter extends CustomPainter {
     final paint = Paint()
       ..color = color
       ..strokeWidth = 0.6;
-    canvas.drawLine(Offset(start, 0.3), Offset(size.width - 16, 0.3), paint);
+    canvas.drawLine(
+      Offset(start, 0.3),
+      Offset(size.width - AppGroupedRow.hPad, 0.3),
+      paint,
+    );
   }
 
   @override

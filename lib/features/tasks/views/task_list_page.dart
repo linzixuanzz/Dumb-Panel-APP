@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart' show DioException;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 // ScrollDirection 只在 rendering 里导出，material/widgets 都没有转出来。
@@ -36,6 +37,9 @@ import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
 import '../../../shared/widgets/fullscreen_log_scaffold.dart';
 import '../../logs/utils/task_command_lookup.dart';
+// 两个日志页流结束后结算结果的节奏是同一套（等面板把结果写进 task_logs）。
+import '../../logs/views/log_stream_page.dart'
+    show kLogSettleAttempts, kLogSettleRetryDelay;
 import '../providers/favorite_tasks_provider.dart';
 import '../providers/task_provider.dart';
 import '../providers/task_view_provider.dart';
@@ -2634,10 +2638,11 @@ class _TaskCardState extends State<_TaskCard> {
   /// 左滑全部展开后，卡片左侧至少还要露出来的宽度：一点都不露，用户看不出这是哪张卡、也没处点「收起」。
   static const double _cardPeekWidth = 16;
 
-  /// 行内边距、前导色块与文字的间距：分隔线缩进按它们算（同 AppGroupedRow）。
-  static const double _hPad = 18;
-  static const double _gap = 14;
-  static const double _tileSize = 36;
+  /// 行内边距、前导色块与文字的间距：分隔线缩进按它们算。
+  /// 引用 AppGroupedRow 的常量，不抄数字（v3.0 改过一次尺寸，抄数字的地方全错开了）。
+  static const double _hPad = AppGroupedRow.hPad;
+  static const double _gap = AppGroupedRow.gap;
+  static const double _tileSize = AppGroupedRow.leadingWidth;
 
   double _dragOffset = 0;
   bool _dragging = false;
@@ -2956,7 +2961,7 @@ class _TaskCardState extends State<_TaskCard> {
                               : null,
                         ),
                         child: CustomPaint(
-                          // 顶部分隔线：分组首行不画；从文字起点画到最右边（iOS 的缩进分隔线）
+                          // 顶部分隔线：分组首行不画；从文字起点画到右侧内边距处（同 AppGroupedRow）
                           foregroundPainter: widget.isFirst
                               ? null
                               : _RowSeparatorPainter(
@@ -3094,7 +3099,11 @@ class _RowSeparatorPainter extends CustomPainter {
     final paint = Paint()
       ..color = color
       ..strokeWidth = 0.5;
-    canvas.drawLine(Offset(start, 0.25), Offset(size.width, 0.25), paint);
+    canvas.drawLine(
+      Offset(start, 0.25),
+      Offset(size.width - AppGroupedRow.hPad, 0.25),
+      paint,
+    );
   }
 
   @override
@@ -3270,7 +3279,8 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
   /// 不再用快照覆盖它。
   bool _logFromSse = false;
 
-  /// live-logs 最近一次回的任务状态。轮询放弃时用它判断能不能回落到最近一次日志。
+  /// live-logs 最近一次回的任务状态。轮询放弃时用它判断能不能回落到最近一次日志，
+  /// 也用它判断有没有东西可停（只有运行中、排队中才给「停止运行」）。
   double? _liveStatus;
 
   bool _loading = true;
@@ -3279,6 +3289,30 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
   Timer? _pollTimer;
   int _pollAttempts = 0;
   Color? _logBackgroundColor;
+
+  /// 这次运行的结果（task_logs.status：0 成功 / 1 失败 / 3 已终止），
+  /// 由 [_fallbackToLatestLog] 从 latest-log 结算；null = 还不知道。
+  ///
+  /// SSE 的 done:finished 只表示流结束、不带成败（panel-contract.md「实时日志」），
+  /// 轮询收口也一样：结果没结算出来之前只写中性的「已结束」，状态胶囊的绿 / 红只认它。
+  int? _runResult;
+
+  /// 用户在本页点了「停止运行」（停止接口已经发出）。
+  ///
+  /// 面板停止是先发 TERM、留 5 秒宽限，收尾输出还会经 SSE 送来，最后照常发
+  /// done:finished：这些都只追加正文，不能把状态改回「运行中」，也不能改成别的结果。
+  bool _stopRequested = false;
+
+  /// SSE 出错断开、或没等到 done 就收口了（随后降级成轮询）。停止成功时据此
+  /// 重连 SSE：轮询拿不到宽限期里的收尾输出，也等不来 done。
+  bool _sseDropped = false;
+
+  /// latest-log 在途：done、轮询收口、停止都可能触发结算，只查一轮。
+  bool _settling = false;
+  Timer? _settleRetryTimer;
+
+  /// 每次重新运行自增：上一次运行在途的 latest-log 晚回来时作废。
+  int _runGeneration = 0;
 
   @override
   void initState() {
@@ -3290,6 +3324,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _settleRetryTimer?.cancel();
     _sseClient.close();
     _log.dispose();
     super.dispose();
@@ -3350,8 +3385,11 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
         _log.replaceAll(logs);
       }
       _done = done && !shouldKeepPolling;
+      final result = _runResult;
       _statusText = shouldKeepPolling
           ? '等待日志...'
+          : result != null
+          ? _runResultLabel(result)
           : _statusFromLiveTask(status, done: done);
     });
 
@@ -3367,6 +3405,12 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
     }
 
     _pollTimer?.cancel();
+    // 走到这里是「还有快照、但任务已经不在跑」（比如别处点了停止，宽限期里
+    // TinyLog 还在）：这次运行结束了，去 latest-log 结算结果。
+    // 排队中不结算：那时拿到的是上一次运行的日志。
+    if (status != kTaskStatusQueued) {
+      _fallbackToLatestLog();
+    }
   }
 
   void _startPolling() {
@@ -3405,11 +3449,12 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
           identical(timer, _pollTimer)) {
         _pollTimer?.cancel();
         _pollTimer = null;
-        // 不再等了。手里只有快照或什么都没有、任务也不在排队时，回落一次最近一次日志：
+        // 不再等了。任务不在排队时回落一次最近一次日志：结果总是要结算；
+        // 手里只有快照或什么都没有时，正文也换成它（正文是 SSE 来的就不动）——
         // 面板任务一结束就删掉实时日志，live-logs 之后只会回空的
         // （从任务列表点「运行」一个几秒就跑完的任务，进来就是这样）。
         // 还在排队就不回落：那时拿到的是上一次运行的日志，会被当成这一次的结果。
-        if (!_logFromSse && _liveStatus != kTaskStatusQueued) {
+        if (_liveStatus != kTaskStatusQueued) {
           await _fallbackToLatestLog();
           if (!mounted) {
             return;
@@ -3419,34 +3464,100 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
           // 正文与 AppBar 要说同一件事：以前 _done 跟着「有没有日志」走，没日志时
           // AppBar 已经写着「暂无日志」，正文却还挂着「等待日志输出...」和转圈。
           _done = true;
-          _statusText = _log.isEmpty ? '暂无日志' : '已完成';
+          // 结果以回落时一并结算出的为准；结算不出来（正文是 SSE 来的、排队中、
+          // latest-log 拿不到）就只说「已结束」，不猜成败。
+          final result = _runResult;
+          _statusText = result != null
+              ? _runResultLabel(result)
+              : _log.isEmpty
+              ? '暂无日志'
+              : '已结束';
         });
       }
     });
   }
 
-  /// 回落到这个任务最近一次运行的日志（面板 latest-log，与日志详情页看到的是同一份）。
+  /// 回落到这个任务最近一次运行的日志（面板 latest-log，与日志详情页看到的是同一份），
+  /// 顺带结算这次运行的结果 [_runResult]。
   ///
-  /// 只在「运行已经结束、手里只有 live-logs 快照或什么都没有」时用：快照最多 4KB，
-  /// 任务结束后 live-logs 也拿不到内容了。拿不到就保持原样，不报错。
+  /// 只在运行已经结束时用（调用方负责排除排队中：那时拿到的是上一次运行的日志）。
+  /// - 正文：只在手里只有 live-logs 快照或什么都没有时才换（快照最多 4KB，
+  ///   任务结束后 live-logs 也拿不到内容了）；SSE 送来过内容就以 SSE 的为准。
+  /// - 结果：面板先关 TinyLog（SSE 随即发 done）、再读文件压缩、最后才把结果
+  ///   写进 task_logs，刚收到 done 就查几乎总是「运行中」，而那份响应里是从
+  ///   log_path 读的整份日志。所以每次查之前都先等 [kLogSettleRetryDelay]
+  ///   （第一次也等，同 LogStreamPage），最多 [kLogSettleAttempts] 次。
+  ///   一直拿不到就保持原样，不报错、不猜成败。
   Future<void> _fallbackToLatestLog() async {
+    if (_settling || _runResult != null) return;
+    _settling = true;
+    final run = _runGeneration;
+    var contentTaken = false;
     try {
-      final resp = await DioClient.instance.dio.get(
-        ApiEndpoints.taskLatestLog(widget.taskId),
-      );
-      final data = extractData(resp.data);
-      final content = data is Map ? (data['content']?.toString() ?? '') : '';
-      // 等结果的这段时间里 SSE 送来了内容，就以 SSE 的为准。
-      if (!mounted || _logFromSse || content.isEmpty) {
-        return;
+      for (var attempt = 0; attempt < kLogSettleAttempts; attempt++) {
+        await _waitBeforeSettle();
+        if (!mounted || run != _runGeneration) return;
+        Map<dynamic, dynamic>? data;
+        try {
+          final resp = await DioClient.instance.dio.get(
+            ApiEndpoints.taskLatestLog(widget.taskId),
+          );
+          final raw = extractData(resp.data);
+          if (raw is Map) data = raw;
+        } on DioException catch (error) {
+          // 404（从没跑过 / 被保留策略清理）这类 4xx 再查也一样。
+          final code = error.response?.statusCode ?? 0;
+          if (code >= 400 && code < 500) return;
+        } catch (_) {}
+        if (!mounted || run != _runGeneration) return;
+        if (data == null) continue;
+
+        final content = data['content']?.toString() ?? '';
+        final rawStatus = data['status'];
+        final status = rawStatus is num ? rawStatus.toInt() : null;
+        final settled = status != null && status != kLogStatusRunning;
+        // 等结果的这段时间里 SSE 送来了内容，就以 SSE 的为准；
+        // 重试拿到的正文不再换第二遍，免得正在看的位置被重排两次。
+        final takeContent = !contentTaken && !_logFromSse && content.isNotEmpty;
+        if (takeContent || settled) {
+          setState(() {
+            if (takeContent) {
+              contentTaken = true;
+              final lines = content.replaceAll('\r\n', '\n').split('\n');
+              if (lines.last.isEmpty) {
+                lines.removeLast();
+              }
+              _log.replaceAll(lines);
+            }
+            if (settled) {
+              _runResult = status;
+              // 还没收口（轮询放弃那条路径要等这里回来再写状态）就先不动文案。
+              if (_done) _statusText = _runResultLabel(status);
+            }
+          });
+        }
+        // 面板没给状态就没什么可等的。
+        if (settled || status == null) return;
       }
-      final lines = content.replaceAll('\r\n', '\n').split('\n');
-      if (lines.last.isEmpty) {
-        lines.removeLast();
+    } finally {
+      if (run == _runGeneration) {
+        _settling = false;
       }
-      setState(() => _log.replaceAll(lines));
-    } catch (_) {}
+    }
   }
+
+  /// 结算每次查之前的等待。用可取消的 Timer：页面关了就不再留着一个挂起的定时器。
+  Future<void> _waitBeforeSettle() {
+    final completer = Completer<void>();
+    _settleRetryTimer?.cancel();
+    _settleRetryTimer = Timer(kLogSettleRetryDelay, completer.complete);
+    return completer.future;
+  }
+
+  /// 结算出的结果怎么写在状态胶囊里：成功沿用「已完成」，其余用日志状态的叫法
+  /// （失败 / 已终止）。
+  String _runResultLabel(int status) =>
+      status == kLogStatusSuccess ? '已完成' : logStatusLabel(status);
 
   /// 重连前把已显示的行交给去重缓冲。日志太长时前面的行已经从内存里丢掉，
   /// 但服务端仍从第一行开始重放，要让它先按行数跳过那一段（同 LogStreamPage）。
@@ -3464,6 +3575,7 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
     _sseClient.close();
     _pollTimer?.cancel();
     _pollTimer = null;
+    _sseDropped = false;
     _resetReplayBuffer();
     _sseClient.connect(
       path: ApiEndpoints.logStream(taskId),
@@ -3474,6 +3586,10 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
       onEvent: (event) {
         if (!mounted) return;
         if (event.event == 'done') {
+          // 停止之后只认结束：reconnect 之类不能把按钮变回「停止运行」。
+          final finished =
+              event.data == 'finished' || event.data == 'finished-late';
+          if (_stopRequested && !finished) return;
           if (event.data == 'reconnect') {
             setState(() {
               _done = false;
@@ -3482,16 +3598,22 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
             return;
           }
           // finished-late 是面板「等了一会儿才收口」的结束（面板 v3.2.0 起），对这里同样是跑完了。
-          final finished =
-              event.data == 'finished' || event.data == 'finished-late';
+          // 流结束不等于成功：结果没结算出来之前只写中性的「已结束」（停止过就是「已停止」）。
           setState(() {
             _done = finished;
-            _statusText = _statusFromStreamDone(event.data);
+            final result = _runResult;
+            _statusText = !finished
+                ? _statusFromStreamDone(event.data)
+                : result != null
+                ? _runResultLabel(result)
+                : _stopRequested
+                ? '已停止'
+                : '已结束';
           });
-          if (finished && !_logFromSse) {
-            // 这条流一行数据都没送来：live-logs 那会儿任务还在跑，连上 SSE 时已经结束了
-            // （短任务很容易碰上）。快照留着别清空（日志不到 4KB 时它就是全量），
-            // 再回落一次最近一次日志拿完整的。
+          if (finished) {
+            // 去 latest-log 结算结果。这条流一行数据都没送来时（live-logs 那会儿任务还在跑，
+            // 连上 SSE 时已经结束了，短任务很容易碰上）正文也换成它：快照留着别清空
+            // （日志不到 4KB 时它就是全量），拿到完整的再换。
             _fallbackToLatestLog();
           }
           return;
@@ -3510,6 +3632,8 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
           _log.replaceAll(newLines);
         }
         // 正文由 LogView 监听缓冲区自己刷新，整页只在「从无到有」或状态变了时重建。
+        // 停止之后送来的是收尾输出（TERM 收尾、后置脚本、终止提示），只追加，不改状态。
+        if (_stopRequested) return;
         if (wasEmpty || _done || _statusText != '运行中') {
           setState(() {
             _done = false;
@@ -3519,8 +3643,21 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
       },
       onDone: () {
         if (!mounted) return;
-        if (_done) return;
+        if (_done) {
+          // 停止之后流没等到 done 就断了：不会再有 done 了，直接去结算。
+          // 正常收口（done 先到）时结算已在途，这里不会多查。
+          if (_stopRequested) _fallbackToLatestLog();
+          return;
+        }
+        // 没等到 done 流就收口了（反代掐了长连接这类）：跟出错断开一样处理。
+        // 不置 _sseDropped 的话，之后点停止既不重连也不结算，胶囊永远停在
+        // 「已停止」，宽限期里的收尾输出也拿不到；不轮询的话也没人发现任务
+        // 已经跑完。轮询发现还在跑会重连 SSE，跑完了就去 latest-log 结算。
+        _sseDropped = true;
         setState(() => _statusText = '连接结束');
+        _pollTimer?.cancel();
+        _pollTimer = null;
+        _startPolling();
       },
       onError: (error) {
         if (!mounted) return;
@@ -3533,11 +3670,16 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
           });
           return;
         }
+        _sseDropped = true;
         if (!_done) {
           setState(() => _statusText = '连接错误');
           _pollTimer?.cancel();
           _pollTimer = null;
           _startPolling();
+        } else if (_stopRequested) {
+          // 停止之后流断了：不会再有 done，直接去结算（面板停止接口已经把这次
+          // 运行记成已终止）。
+          _fallbackToLatestLog();
         }
       },
     );
@@ -3547,24 +3689,50 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
   bool _resolvingScript = false;
   String? _cachedCommand;
 
+  /// 有没有东西可停：只有 live-logs 说在跑或在排队时才给「停止运行」。
+  ///
+  /// 不能只看 `!_done`：几秒就跑完的任务进来时 live-logs 已经是空的，页面会在
+  /// 「等待日志...」里轮询最多 15 秒（_done 一直是 false），这时任务早就结束了。
+  bool get _stoppable =>
+      _liveStatus == kTaskStatusRunning || _liveStatus == kTaskStatusQueued;
+
   Future<void> _stopLiveTask() async {
-    if (_actionBusy || _done) return;
-    setState(() => _actionBusy = true);
+    if (_actionBusy || _done || !_stoppable) return;
+    setState(() {
+      _actionBusy = true;
+      // 先于请求置上：stopTask 还要等任务列表刷新完，这期间 done 先到的话，
+      // 也只能显示「已停止」，不能先闪一下别的结果。
+      _stopRequested = true;
+    });
     try {
       await ref.read(taskProvider.notifier).stopTask(widget.taskId);
       if (!mounted) return;
-      _sseClient.close();
+      // SSE 不关：收尾输出还会送来，done 到了再去 latest-log 结算（见 done 分支）。
+      // SSE 断开后降级成轮询的，要重连 SSE，不能当场结算：面板停止只发 TERM、
+      // 留 5 秒宽限，宽限里的收尾输出、后置脚本还会写进 TinyLog，而停止接口已经把
+      // 这次记成已终止，当场结算第一次就收口，这些就再也拿不到了。重连会从头重放
+      // （去重后只补新行），最后照常发 done 触发结算；TinyLog 已经没了的话面板
+      // 立刻回 done:finished。排队中的（一直在轮询、没连过 SSE）这次根本没跑起来，
+      // latest-log 是上一次的，停掉轮询就行，不结算。
+      final reconnect = _sseDropped;
       _pollTimer?.cancel();
       _pollTimer = null;
       setState(() {
         _done = true;
-        _statusText = '已停止';
+        final result = _runResult;
+        _statusText = result != null ? _runResultLabel(result) : '已停止';
       });
       AppSnack.show(context, '已发送停止指令');
+      if (reconnect) _connectSSE(widget.taskId);
     } catch (error) {
-      if (mounted) {
-        AppSnack.error(context, extractErrorMessage(error, '停止任务失败'));
-      }
+      if (!mounted) return;
+      setState(() {
+        _stopRequested = false;
+        // 在途期间 done 先到、写成了「已停止」：停止其实没成，改回中性的
+        // 「已结束」，结果仍由那次结算给。
+        if (_statusText == '已停止') _statusText = '已结束';
+      });
+      AppSnack.error(context, extractErrorMessage(error, '停止任务失败'));
     } finally {
       if (mounted) setState(() => _actionBusy = false);
     }
@@ -3579,11 +3747,17 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
       _sseClient.close();
       _pollTimer?.cancel();
       _pollTimer = null;
+      // 上一次运行的结算作废：在途的 latest-log 回来后按代号丢掉。
+      _runGeneration++;
+      _settling = false;
       setState(() {
         _log.clear();
         _replayBuffer.clear();
         _logFromSse = false;
         _liveStatus = kTaskStatusRunning;
+        _runResult = null;
+        _stopRequested = false;
+        _sseDropped = false;
         _loading = true;
         _done = false;
         _statusText = '连接中...';
@@ -3646,20 +3820,25 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
     }
   }
 
+  /// 状态胶囊的色调。绿 / 红只认从 latest-log 结算出的 [_runResult]：
+  /// 流结束、轮询收口、停止本身都说不出成败，一律中性。
   FullscreenLogTone _resolveLiveTone() {
     if (_statusText == '登录已失效' ||
         _statusText == '连接错误' ||
-        _statusText == 'failed' ||
-        _statusText.contains('失败')) {
+        _statusText == 'failed') {
       return FullscreenLogTone.failed;
     }
     if (!_done) {
       return FullscreenLogTone.running;
     }
-    if (_statusText == '已完成') {
-      return FullscreenLogTone.success;
+    switch (_runResult) {
+      case kLogStatusSuccess:
+        return FullscreenLogTone.success;
+      case kLogStatusFailed:
+        return FullscreenLogTone.failed;
+      default:
+        return FullscreenLogTone.neutral;
     }
-    return FullscreenLogTone.neutral;
   }
 
   String _statusFromLiveTask(double? status, {required bool done}) {
@@ -3676,18 +3855,20 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
         return '排队中';
       case 1:
         return '已启用';
+      // 任务状态说不出这次运行的成败：只写「已结束」，结果等 latest-log 结算。
       case 2:
-        return '已完成';
+        return '已结束';
       default:
-        return _log.isEmpty ? '等待日志...' : '已完成';
+        return _log.isEmpty ? '等待日志...' : '已结束';
     }
   }
 
   String _statusFromStreamDone(String value) {
     switch (value) {
+      // 流结束不带成败（panel-contract.md「实时日志」），见 done 分支的结算。
       case 'finished':
       case 'finished-late':
-        return '已完成';
+        return '已结束';
       case 'timeout':
         return '等待日志...';
       case 'reconnect':
@@ -3714,15 +3895,14 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
       emptyMessage: _done ? '无日志内容' : '等待日志输出...',
       configuredBackgroundColor: _logBackgroundColor,
       truncatedHint: '完整日志可在「运行日志」里打开这条记录下载',
-      onStop: (!_done && canOperate) ? _stopLiveTask : null,
+      onStop: (!_done && _stoppable && canOperate) ? _stopLiveTask : null,
       stopBusy: _actionBusy,
       onRerun: (_done && canOperate) ? _rerunLiveTask : null,
       rerunBusy: _actionBusy,
       onOpenScript: canOperate ? _openScriptEditor : null,
       openScriptBusy: _resolvingScript,
-      copySuccessToast: _log.droppedCount > 0
-          ? '已复制最近 ${_log.length} 行'
-          : '日志已复制到剪贴板',
+      // 复制提示不在这里算：页面流式追加时不重建，build 时算好的「已复制最近 N 行」
+      // 到点击时早就过期了，由 scaffold 在点击那一刻按缓冲区现算。
     );
   }
 }

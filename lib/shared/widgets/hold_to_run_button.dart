@@ -4,6 +4,9 @@ import 'package:flutter/services.dart';
 import '../../core/theme/design_tokens.dart';
 
 /// 「按住运行」安全防误触按钮（v3.0 Nordic Calm：克制钴蓝胶囊 + 平滑进度填充）。
+///
+/// [width] / [height] 是名义尺寸；外面给紧约束时（嵌进 `NotchedCard` 的缺口）
+/// 以实际拿到的尺寸为准，图标圆按实际高度算、上下居中，不会被拉歪。
 class HoldToRunButton extends StatefulWidget {
   final String label;
   final VoidCallback onConfirmed;
@@ -12,6 +15,10 @@ class HoldToRunButton extends StatefulWidget {
   final IconData icon;
   final double width;
   final double height;
+
+  /// 外形圆角，默认胶囊。与 `AppPillButton`（[AppRadius.md]）同处一个位置、
+  /// 状态一变就互相替换时传 [AppRadius.md]，免得外形来回跳（常用任务卡缺口）。
+  final double radius;
 
   const HoldToRunButton({
     super.key,
@@ -22,6 +29,7 @@ class HoldToRunButton extends StatefulWidget {
     this.icon = Icons.play_arrow_rounded,
     this.width = 164,
     this.height = 46,
+    this.radius = AppRadius.pill,
   });
 
   @override
@@ -77,59 +85,75 @@ class _HoldToRunButtonState extends State<HoldToRunButton>
     final reduce = AppMotion.reduce(context);
     final bg = palette.primaryBtnBg;
     final fg = palette.primaryBtnFg;
-    final iconSize = (widget.height - 14).clamp(24.0, 38.0);
 
     final pill = Container(
       width: widget.width,
       height: widget.height,
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(AppRadius.pill),
+        borderRadius: BorderRadius.circular(widget.radius),
       ),
       clipBehavior: Clip.antiAlias,
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: AnimatedBuilder(
-              animation: _progress,
-              builder: (context, _) => FractionallySizedBox(
-                key: const Key('hold-to-run-progress'),
-                alignment: Alignment.centerLeft,
-                widthFactor: _progress.value,
-                child: ColoredBox(color: fg.withValues(alpha: 0.24)),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // 按实际高度算：缺口给的 70dp 紧约束会把名义 46 撑高
+          final height = constraints.maxHeight.isFinite
+              ? constraints.maxHeight
+              : widget.height;
+          final iconSize = (height - 14).clamp(24.0, 38.0);
+          // 图标圆离左边与离上下一样远：胶囊时与左端半圆同心
+          final inset = ((height - iconSize) / 2).clamp(0.0, double.infinity);
+          return Stack(
+            alignment: AlignmentDirectional.centerStart,
+            children: [
+              Positioned.fill(
+                child: AnimatedBuilder(
+                  animation: _progress,
+                  builder: (context, _) => FractionallySizedBox(
+                    key: const Key('hold-to-run-progress'),
+                    alignment: Alignment.centerLeft,
+                    widthFactor: _progress.value,
+                    child: ColoredBox(color: fg.withValues(alpha: 0.24)),
+                  ),
+                ),
               ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 7),
-            child: Row(
-              children: [
-                Container(
-                  width: iconSize,
-                  height: iconSize,
-                  decoration: BoxDecoration(
-                    color: fg.withValues(alpha: 0.96),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(widget.icon, size: iconSize * 0.56, color: bg),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    widget.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 14.5,
-                      fontWeight: FontWeight.w600,
-                      color: fg,
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: inset),
+                child: Row(
+                  children: [
+                    Container(
+                      key: const Key('hold-to-run-icon'),
+                      width: iconSize,
+                      height: iconSize,
+                      decoration: BoxDecoration(
+                        color: fg.withValues(alpha: 0.96),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        widget.icon,
+                        size: iconSize * 0.56,
+                        color: bg,
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        widget.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w600,
+                          color: fg,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-          ),
-        ],
+              ),
+            ],
+          );
+        },
       ),
     );
 

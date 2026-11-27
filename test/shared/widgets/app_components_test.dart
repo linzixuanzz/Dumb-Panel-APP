@@ -195,6 +195,50 @@ void main() {
       expect(paintOf('第三行').foregroundPainter, isNotNull);
     });
 
+    testWidgets('行尺寸常量是唯一真源：默认图标方块 = leading 槽宽，标题从 textStart 开始', (
+      tester,
+    ) async {
+      expect(AppIconTile.defaultSize, AppGroupedRow.leadingWidth);
+      expect(
+        AppGroupedRow.textStart,
+        AppGroupedRow.hPad + AppGroupedRow.leadingWidth + AppGroupedRow.gap,
+      );
+      await tester.pumpWidget(
+        _wrap(
+          SizedBox(
+            width: 320,
+            child: AppGroupedList(
+              children: [
+                AppGroupedRow(
+                  leading: AppIconTile(
+                    icon: Icons.lock,
+                    color: AppPalette.light.ok,
+                  ),
+                  title: '有图标',
+                ),
+                const AppGroupedRow(title: '没图标'),
+              ],
+            ),
+          ),
+        ),
+      );
+      double startOf(String title) {
+        final row = find.ancestor(
+          of: find.text(title),
+          matching: find.byType(AppGroupedRow),
+        );
+        return tester.getTopLeft(find.text(title)).dx -
+            tester.getTopLeft(row).dx;
+      }
+
+      expect(startOf('有图标'), AppGroupedRow.textStart);
+      expect(startOf('没图标'), AppGroupedRow.hPad);
+      expect(
+        tester.getSize(find.byType(AppGroupedRow).first).height,
+        greaterThanOrEqualTo(AppGroupedRow.minHeight),
+      );
+    });
+
     testWidgets('懒加载拼分组时可以手动指定分隔线', (tester) async {
       await tester.pumpWidget(
         _wrap(const AppGroupedRow(title: '独立的行', showSeparator: true)),
@@ -207,6 +251,17 @@ void main() {
   });
 
   group('AppIconTile', () {
+    BoxDecoration decoOf(WidgetTester tester, String key) =>
+        tester
+                .widget<Container>(
+                  find.descendant(
+                    of: find.byKey(Key(key)),
+                    matching: find.byType(Container),
+                  ),
+                )
+                .decoration!
+            as BoxDecoration;
+
     testWidgets('浅底配同色图标；solid 是实色底白图标；圆角按 46 的比例缩', (tester) async {
       final p = AppPalette.light;
       await tester.pumpWidget(
@@ -226,22 +281,96 @@ void main() {
           ),
         ),
       );
-      final tint = tester.widget<Container>(
-        find.descendant(of: find.byKey(const Key('tint')), matching: find.byType(Container)),
-      );
-      final tintDeco = tint.decoration! as BoxDecoration;
+      final tintDeco = decoOf(tester, 'tint');
       expect(tintDeco.color, p.tint(p.ok));
       expect(tintDeco.borderRadius, BorderRadius.circular(AppRadius.tile * 34 / 46));
       expect(tester.widget<Icon>(find.byIcon(Icons.check)).color, p.ok);
 
-      final solid = tester.widget<Container>(
-        find.descendant(of: find.byKey(const Key('solid')), matching: find.byType(Container)),
-      );
-      final solidDeco = solid.decoration! as BoxDecoration;
+      final solidDeco = decoOf(tester, 'solid');
       expect(solidDeco.color, p.ok);
       expect(solidDeco.borderRadius, BorderRadius.circular(AppRadius.tile));
       expect(tester.widget<Icon>(find.byIcon(Icons.lock)).color, p.onStatus);
       expect(tester.getSize(find.byKey(const Key('tint'))), const Size(34, 34));
+    });
+
+    testWidgets('同尺寸的实色与浅底圆角一致：切选中态、同组混排外形不跳', (
+      tester,
+    ) async {
+      final p = AppPalette.light;
+      await tester.pumpWidget(
+        _wrap(
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 日志页状态筛选：52dp，选中时切成实色
+              AppIconTile(
+                key: const Key('filter-off'),
+                icon: Icons.check,
+                color: p.ok,
+                size: 52,
+              ),
+              AppIconTile(
+                key: const Key('filter-on'),
+                icon: Icons.close,
+                color: p.err,
+                size: 52,
+                solid: true,
+              ),
+              // 服务器管理：当前面板是默认尺寸的实色方块，其它是浅底
+              AppIconTile(
+                key: const Key('row-tint'),
+                icon: Icons.dns,
+                color: p.accent,
+              ),
+              AppIconTile(
+                key: const Key('row-solid'),
+                icon: Icons.storage,
+                color: p.accent,
+                solid: true,
+              ),
+            ],
+          ),
+        ),
+      );
+      final r52 = BorderRadius.circular(AppRadius.tile * 52 / 46);
+      expect(decoOf(tester, 'filter-off').borderRadius, r52);
+      expect(decoOf(tester, 'filter-on').borderRadius, r52);
+      final r34 = BorderRadius.circular(AppRadius.tile * 34 / 46);
+      expect(decoOf(tester, 'row-tint').borderRadius, r34);
+      expect(decoOf(tester, 'row-solid').borderRadius, r34);
+    });
+
+    testWidgets('深色：实色方块的图标走 onStatus，压在每种状态实色上都 ≥ 3:1', (
+      tester,
+    ) async {
+      final p = AppPalette.dark;
+      double contrast(Color a, Color b) {
+        final la = a.computeLuminance();
+        final lb = b.computeLuminance();
+        return la > lb ? (la + 0.05) / (lb + 0.05) : (lb + 0.05) / (la + 0.05);
+      }
+
+      // 日志页状态筛选选中态、服务器管理的当前面板都用这几种实色
+      final colors = {
+        'accent': p.accent,
+        'ok': p.ok,
+        'err': p.err,
+        'warn': p.warn,
+        'purple': p.purple,
+      };
+      for (final MapEntry(key: name, value: color) in colors.entries) {
+        await tester.pumpWidget(
+          _wrap(
+            AppIconTile(icon: Icons.lock, color: color, solid: true),
+            dark: true,
+          ),
+        );
+        await tester.pumpAndSettle();
+        final fg = tester.widget<Icon>(find.byIcon(Icons.lock)).color!;
+        expect(fg, p.onStatus);
+        // WCAG 1.4.11 图形对比 ≥ 3:1
+        expect(contrast(fg, color), greaterThanOrEqualTo(3), reason: name);
+      }
     });
   });
 
@@ -310,6 +439,43 @@ void main() {
     testWidgets('value 不在选项里：不画滑块', (tester) async {
       await pumpSeg(tester, 'nope', (_) {});
       expect(find.byKey(const Key('app-segmented-thumb')), findsNothing);
+    });
+
+    testWidgets('命中区 44dp：底槽仍是 38dp，点在底槽上下边缘外也能切', (tester) async {
+      final changes = <String>[];
+      await pumpSeg(tester, 'all', changes.add);
+
+      final control = tester.getRect(find.byType(AppSegmented<String>));
+      expect(control.height, AppTapTarget.min);
+      Rect rectOf(String key) => tester.getRect(find.byKey(Key(key)));
+      final track = rectOf('app-segmented-track');
+      expect(track.height, AppSegmented.trackHeight);
+      expect(track.center.dy, moreOrLessEquals(control.center.dy));
+      // 滑块仍在底槽里：上下各内缩 3dp，与底槽同心
+      final thumb = rectOf('app-segmented-thumb');
+      expect(thumb.top, moreOrLessEquals(track.top + 3));
+      expect(thumb.bottom, moreOrLessEquals(track.bottom - 3));
+      final thumbDeco =
+          tester
+                  .widget<DecoratedBox>(
+                    find.byKey(const Key('app-segmented-thumb')),
+                  )
+                  .decoration
+              as BoxDecoration;
+      expect(
+        thumbDeco.borderRadius,
+        BorderRadius.circular(AppRadius.md - 3),
+        reason: '滑块圆角从底槽圆角推出来，不写字面量',
+      );
+
+      // 「手动」那一列：点在 44dp 命中区的最上沿（底槽之外）
+      final x = tester.getCenter(find.text('手动')).dx;
+      await tester.tapAt(Offset(x, control.top + 1));
+      expect(changes, ['manual']);
+      // 「定时」那一列：点在最下沿
+      final x2 = tester.getCenter(find.text('定时')).dx;
+      await tester.tapAt(Offset(x2, control.bottom - 1));
+      expect(changes, ['manual', 'cron']);
     });
   });
 

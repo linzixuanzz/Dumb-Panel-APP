@@ -249,6 +249,10 @@ class _FavoriteTaskCard extends StatelessWidget {
     );
     final labelStyle = AppText.caption.copyWith(color: palette.text2);
 
+    // 缺口里的三种按钮按缺口实际给的大小画（196 × 70），外形统一成 AppPillButton
+    // 的圆角：任务开始 / 结束运行时按钮在「按住运行」和「实时日志」之间切换，
+    // 尺寸和外形都不跳。
+    const slot = NotchedCard.defaultSlotSize;
     final Widget notch;
     if (!canRun) {
       notch = AppPillButton(
@@ -256,7 +260,7 @@ class _FavoriteTaskCard extends StatelessWidget {
         icon: Icons.open_in_new_rounded,
         onPressed: onOpen,
         expand: true,
-        height: 70,
+        height: slot.height,
       );
     } else if (task.isRunning) {
       // 已经在跑：再按一次只会提示「运行中」，缺口里直接给看日志
@@ -265,10 +269,16 @@ class _FavoriteTaskCard extends StatelessWidget {
         icon: Icons.receipt_long_rounded,
         onPressed: onViewLog,
         expand: true,
-        height: 70,
+        height: slot.height,
       );
     } else {
-      notch = HoldToRunButton(label: '按住运行', onConfirmed: onRun);
+      notch = HoldToRunButton(
+        label: '按住运行',
+        width: slot.width,
+        height: slot.height,
+        radius: AppRadius.md,
+        onConfirmed: onRun,
+      );
     }
 
     return NotchedCard(

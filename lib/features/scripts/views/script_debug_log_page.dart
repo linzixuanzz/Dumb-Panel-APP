@@ -51,6 +51,25 @@ class _ScriptDebugLogPageState extends State<ScriptDebugLogPage> {
   final Stopwatch _stopwatch = Stopwatch();
   Color? _logBackgroundColor;
 
+  /// 每发一次 GET 加一。并发的请求可能乱序回来（每个 GET 都带整份日志，
+  /// 大包慢、小包快），只认比上次已应用的那份更新的回包，
+  /// 晚到的旧快照不能把正文退回去、也不能把已结束的运行改回「实时输出」。
+  int _requestSeq = 0;
+  int _appliedSeq = 0;
+
+  /// 本轮运行还没回来的 GET 个数。周期轮询碰到有在途请求就跳过这一跳：
+  /// 慢网下 RTT 超过轮询间隔时，不再一跳叠一跳地拉整份日志。
+  ///
+  /// 按轮计数，[_startRunTracking] 时清零。停止前发出的慢轮询可能在
+  /// 「重新运行」之后还挂着；若仍算在里面，新一轮每跳都被它挡住，
+  /// 正文停在那儿直到它回来或超时（dio 接收超时 30s）。
+  int _inFlight = 0;
+
+  /// 第几轮运行跟踪，[_startRunTracking] 时加一。请求记下发出时的轮次，
+  /// 回来时只有还在同一轮才扣减 [_inFlight]，上一轮的请求不会把它扣成负数
+  /// （负数同样永远不等于 0，轮询会就此停掉）。
+  int _trackingEpoch = 0;
+
   @override
   void initState() {
     super.initState();
@@ -69,12 +88,15 @@ class _ScriptDebugLogPageState extends State<ScriptDebugLogPage> {
     _stopwatch
       ..reset()
       ..start();
+    _trackingEpoch++;
+    _inFlight = 0;
 
     _loadLogs();
-    _pollTimer = Timer.periodic(
-      const Duration(milliseconds: 700),
-      (_) => _loadLogs(),
-    );
+    _pollTimer = Timer.periodic(const Duration(milliseconds: 700), (_) {
+      if (_inFlight == 0) {
+        _loadLogs();
+      }
+    });
     _elapsedTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
       if (mounted && !_done) {
         setState(() {});
@@ -93,11 +115,14 @@ class _ScriptDebugLogPageState extends State<ScriptDebugLogPage> {
 
   Future<void> _loadLogs() async {
     final activeRunId = _runId;
+    final epoch = _trackingEpoch;
+    final seq = ++_requestSeq;
+    _inFlight++;
     try {
       final resp = await DioClient.instance.dio.get(
         ApiEndpoints.scriptsRunLogs(activeRunId),
       );
-      if (!mounted || activeRunId != _runId) return;
+      if (!mounted || activeRunId != _runId || seq < _appliedSeq) return;
       final data = extractData(resp.data);
       if (data is! Map) return;
 
@@ -114,13 +139,18 @@ class _ScriptDebugLogPageState extends State<ScriptDebugLogPage> {
         }
       }
       final done = data['done'] == true;
+      // 已经结束（面板报了完成，或用户刚点了停止）就只进不退：
+      // 停止前发出、晚到的 done=false 只是旧快照，计时器也已取消，
+      // 应用了页面会永远卡在「实时输出」。
+      if (_done && !done) return;
+      _appliedSeq = seq;
       final exitCode = data['exit_code'];
       final status = data['status']?.toString() ?? '';
 
       final (label, tone) = _resolveStatus(status, exitCode, done);
 
+      _applyLogs(nextLogs);
       setState(() {
-        _log.replaceAll(nextLogs);
         _done = done;
         _loading = false;
         _statusLabel = label;
@@ -133,15 +163,46 @@ class _ScriptDebugLogPageState extends State<ScriptDebugLogPage> {
         _elapsedTimer?.cancel();
       }
     } catch (_) {
-      if (!mounted || activeRunId != _runId) return;
+      if (!mounted || activeRunId != _runId || seq < _appliedSeq) return;
       setState(() {
         _loading = false;
-        if (_log.isEmpty) {
+        // 已结束的运行保留结束时的状态，补拉失败不改成「读取失败」。
+        if (_log.isEmpty && !_done) {
           _statusLabel = '日志读取失败';
           _statusTone = FullscreenLogTone.failed;
         }
       });
+    } finally {
+      if (epoch == _trackingEpoch) _inFlight--;
     }
+  }
+
+  /// 把这一跳拉到的整份日志并进缓冲区。
+  ///
+  /// 面板每跳都回整份日志。以前每跳都 `replaceAll`：generation 一变，LogView
+  /// 就当成换了一份日志，跟随中重建尾段并 jumpTo，选区被清、拖动被打断，
+  /// 上翻时「新增 N 行」也被清零。调试日志在面板端只往后追加，
+  /// 所以内容没变就不动缓冲区，以现有内容开头就只追加多出来的行；
+  /// 对不上（面板超过上限后成块丢掉了头部）才整段替换。
+  void _applyLogs(List<String> next) {
+    final total = _log.totalCount;
+    if (next.length < total || !_startsWithBuffered(next)) {
+      _log.replaceAll(next);
+    } else if (next.length > total) {
+      _log.append(next.sublist(total));
+    }
+  }
+
+  /// [next] 是否以缓冲区现有内容开头（调用方保证 `next.length >= totalCount`）。
+  ///
+  /// 只比还留在内存里的行（更早的已被缓冲区裁掉），从最后一行往前比：
+  /// 真有变化时几乎总是尾部先对不上，能尽早返回。
+  bool _startsWithBuffered(List<String> next) {
+    final dropped = _log.droppedCount;
+    for (var i = _log.length - 1; i >= 0; i--) {
+      if (next[dropped + i] != _log.lineAt(i)) return false;
+    }
+    return true;
   }
 
   (String, FullscreenLogTone) _resolveStatus(

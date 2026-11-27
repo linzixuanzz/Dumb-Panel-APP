@@ -533,7 +533,10 @@ class _TaskViewEditorSheetState extends ConsumerState<_TaskViewEditorSheet> {
     return AppCard(
       padding: const EdgeInsets.all(AppSpacing.md),
       radius: AppRadius.md,
-      color: surfaces.subtle,
+      // 卡片底与弹层同为 card、靠发丝线分出来，不用 subtle：subtle 就是 card2，
+      // 和主题里输入框的默认填充同值，里面的下拉与「值」输入框会和卡片融成一片，
+      // 看不出哪里能点。
+      color: surfaces.card,
       borderColor: surfaces.subtleBorder,
       child: Column(
         children: [
@@ -745,8 +748,11 @@ class _TaskViewEditorSheetState extends ConsumerState<_TaskViewEditorSheet> {
                     height: 16,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      // 主按钮上的转圈：跟主按钮前景色（浅色白、深色黑）
-                      color: context.palette.primaryBtnFg,
+                      // 转圈出现时 onPressed 已是 null，按钮是禁用底 fill
+                      // 而不是钴蓝，primaryBtnFg（白）压在浅色的 fill 上
+                      // 只有 1.17:1。主题的禁用前景 text3 也只有约 2.2:1，
+                      // 够不上图形的 3:1，所以取 text2（浅 5.1 / 深 4.3）。
+                      color: context.palette.text2,
                     ),
                   )
                 : const Text('保存'),

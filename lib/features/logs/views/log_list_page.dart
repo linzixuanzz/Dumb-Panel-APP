@@ -424,8 +424,11 @@ class _LogListPageState extends ConsumerState<LogListPage> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
+            // 红底要配 onStatus：主题给的 primaryBtnFg 是钴蓝底上的白字，
+            // 深色下压在提亮的红上不到 3:1。
             style: FilledButton.styleFrom(
               backgroundColor: context.palette.err,
+              foregroundColor: context.palette.onStatus,
             ),
             child: const Text('删除'),
           ),
@@ -492,6 +495,7 @@ class _LogListPageState extends ConsumerState<LogListPage> {
               onPressed: () => Navigator.pop(ctx, true),
               style: FilledButton.styleFrom(
                 backgroundColor: context.palette.err,
+                foregroundColor: context.palette.onStatus,
               ),
               child: const Text('清理'),
             ),
@@ -542,6 +546,7 @@ class _LogListPageState extends ConsumerState<LogListPage> {
             onPressed: () => Navigator.pop(dialogCtx, true),
             style: FilledButton.styleFrom(
               backgroundColor: context.palette.err,
+              foregroundColor: context.palette.onStatus,
             ),
             child: const Text('删除'),
           ),
@@ -1145,8 +1150,9 @@ class _LogListPageState extends ConsumerState<LogListPage> {
           AppGroupedRow(
             leading: _selectionMode
                 ? SizedBox(
-                    width: 36,
-                    height: 36,
+                    // 与图标块同宽：分隔线起点按 leadingWidth 算。
+                    width: AppGroupedRow.leadingWidth,
+                    height: AppGroupedRow.leadingWidth,
                     child: Icon(
                       selected
                           ? Icons.check_circle_rounded
@@ -1171,8 +1177,13 @@ class _LogListPageState extends ConsumerState<LogListPage> {
               behavior: HitTestBehavior.opaque,
               onTap: open,
               child: Container(
-                // 左边与行标题对齐：行内边距 18 + 图标 36 + 间距 14
-                margin: const EdgeInsets.fromLTRB(68, 0, 18, 12),
+                // 左边与行标题对齐，右边与行内边距对齐。
+                margin: const EdgeInsets.fromLTRB(
+                  AppGroupedRow.textStart,
+                  0,
+                  AppGroupedRow.hPad,
+                  12,
+                ),
                 padding: const EdgeInsets.symmetric(
                   horizontal: 10,
                   vertical: 7,
