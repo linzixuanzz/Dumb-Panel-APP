@@ -385,12 +385,16 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
     await load();
   }
 
+  /// [enable] 为 true 时顺带启用（APP #29）：被自动禁用的变量改完值保存即生效。
+  /// 面板 `PUT /envs/:id` 的 `enabled` 是指针字段（v1.0.0 起就有），不传就不动启用状态，
+  /// 所以只在调用方明确要启用时才带，不做版本判断。
   Future<void> update(
     int id,
     String name,
     String value, {
     String remarks = '',
     List<String> groups = const [],
+    bool enable = false,
   }) async {
     await _dio.put(
       ApiEndpoints.envById(id),
@@ -402,6 +406,7 @@ class EnvListNotifier extends StateNotifier<EnvListState> {
         'remarks': remarks,
         'group': groups.join(','),
         'groups': groups,
+        if (enable) 'enabled': true,
       },
     );
     await load();
@@ -2275,6 +2280,11 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                       child: FilledButton.icon(
                         onPressed: () async {
                           final navigator = Navigator.of(ctx);
+                          // APP #29：已禁用的变量（多是 cookie 失效被自动禁用）改了值就顺带启用，
+                          // 省得再去「已禁用」区找它。只改名称 / 备注 / 分组不动启用状态；
+                          // 敏感值没揭开时 valueC 仍是原值，不算改动。
+                          final reenable =
+                              !env.enabled && valueC.text != env.value;
                           try {
                             await ref
                                 .read(envListProvider.notifier)
@@ -2284,6 +2294,7 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                                   valueC.text,
                                   remarks: remarksC.text.trim(),
                                   groups: _normalizeGroups([groupC.text]),
+                                  enable: reenable,
                                 );
                             // 只在弹层还开着时关它，理由见上面「置顶」按钮。
                             if (ctx.mounted &&
@@ -2294,7 +2305,10 @@ class _EnvListPageState extends ConsumerState<EnvListPage> {
                               return;
                             }
                             // 同上：弹层已 pop，只有页面自己的 context 还能弹提示。
-                            AppSnack.success(context, '已保存');
+                            AppSnack.success(
+                              context,
+                              reenable ? '已保存并启用' : '已保存',
+                            );
                           } catch (error) {
                             final message = extractErrorMessage(
                               error,
