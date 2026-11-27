@@ -1,121 +1,42 @@
-// 设计令牌 —— 圆角 / 间距 / 描边 / 明暗表面色的**唯一定义处**。
-//
-// 为什么需要它：
-// 改造前全库有 149 处手写 `BorderRadius.circular()`（11 种取值：4/8/9/10/12/14/16/18/20/24/999）、
-// 134 处手写 `BoxDecoration(`、507 行手写 `final isLight = ...` 后逐处三元。
-// 真正走 Flutter `Card` 的只有 6 处，所以把 `app_theme.dart` 的 `cardTheme`
-// 圆角改成 0，界面上 96% 的卡片**不会有任何变化**。
-//
-// 本文件把这些散落的数值收成常量，配合 `lib/shared/widgets/` 下的基元组件，
-// 让第 1 期全面扁平化变成「改这里一处」而不是「逐页面改 140 处」。
+// 设计令牌 —— 圆角 / 间距 / 字阶 / 动效 / 明暗表面色的唯一真源（v3.0 Nordic Calm）。
 
 import 'package:flutter/material.dart';
 
 import 'app_palette.dart';
 import 'app_theme.dart';
 
-// 导入本文件即可拿到 `context.palette`，不必再单独 import 色板。
 export 'app_palette.dart';
 
-/// 圆角令牌。
-///
-/// 提交 12 之后全库已无散装圆角字面量，**每一处圆角都由本文件的常量供给**，
-/// 所以「改这里一处全局生效」从这一刻起才是真的。
-///
-/// 分档依据是**角色**，不是数值 —— 按数值一刀切会踩两个坑：
-/// 1. **嵌套**：图标底板原本写 12/14，与包着它的卡片（14）几乎相等甚至相同，
-///    换算过去就成了「内层的角比外层还圆」。所以图标底板一律降到 [sm]，
-///    与外层拉开一档。
-/// 2. **clamp**：Flutter 画圆角时会把半径截到边长的一半。高 6 的进度条写 4、
-///    高 31 的 chip 写 20，渲染出来本来就是胶囊，它们归 [pill] 是零像素变化。
-///
-/// v1.x 的档位是下面这五个（v2.0 另加了 [card] / [cardSm] / [tile]，见类末尾）：
-/// - [control] —— Checkbox。唯一的**控件**档，不跟表面一起收缩。
-/// - [sm] —— 图标底板、微徽章、代码块、小方按钮。
-/// - [md] —— 输入框、按钮、内嵌块、提示条、弹出菜单、左滑操作按钮。
-/// - [lg] —— 列表项卡片、区块级大卡片、弹窗、底部面板、主视觉 logo。
-/// - [pill] —— chip、胶囊徽章、进度条、圆形水波纹。
-///
-/// **取值已经用户拍板：`sm=8 / md=12 / lg=14` 保持不动。**
-/// 这一版收敛要的是「11 种取值 → 5 个有名字的档」，不是把界面改方 ——
-/// 以后想整体调圆角，改这里的一个数字就够了，不必回到 150 个站点。
-/// 因为一个取值都没动，删除下面三个零引用档位是**零像素变化**，
-/// 不需要走查视觉回归。（真正移动了像素的是提交 12 的逐站点归档。）
-///
-/// 曾有 `xs`(4) / `xl`(16) / `xxl`(20) 三档，归档做完后全库零引用，
-/// 已一并删除 —— 留着只会让后来的人「顺手」把新写法分叉回去。
-/// 注意 [control] 同样是 4，但它**不是** `xs` 改名：`xs` 的语义是
-/// 「最小的表面」，[control] 的语义是「控件」，两者收缩规则不同。
+/// 圆角令牌（Nordic Calm 克制现代圆角体系，彻底告别 30dp 夸张气泡感）。
 class AppRadius {
   const AppRadius._();
 
-  /// **控件**圆角（目前只有 Checkbox）。取值 4，且**不参与** sm/md/lg 的整体收缩。
-  ///
-  /// 为什么单独一档而不是折进 [sm]：sm/md/lg/pill 描述的是「表面」——
-  /// 卡片、内嵌块、徽章、chip，它们的共同点是尺寸由内容撑开，几十到几百 dp。
-  /// Checkbox 是**控件**，方框恒定 18dp，`shape` 的半径直接就是它一半宽度的比例：
-  /// r=4 占 22%，r=8（sm）占 44% —— 已经接近圆形。把它折进 sm 的结果是
-  /// 「扁平化提交把勾选框改圆了」，与本期方向相反。
-  ///
-  /// 4 不是新造的第 12 种取值：它本来就在改造前的 11 种直方图里
-  /// （`login_page` 的「记住我」与 `log_list` 的多选框），这里只是给它一个名字，
-  /// 并顺手把另外 7 个走 Material 默认值（约 2dp）的 Checkbox 拉齐到同一档。
-  ///
-  /// ⚠️ 以后若要整体压 sm/md/lg，**本档不要跟着动** —— 它衡量的是 18dp 的
-  /// 固定方框，不是由内容撑开的表面。
+  /// 控件固定方框圆角（如 Checkbox 18dp 方框）。
   static const double control = 4;
 
-  /// **图标底板 / 微徽章 / 代码块 / 小方按钮**。原取值 4 / 8 / 9 / 10 / 12 / 14。
-  ///
-  /// 这一档吃掉的原值跨度最大，因为它收编的是两类东西：
-  /// - 26–46dp 的**图标底板**（原来 8～14 各写各的）。它们必须比包着自己的
-  ///   卡片小一档，否则内外两个角一样大 —— 这是提交 12 里最容易改错的一类。
-  /// - fontSize 9–10 的**微徽章**（原来一律 4）。
-  ///
-  /// ⚠️ 微徽章高度只有 12–14，本档的 8 会被 clamp 到高的一半，
-  /// 它们实际渲染成胶囊。这是已知且可接受的：写 [pill] 也是同一个结果，
-  /// 但那会谎称「设计上它是 chip」。
+  /// 微徽章 / 代码块 / 小方按钮。
   static const double sm = 8;
 
-  /// **输入框 / 按钮 / 内嵌块 / 提示条 / 弹出菜单**。原取值 8 / 10 / 12 / 14。
-  ///
-  /// 输入框这一支尤其要整档统一：`inputDecorationTheme` 的
-  /// border / enabledBorder / focusedBorder 是靠插值做聚焦动画的，
-  /// 三者圆角不一致会在点进输入框的那一帧看到角在抖。
+  /// 输入框 / 标准按钮 / 内嵌块 / 提示条 / 弹出菜单。
   static const double md = 12;
 
-  /// **列表项卡片 / 区块级大卡片 / 弹窗 / 底部面板 / 主视觉 logo**。
-  /// 原取值 12 / 14 / 16 / 20。
-  ///
-  /// 「浮在页面之上的容器」（Dialog、BottomSheet）与「铺在页面里的卡片」
-  /// 合并到同一档：它们不会同时出现在一个视觉层级里，分两档只会多一个
-  /// 需要维护的数字。
-  static const double lg = 14;
+  /// 次级列表项卡片 / 弹窗内嵌容器。
+  static const double lg = 16;
 
-  /// **胶囊**：chip、状态徽章、进度条、圆形水波纹。原取值 4 / 10 / 20 / 999。
-  ///
-  /// 4 / 10 / 20 那几处不是写错了，是**写得不诚实**：半径超过边长一半时
-  /// Flutter 会 clamp，它们渲染出来一直就是胶囊。改成本档是零像素变化。
-  ///
-  /// 本档**不跟着扁平化归 0**（已确认）：chip 是胶囊、卡片是圆角矩形，
-  /// 这是两类东西；把 chip 也改成方块，它会和紧挨着的输入框糊成一片。
+  /// 胶囊：状态胶囊、进度条、圆形触控波纹。
   static const double pill = 999;
 
-  // ── v2.0 新增（方案书 §2.3）────────────────────────────────
-  // 上面五档是 v1.x 次级页面在用的，取值不动；v2.0 的新组件（分组列表、缺口卡片、
-  // 大卡片、弹层）走下面三档。次级页面换装时可以逐步迁到这三档。
+  /// 区块级大卡片 / 分组列表容器 / 底部抽屉顶角（方案 1 `--r-card: 20px`）。
+  static const double card = 20;
 
-  /// 大卡片 / 分组列表容器 / 弹层顶部。
-  static const double card = 30;
+  /// 双列小卡片 / 行级独立卡片（方案 1 `--r-row: 16px`）。
+  static const double cardSm = 16;
 
-  /// 小卡片（概览页两列小卡、详情弹层里的统计格子）。
-  static const double cardSm = 28;
-
-  /// 彩色图标方块。按 46dp 方块定的，方块更小时 `AppIconTile` 按比例缩。
-  static const double tile = 15;
+  /// 柔和图标容器基准圆角（按 46dp 基准缩放，36dp 时约 8.6dp）。
+  static const double tile = 11;
 }
 
-/// 间距令牌。取值来自现有页面里出现频率最高的那几档。
+/// 8pt 呼吸感网格间距令牌。
 class AppSpacing {
   const AppSpacing._();
 
@@ -127,117 +48,107 @@ class AppSpacing {
   static const double xl = 20;
   static const double xxl = 24;
 
-  /// 列表页左右留白。全库列表页统一是 20。
+  /// 页面统一左右呼吸留白（20dp）。
   static const double pageHorizontal = 20;
 
-  /// 列表底部留白的**兜底常量**，避开悬浮的玻璃底栏。
-  ///
-  /// v2.0 底栏 = 胶囊高 [AppTabBarMetrics.height] + 离底 max(安全区, 10)，
-  /// 全面屏手势条（安全区约 34）时一共约 96，再留 16 的呼吸距离 → 112。
-  /// 能拿到 context 时优先用 [listBottomOf]，它把真实安全区算进去。
-  static const double listBottom = 112;
+  /// 列表底部留白兜底常量（避开悬浮毛玻璃底栏）。
+  static const double listBottom = 108;
 
-  /// Tab 页列表底部留白：底栏实际占的高度 + 16。
-  ///
-  /// 主界面外壳的 `Scaffold(extendBody: true)` 会把底栏高度（含安全区）
-  /// 并进 body 的 `MediaQuery.padding.bottom`，所以这里读到的就是「被底栏盖住的高度」。
-  /// 不在主界面外壳里（二级页面）时读到的是系统安全区，同样适用。
-  ///
-  /// ⚠️ 要在页面层（`ListView` **外面**）读，再传给 `ListView(padding: ...)`：
-  /// 不传 padding 的 `ListView` 会把 MediaQuery 的 padding 吃掉，在它里面读到的是 0。
+  /// Tab 页列表底部动态留白：底栏与安全区实际高度 + 16dp 呼吸间距。
   static double listBottomOf(BuildContext context) =>
       MediaQuery.paddingOf(context).bottom + lg;
 }
 
-/// 悬浮玻璃底栏的尺寸。放在令牌里是因为列表留白要和它对齐。
+/// 悬浮毛玻璃底栏尺寸令牌。
 class AppTabBarMetrics {
   const AppTabBarMetrics._();
 
-  /// 胶囊本体高度。
-  static const double height = 62;
+  /// 底栏胶囊本体高度（轻盈紧凑，不挤压主内容视口）。
+  static const double height = 58;
 
-  /// 离屏幕底边的最小距离（没有安全区的老机型）。
+  /// 离屏幕底边的最小安全间距。
   static const double bottomGap = 10;
 
-  /// 左右边距。
-  static const double sideGap = 16;
+  /// 左右留白，与页面 20dp 网格对齐。
+  static const double sideGap = 20;
 }
 
-/// 字号令牌（方案书 §2.3）。只定字号 / 字重 / 字距，**不带颜色**：
-/// 颜色跟着 `DefaultTextStyle`（主题已映射到 `palette.text`），需要次要色时
-/// `AppText.caption.copyWith(color: context.palette.text2)`。
+/// 严格四阶字号与克制字重体系（方案 1 Nordic Calm：最高字重 w600，彻底消除老人机粗大字感）。
 class AppText {
   const AppText._();
 
-  /// Tab 页大标题。
+  /// 一级页面主标题（23pt w600，取代旧版夸张的 34pt w800）。
   static const TextStyle largeTitle = TextStyle(
-    fontSize: 34,
-    fontWeight: FontWeight.w800,
-    letterSpacing: -0.7,
-    height: 1.15,
+    fontSize: 23,
+    fontWeight: FontWeight.w600,
+    letterSpacing: -0.4,
+    height: 1.25,
   );
 
-  /// 区块标题（「常用任务」「所有任务」）。
+  /// 区块小标题（「快捷场景」「全部任务」等，15pt w600）。
   static const TextStyle section = TextStyle(
-    fontSize: 22,
-    fontWeight: FontWeight.w700,
-    letterSpacing: -0.3,
+    fontSize: 15,
+    fontWeight: FontWeight.w600,
+    letterSpacing: -0.1,
+    height: 1.35,
   );
 
-  /// 卡片标题。
+  /// 卡片主标题（16pt w600）。
   static const TextStyle cardTitle = TextStyle(
-    fontSize: 21,
-    fontWeight: FontWeight.w700,
-    letterSpacing: -0.2,
+    fontSize: 16,
+    fontWeight: FontWeight.w600,
+    letterSpacing: -0.15,
+    height: 1.35,
   );
 
-  /// 正文 / 列表行标题。
-  static const TextStyle body = TextStyle(fontSize: 16.5);
+  /// 标准正文与列表行标题（15pt w400/w500）。
+  static const TextStyle body = TextStyle(
+    fontSize: 15,
+    fontWeight: FontWeight.w400,
+    height: 1.45,
+  );
 
-  /// 说明 / 列表行副标题。
-  static const TextStyle caption = TextStyle(fontSize: 13.5, height: 1.35);
+  /// 二级说明与列表副标题（13pt）。
+  static const TextStyle caption = TextStyle(
+    fontSize: 13,
+    fontWeight: FontWeight.w400,
+    height: 1.4,
+  );
 
-  /// 数字一律等宽：倒计时、耗时、计数跳动时宽度不变，不会左右抖。
+  /// 三级辅助元数据与胶囊标签（11.5pt w500）。
+  static const TextStyle meta = TextStyle(
+    fontSize: 11.5,
+    fontWeight: FontWeight.w500,
+    height: 1.35,
+  );
+
+  /// 等宽数字：倒计时、耗时、百分比跳动时宽度恒定不抖动。
   static TextStyle tabular(TextStyle style) => style.copyWith(
     fontFeatures: const [FontFeature.tabularFigures()],
   );
 }
 
-/// 动效令牌（方案书 §2.5）。
+/// 动效令牌。
 class AppMotion {
   const AppMotion._();
 
-  /// 系统开了「移除动画」（安卓）/「减弱动态效果」（iOS）。
-  /// 为 true 时：底栏药丸直接跳、切 Tab 直接切、弹层只淡入、列表不做入场。
-  /// 按住运行的进度条**不受影响**（那是功能，不是装饰）。
+  /// 系统无障碍「移除动画 / 减弱动态效果」。
   static bool reduce(BuildContext context) =>
       MediaQuery.maybeDisableAnimationsOf(context) ?? false;
 
   static const Duration fast = Duration(milliseconds: 120);
   static const Duration normal = Duration(milliseconds: 220);
-  static const Duration sheet = Duration(milliseconds: 380);
+  static const Duration sheet = Duration(milliseconds: 340);
+  static const Duration slide = Duration(milliseconds: 360);
 
-  /// 弹簧滑动（底栏药丸、分段控件滑块）用的时长：比 [sheet] 稍长，
-  /// 因为 [spring] 末段有一次轻回弹，太短会看不出来。
-  static const Duration slide = Duration(milliseconds: 450);
+  /// 柔和阻尼曲线（克制自然，不过度弹跳）。
+  static const Curve spring = Cubic(0.22, 1.0, 0.36, 1.0);
 
-  /// 轻回弹的弹簧曲线（末段冲过 1 一点再回来）。
-  static const Curve spring = Cubic(0.2, 0.9, 0.25, 1.15);
-
-  /// 动画时长的统一出口：减少动画时返回 0。
   static Duration of(BuildContext context, Duration duration) =>
       reduce(context) ? Duration.zero : duration;
 }
 
-/// 可点区域的最小尺寸。
-///
-/// 取 44 而不是 Material 规范的 48：全库多数图标按钮原本在 30-36dp 档，
-/// 一律抬到 48 会把列表行、导航栏、批量操作条整体撑高，密度损失明显；
-/// 44 已经越过 iOS HIG 的 44×44 与 WCAG 2.2 AA 的 24×24 两条线，
-/// 而视觉上还能维持现有排版。
-///
-/// 用法上优先 **加约束而不是加 padding**（`ConstrainedBox` / `SizedBox` 包一层，
-/// 内容居中），这样命中区变大但视觉尺寸不变。
+/// 最小可点命中区（44×44dp，符合 iOS HIG 与 WCAG 2.2 AA）。
 class AppTapTarget {
   const AppTapTarget._();
 
@@ -248,29 +159,13 @@ class AppTapTarget {
 class AppBorderWidth {
   const AppBorderWidth._();
 
-  /// 卡片 / chip 的常规描边。
   static const double hairline = 1;
-
-  /// 聚焦态描边（输入框等）。
   static const double focus = 1.5;
 }
 
-/// 明暗两套表面色的集中解析点。
-///
-/// 收敛掉页面里 `final isLight = Theme.of(context).brightness == Brightness.light;`
-/// 之后逐处写三元的模式（改造前 507 行）。
-///
-/// 用法：
-/// ```dart
-/// final s = AppSurfaces.of(context);
-/// Container(
-///   decoration: BoxDecoration(color: s.card, border: Border.all(color: s.cardBorder)),
-/// );
-/// ```
+/// 明暗表面色集中解析器（兼容次级页面并通过 `AppPalette` 统一驱动）。
 @immutable
 class AppSurfaces {
-  /// 直接暴露出来，是为了让**尚未迁移**的页面能继续用它做局部三元，
-  /// 而不必再写一遍 `Theme.of(context).brightness == ...`。
   final bool isLight;
 
   const AppSurfaces._(this.isLight);
@@ -281,115 +176,59 @@ class AppSurfaces {
   static AppSurfaces of(BuildContext context) =>
       Theme.of(context).brightness == Brightness.light ? light : dark;
 
-  // ── 表面 ──────────────────────────────────────────────
-  //
-  // v2.0 起这些表面色全部改由 [AppPalette] 供给（v1.x 是 Slate 系），
-  // 次级页面不用改一行代码就换上新的灰底白卡。新代码直接用 `context.palette`。
-
   AppPalette get _p => isLight ? AppPalette.light : AppPalette.dark;
 
-  /// 卡片底色。
   Color get card => _p.card;
 
-  /// 卡片描边。v2.0 的卡片「无边框」，这里给一条几乎看不见的发丝线：
-  /// 不直接给透明，是因为白卡片偶尔会叠在白底（弹窗）上，完全没边就糊成一片。
+  /// 极淡微描边（浅色 5% 暖石色，深色 8% 柔白），赋予卡片干净的纸张边界。
   Color get cardBorder =>
-      isLight ? const Color(0x143C3C43) : const Color(0x59545458);
+      isLight ? const Color(0x0D1C1917) : const Color(0x14FFFFFF);
 
-  /// 卡片内嵌的次级浅底块（不透明）。
+  /// 极轻弥散阴影（仅用于白色浮层卡与底栏）。
+  List<BoxShadow> get softShadow => isLight
+      ? const [
+          BoxShadow(
+            color: Color(0x090F172A),
+            blurRadius: 20,
+            offset: Offset(0, 4),
+          ),
+        ]
+      : const [
+          BoxShadow(
+            color: Color(0x3D000000),
+            blurRadius: 24,
+            offset: Offset(0, 6),
+          ),
+        ];
+
   Color get subtle => _p.card2;
-
-  /// 次级块的描边。
   Color get subtleBorder => _p.separator;
-
-  /// 页面底色。
   Color get page => _p.bg;
 
-  // ── 文字 ──────────────────────────────────────────────
-
-  /// 次级说明文字。
   Color get mutedText => _p.text2;
-
-  /// 正文强调文字。
   Color get strongText => _p.text;
-
-  // ── 禁用态 ────────────────────────────────────────────
 
   Color get disabledFg => _p.text3;
   Color get disabledBg => _p.card2;
   Color get disabledBorder => _p.separator;
 
-  // ── 强调色的淡底 ──────────────────────────────────────
+  Color tintBg(Color color) => color.withAlpha(isLight ? 20 : 32);
+  Color tintBorder(Color color) => color.withAlpha(isLight ? 52 : 84);
+  Color tintBgStrong(Color color) => color.withAlpha(isLight ? 28 : 42);
 
-  /// 强调色淡底。原写法：`isLight ? color.withAlpha(18) : color.withAlpha(24)`。
-  Color tintBg(Color color) => color.withAlpha(isLight ? 18 : 24);
-
-  /// 强调色淡底描边。原写法：`color.withAlpha(isLight ? 60 : 90)`。
-  Color tintBorder(Color color) => color.withAlpha(isLight ? 60 : 90);
-
-  /// 更实一档的强调色淡底（滑动操作按钮等）。
-  Color tintBgStrong(Color color) => color.withAlpha(isLight ? 24 : 34);
-
-  /// 压在 [tintBg] / [tintBgStrong] 上的**前景**（徽章文字、状态图标）。
-  ///
-  /// 为什么需要它：淡底只有 alpha=18，调用方却拿**同一个满强度色**当前景，
-  /// 于是前景和背景是同一个色相、只差透明度 —— 数学上封顶就那么高。
-  /// 白底实测：primary 2.60:1、danger 3.43:1、success 2.13:1、warning 2.04:1。
-  /// 错的不是淡底，是前景没跟着加深。
-  ///
-  /// 为什么选「向黑混 20%」而不是 HSL 压亮度、也不是按目标对比度反解：
-  /// 1. 它**逐字节复现** [AppColors.primaryDark] 与 [AppColors.successDark]。
-  ///    这两个常量取自 Element Plus 的 `dark-2`，而 `dark-2` 的定义就是
-  ///    `mix(color, black, 20%)`：0.8×#409EFF=#337ECC、0.8×#67C23A=#529B2E。
-  ///    于是已经手写 `*Dark` 的那批徽章（任务 / 依赖 / 订阅的 `_statusFg`）
-  ///    与走本函数的徽章**不会分裂成两种蓝、两种绿**，也不必回头去改它们。
-  /// 2. 加深规则与面板 Web 端同源，不是 APP 自造的第三套。
-  /// 3. HSL 压亮度会保留 S=1.0，primary 会掉到 #005FC2 这种全饱和深蓝，
-  ///    比面板深一大截；按对比度反解要在每帧迭代，产出的颜色还无法预测。
-  ///
-  /// 加深后（白底 + alpha=18，全库最坏情况）：
-  ///   primary/info #409EFF → #337ECC   2.60:1 → 3.93:1
-  ///   success      #67C23A → #529B2E   2.13:1 → 3.27:1
-  ///   danger       #EF4444 → #BF3636   3.43:1 → 5.03:1
-  ///   warning      #F59E0B → #C47E09   2.04:1 → 3.14:1
-  /// 五个语义色全部越过 3:1，但只有 danger 越过 4.5:1。10px 加粗按 WCAG
-  /// 不算大字，严格说该要 4.5:1 —— warning 是最短板，补齐要动全局常量，不在本次范围。
-  ///
-  /// 深色模式**原样返回**：那边淡底是 alpha=24 叠在 slate900/950 上，
-  /// 满强度前景本来就有 5.6:1（primary）/ 6.9:1（success），再压只会更糊。
   Color tintFg(Color color) {
     if (!isLight) {
       return color;
     }
-    return Color.lerp(color, Colors.black, 0.2)!;
+    return Color.lerp(color, Colors.black, 0.22)!;
   }
 
-  // ── 强调色的实底 ──────────────────────────────────────
-
-  /// 强调色**实底**（满铺，不是 [tintBg] 那种 alpha=18 的淡底）。目前用于提示条。
-  ///
-  /// 为什么明暗两套方向相反，而不是像 [tintFg] 那样深色模式直接返回原色：
-  /// SnackBar 的默认底色是 `ColorScheme.inverseSurface`，语义就是「与页面相反」——
-  /// 浅色模式给深底浅字、深色模式给浅底深字。语义色必须跟上这个方向，否则
-  /// 深色模式下一条压深了的提示条会比页面还暗，边界糊掉：实测把浅色模式那支
-  /// 深绿 #3E7423 摆到 slate950 页面上只有 2.42:1，连非文字元素的 3:1 都不到。
-  ///
-  /// 浅色模式用 `mix(color, black, 40%)`，与 [tintFg] 的 20% 是同一套配方，
-  /// 只是压得更深 —— 因为这里白字压的是满强度实色，20% 不够：
-  /// success 压到 #529B2E 配白字只有 3.45:1、info 压到 #337ECC 只有 4.20:1，
-  /// 都过不了正文所需的 4.5:1。40% 之后 success 5.61 / danger 8.33 / warning 5.42。
   Color solidBg(Color color) =>
-      isLight ? Color.lerp(color, Colors.black, 0.4)! : color;
+      isLight ? Color.lerp(color, Colors.black, 0.35)! : color;
 
-  /// 压在 [solidBg] 上的前景文字色。
-  ///
-  /// 深色模式配满强度底：success 8.99:1、danger 5.36:1、warning 9.39:1。
-  /// 这里用 slate950 而不是 slate900，是因为 danger #EF4444 是三支里**最暗**的底，
-  /// 配 slate900 只剩 4.74:1，刚压着 4.5 的线；换 slate950 拉回 5.36:1 才有余量。
   Color get solidFg => isLight ? Colors.white : AppColors.slate950;
 }
 
 extension AppSurfacesContext on BuildContext {
-  /// `context.surfaces.card` 比 `AppSurfaces.of(context).card` 顺手。
   AppSurfaces get surfaces => AppSurfaces.of(this);
 }

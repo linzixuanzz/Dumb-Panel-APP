@@ -1,17 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/log_line_buffer.dart';
-import '../../../shared/widgets/app_card.dart';
-import '../../../shared/widgets/app_snack.dart';
-import '../../../shared/widgets/log_view.dart';
+import '../../../shared/widgets/fullscreen_log_scaffold.dart';
 
+/// 面板系统日志页（v3.0 全屏沉浸式阅读器 + 级别/行数轻量化筛选菜单）。
 class PanelLogPage extends StatefulWidget {
   const PanelLogPage({super.key});
 
@@ -20,15 +17,20 @@ class PanelLogPage extends StatefulWidget {
 }
 
 class _PanelLogPageState extends State<PanelLogPage> {
-  final _keywordController = TextEditingController();
-  final _linesController = TextEditingController(text: '300');
+  static const List<(String, String)> _levels = [
+    ('', '全部级别'),
+    ('info', '仅 INFO'),
+    ('warn', '仅 WARN'),
+    ('error', '仅 ERROR'),
+    ('debug', '仅 DEBUG'),
+  ];
+
+  static const List<int> _lineOptions = [300, 1000, 3000];
 
   bool _loading = true;
+  bool _loadFailed = false;
   String _selectedLevel = '';
-
-  /// 完整原文，只给「复制」用；显示走 [_log] 按行懒渲染。
-  /// 「行数」是用户自己填的，填个几万行时整段铺成一棵 TextSpan 会直接卡住。
-  String _content = '';
+  int _selectedLines = 300;
   final _log = LogLineBuffer();
   Color? _logBackgroundColor;
 
@@ -40,195 +42,182 @@ class _PanelLogPageState extends State<PanelLogPage> {
 
   @override
   void dispose() {
-    _keywordController.dispose();
-    _linesController.dispose();
     _log.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _loadFailed = false;
+    });
     try {
       final logResponse = await DioClient.instance.dio.get(
         ApiEndpoints.panelLog,
         queryParameters: {
-          if (_selectedLevel.trim().isNotEmpty) 'level': _selectedLevel.trim(),
-          if (_keywordController.text.trim().isNotEmpty)
-            'keyword': _keywordController.text.trim(),
-          'lines': int.tryParse(_linesController.text.trim()) ?? 300,
+          if (_selectedLevel.isNotEmpty) 'level': _selectedLevel,
+          'lines': _selectedLines,
         },
       );
       final backgroundColor = await loadPanelLogBackgroundColor();
       final data = extractData(logResponse.data);
-      if (!mounted) {
-        return;
+      if (!mounted) return;
+
+      String content = '';
+      if (data is Map<String, dynamic>) {
+        final rawLogs = data['logs'];
+        if (rawLogs is List) {
+          content = rawLogs
+              .map((item) => item.toString())
+              .where((line) => line.isNotEmpty)
+              .join('\n');
+        } else {
+          content = data['content']?.toString() ?? '';
+        }
+      } else {
+        content = data?.toString() ?? '';
+      }
+
+      final lines = content.replaceAll('\r\n', '\n').split('\n');
+      if (lines.isNotEmpty && lines.last.isEmpty) {
+        lines.removeLast();
       }
       setState(() {
-        if (data is Map<String, dynamic>) {
-          final rawLogs = data['logs'];
-          if (rawLogs is List) {
-            _content = rawLogs
-                .map((item) => item.toString())
-                .where((line) => line.isNotEmpty)
-                .join('\n');
-          } else {
-            _content = data['content']?.toString() ?? '';
-          }
-        } else {
-          _content = data?.toString() ?? '';
-        }
-        _log.replaceAll(_content.split('\n'));
+        _log.replaceAll(lines);
         _logBackgroundColor = backgroundColor;
         _loading = false;
+        _loadFailed = false;
       });
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
+      final message = extractErrorMessage(error, '加载面板日志失败');
       setState(() {
-        _content = extractErrorMessage(error, '加载面板日志失败');
-        _log.replaceAll(_content.split('\n'));
+        _log.replaceAll([message]);
         _loading = false;
+        _loadFailed = true;
       });
     }
   }
 
-  Future<void> _copy() async {
-    await Clipboard.setData(ClipboardData(text: _content));
-    if (!mounted) {
-      return;
-    }
-    AppSnack.success(context, '已复制日志内容');
+  Future<void> _showFilterSheet() async {
+    final result = await showModalBottomSheet<(String, int)>(
+      context: context,
+      useSafeArea: true,
+      builder: (ctx) {
+        var draftLevel = _selectedLevel;
+        var draftLines = _selectedLines;
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final p = context.palette;
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '筛选面板日志',
+                    style: AppText.cardTitle.copyWith(color: p.text),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    '日志级别',
+                    style: AppText.caption.copyWith(color: p.text2),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final (value, label) in _levels)
+                        ChoiceChip(
+                          label: Text(label),
+                          selected: draftLevel == value,
+                          onSelected: (_) =>
+                              setSheetState(() => draftLevel = value),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    '拉取尾部行数',
+                    style: AppText.caption.copyWith(color: p.text2),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final count in _lineOptions)
+                        ChoiceChip(
+                          label: Text('最近 $count 行'),
+                          selected: draftLines == count,
+                          onSelected: (_) =>
+                              setSheetState(() => draftLines = count),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 46,
+                    child: FilledButton(
+                      onPressed: () =>
+                          Navigator.of(ctx).pop((draftLevel, draftLines)),
+                      child: const Text('应用并刷新'),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      _selectedLevel = result.$1;
+      _selectedLines = result.$2;
+    });
+    await _load();
   }
 
   @override
   Widget build(BuildContext context) {
-    final logTheme = resolveLogSurfaceTheme(
-      _logBackgroundColor,
-      themeBrightness: Theme.of(context).brightness,
-    );
-    // 日志卡片的描边跟着「日志主题」的明暗走（不是 App 明暗），属于日志内容配色，保持原值。
-    final borderColor = logTheme.brightness == Brightness.dark
-        ? AppColors.slate700
-        : AppColors.slate200;
+    final levelText = _selectedLevel.isEmpty
+        ? '全部级别'
+        : _selectedLevel.toUpperCase();
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('面板日志'),
-        actions: [
-          IconButton(
-            onPressed: _loading ? null : _load,
-            icon: const Icon(Icons.refresh),
-          ),
-          IconButton(
-            onPressed: _content.trim().isEmpty ? null : _copy,
-            icon: const Icon(Icons.copy_all_outlined),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _selectedLevel,
-                        decoration: const InputDecoration(labelText: '日志级别'),
-                        items: const [
-                          DropdownMenuItem(value: '', child: Text('全部')),
-                          DropdownMenuItem(
-                            value: 'debug',
-                            child: Text('DEBUG'),
-                          ),
-                          DropdownMenuItem(value: 'info', child: Text('INFO')),
-                          DropdownMenuItem(value: 'warn', child: Text('WARN')),
-                          DropdownMenuItem(
-                            value: 'error',
-                            child: Text('ERROR'),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          setState(() => _selectedLevel = value ?? '');
-                          _load();
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    SizedBox(
-                      width: 92,
-                      child: TextField(
-                        controller: _linesController,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(labelText: '行数'),
-                        onSubmitted: (_) => _load(),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _keywordController,
-                  textInputAction: TextInputAction.search,
-                  decoration: InputDecoration(
-                    labelText: '关键字筛选',
-                    hintText: '比如 update / scheduler / ERROR',
-                    suffixIcon: IconButton(
-                      onPressed: _load,
-                      icon: const Icon(Icons.search),
-                    ),
-                  ),
-                  onSubmitted: (_) => _load(),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: AppCard(
-              margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              // 内容自带 14 的滚动内边距，卡片本身不能再补一层。
-              padding: EdgeInsets.zero,
-              // 日志底色跟随用户设置的日志主题，与页面明暗无关，
-              // 必须显式传入，不能落到 AppCard 的默认卡片底色。
-              color: logTheme.background,
-              borderColor: borderColor,
-              child: _loading
-                  ? Center(
-                      child: CircularProgressIndicator(
-                        color: context.palette.accent,
-                      ),
-                    )
-                  : _content.trim().isEmpty
-                  ? Center(
-                      child: Text(
-                        '暂无日志内容',
-                        style: TextStyle(color: logTheme.mutedForeground),
-                      ),
-                    )
-                  // 一次性加载的静态日志：从顶部开始看，不跟随。
-                  // 顺带修掉了原来 RichText 不接 SelectionArea、长按选不中的问题
-                  // （LogView 每行用的是 Text.rich，会自动挂到选择区域上）。
-                  : LogView(
-                      buffer: _log,
-                      follow: false,
-                      padding: const EdgeInsets.all(14),
-                      textStyle: TextStyle(
-                        color: logTheme.foreground,
-                        fontFamily: 'monospace',
-                        fontSize: 12,
-                        height: 1.55,
-                      ),
-                      brightness: logTheme.brightness,
-                      mutedColor: logTheme.mutedForeground,
-                      truncatedHint: '可以用右上角的复制拿到全部内容',
-                    ),
-            ),
-          ),
-        ],
-      ),
+    return FullscreenLogScaffold(
+      title: '面板日志',
+      subtitle: '$levelText · 最近 $_selectedLines 行',
+      statusLabel: _loading
+          ? '加载中'
+          : _loadFailed
+          ? '读取失败'
+          : '系统日志',
+      statusTone: _loading
+          ? FullscreenLogTone.running
+          : _loadFailed
+          ? FullscreenLogTone.failed
+          : FullscreenLogTone.neutral,
+      buffer: _log,
+      loading: _loading,
+      follow: false,
+      emptyMessage: '暂无面板日志内容',
+      configuredBackgroundColor: _logBackgroundColor,
+      onRerun: _load,
+      rerunBusy: _loading,
+      rerunLabel: '刷新日志',
+      extraMenuEntries: [
+        FullscreenLogMenuEntry(
+          id: 'filter_panel_log',
+          label: '筛选级别与行数 ($levelText / $_selectedLines 行)',
+          icon: Icons.tune_rounded,
+          onTap: _showFilterSheet,
+        ),
+      ],
+      copySuccessToast: '已复制面板日志内容',
     );
   }
 }

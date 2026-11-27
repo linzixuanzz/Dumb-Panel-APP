@@ -54,13 +54,13 @@ void main() {
     });
   }
 
-  test('强调色是系统蓝；主按钮浅色黑底白字、深色白底黑字', () {
-    expect(AppPalette.light.accent, const Color(0xFF007AFF));
-    expect(AppPalette.dark.accent, const Color(0xFF0A84FF));
-    expect(AppPalette.light.primaryBtnBg, const Color(0xFF000000));
+  test('强调色走 Nordic Cobalt 钴蓝体系；主按钮统一钴蓝底配纯白字', () {
+    expect(AppPalette.light.accent, const Color(0xFF2B5BEE));
+    expect(AppPalette.dark.accent, const Color(0xFF6C93FF));
+    expect(AppPalette.light.primaryBtnBg, const Color(0xFF2B5BEE));
     expect(AppPalette.light.primaryBtnFg, const Color(0xFFFFFFFF));
-    expect(AppPalette.dark.primaryBtnBg, const Color(0xFFFFFFFF));
-    expect(AppPalette.dark.primaryBtnFg, const Color(0xFF000000));
+    expect(AppPalette.dark.primaryBtnBg, const Color(0xFF2B5BEE));
+    expect(AppPalette.dark.primaryBtnFg, const Color(0xFFFFFFFF));
   });
 
   test('ThemeData 挂了色板扩展，Material 组件映射到令牌', () {
@@ -154,9 +154,11 @@ void main() {
     expect(reduceOn, isTrue);
   });
 
-  test('AppText.tabular 打开等宽数字', () {
+  test('AppText.tabular 打开等宽数字且遵循 v3.0 四阶克制字号', () {
     final style = AppText.tabular(AppText.body);
     expect(style.fontFeatures, contains(const FontFeature.tabularFigures()));
-    expect(style.fontSize, 16.5);
+    expect(style.fontSize, 15);
+    expect(AppText.largeTitle.fontSize, 23);
+    expect(AppText.largeTitle.fontWeight, FontWeight.w600);
   });
 }

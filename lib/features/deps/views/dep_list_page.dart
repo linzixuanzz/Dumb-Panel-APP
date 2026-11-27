@@ -5,13 +5,12 @@ import 'package:go_router/go_router.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/sse_client.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/dependency.dart';
 import '../../../shared/models/python_runtime_info.dart';
 import '../../../shared/utils/api_utils.dart';
-import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
+import '../../../shared/utils/log_line_buffer.dart';
 import '../../../shared/utils/panel_enums.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_circle_add_button.dart';
@@ -22,6 +21,7 @@ import '../../../shared/widgets/app_notice.dart';
 import '../../../shared/widgets/app_back_button.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
+import '../../../shared/widgets/fullscreen_log_scaffold.dart';
 
 /// 新建依赖时把输入框里的多个名字切开：换行、逗号、空白都算分隔，
 /// 但方括号里的逗号和空格不切（面板 #166：`httpx[http2,socks]` 要整个交给 pip，
@@ -1014,10 +1014,12 @@ class _DepListPageState extends ConsumerState<DepListPage> {
           const SizedBox(height: 6),
           Text(
             _countLoading ? '--' : '$count',
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-              color: selected ? p.accentInk : p.text,
+            style: AppText.tabular(
+              TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                color: selected ? p.accentInk : p.text,
+              ),
             ),
           ),
         ],
@@ -1665,13 +1667,12 @@ class DepLogStreamPage extends ConsumerStatefulWidget {
 
 class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
   final _sseClient = SseClient();
-  final _logs = <String>[];
-  final _scrollController = ScrollController();
+  final _log = LogLineBuffer();
+  bool _loading = true;
   bool _done = false;
-
-  /// 连接失败的原因。之前失败也只是把 _done 置 true，
-  /// 于是断线和「装完了」显示的都是同一条绿色「安装完成」banner —— 是假的成功。
-  String? _errorMessage;
+  bool _actionBusy = false;
+  String _statusLabel = '实时安装中';
+  FullscreenLogTone _statusTone = FullscreenLogTone.running;
   Color? _logBackgroundColor;
 
   @override
@@ -1683,131 +1684,173 @@ class _DepLogStreamPageState extends ConsumerState<DepLogStreamPage> {
         setState(() => _logBackgroundColor = color);
       }
     });
+    _connectStream();
+  }
+
+  void _connectStream() {
+    _sseClient.close();
     _sseClient.connect(
       path: ApiEndpoints.depLogStream(widget.depId),
       autoReconnect: true,
       onEvent: (event) {
         if (!mounted) return;
-        setState(() {
-          _logs.add(event.data);
-          if (event.event == 'done' && event.data != 'reconnect') {
+        if (event.event == 'done') {
+          if (event.data == 'reconnect') {
+            setState(() {
+              _done = false;
+              _loading = false;
+              _statusLabel = '实时安装中';
+              _statusTone = FullscreenLogTone.running;
+            });
+            return;
+          }
+          final (label, tone) = switch (event.data) {
+            'finished' || 'finished-late' => (
+              '安装完成',
+              FullscreenLogTone.success,
+            ),
+            'cancelled' => ('已取消', FullscreenLogTone.neutral),
+            'timeout' => ('安装超时', FullscreenLogTone.failed),
+            'failed' => ('安装失败', FullscreenLogTone.failed),
+            _ => ('已结束', FullscreenLogTone.neutral),
+          };
+          setState(() {
             _done = true;
-          }
-        });
-        Future.delayed(const Duration(milliseconds: 50), () {
-          if (_scrollController.hasClients) {
-            _scrollController.jumpTo(
-              _scrollController.position.maxScrollExtent,
-            );
-          }
-        });
+            _loading = false;
+            _statusLabel = label;
+            _statusTone = tone;
+          });
+          return;
+        }
+
+        final lines = event.data.replaceAll('\r\n', '\n').split('\n');
+        lines.removeWhere((line) => line.isEmpty);
+        if (lines.isEmpty) return;
+
+        final wasEmpty = _log.isEmpty;
+        _log.append(lines);
+        if (wasEmpty || _loading || _done) {
+          setState(() {
+            _loading = false;
+            _done = false;
+            _statusLabel = '实时安装中';
+            _statusTone = FullscreenLogTone.running;
+          });
+        }
       },
       onDone: () {
-        if (mounted) setState(() => _done = true);
+        if (!mounted || _done) return;
+        setState(() {
+          _done = true;
+          _loading = false;
+          if (_log.isEmpty) {
+            _statusLabel = '暂无日志';
+            _statusTone = FullscreenLogTone.neutral;
+          } else {
+            _statusLabel = '安装完成';
+            _statusTone = FullscreenLogTone.success;
+          }
+        });
       },
       onError: (error) {
         if (!mounted) return;
         setState(() {
           _done = true;
-          _errorMessage = error is SseAuthFailure
+          _loading = false;
+          _statusLabel = error is SseAuthFailure
               ? error.message
               : '安装日志连接已断开';
+          _statusTone = FullscreenLogTone.failed;
         });
       },
     );
   }
 
+  Future<void> _cancelInstall() async {
+    if (_actionBusy || _done) return;
+    setState(() => _actionBusy = true);
+    try {
+      await DioClient.instance.dio.post(ApiEndpoints.depCancel(widget.depId));
+      if (!mounted) return;
+      _sseClient.close();
+      setState(() {
+        _done = true;
+        _loading = false;
+        _statusLabel = '已取消';
+        _statusTone = FullscreenLogTone.neutral;
+      });
+      AppSnack.show(context, '已取消依赖安装');
+    } catch (error) {
+      if (mounted) {
+        AppSnack.error(context, extractErrorMessage(error, '取消安装失败'));
+      }
+    } finally {
+      if (mounted) setState(() => _actionBusy = false);
+    }
+  }
+
+  Future<void> _reinstall() async {
+    if (_actionBusy) return;
+    setState(() => _actionBusy = true);
+    try {
+      await DioClient.instance.dio.post(
+        ApiEndpoints.depReinstall(widget.depId),
+      );
+      if (!mounted) return;
+      setState(() {
+        _log.clear();
+        _loading = true;
+        _done = false;
+        _statusLabel = '实时安装中';
+        _statusTone = FullscreenLogTone.running;
+      });
+      _connectStream();
+    } catch (error) {
+      if (mounted) {
+        AppSnack.error(context, extractErrorMessage(error, '重新安装失败'));
+      }
+    } finally {
+      if (mounted) setState(() => _actionBusy = false);
+    }
+  }
+
   @override
   void dispose() {
     _sseClient.close();
-    _scrollController.dispose();
+    _log.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final logTheme = resolveLogSurfaceTheme(
-      _logBackgroundColor,
-      themeBrightness: Theme.of(context).brightness,
-    );
-    // 底部完成 / 断线 banner 跟着「日志主题」的明暗走（不是 App 明暗），
-    // 属于日志内容配色，保持原值。
-    final doneBannerBackground = logTheme.brightness == Brightness.dark
-        ? AppColors.slate800
-        : AppColors.slate100;
+    final dep = ref
+        .watch(depListProvider)
+        .items
+        .where((item) => item.id == widget.depId)
+        .firstOrNull;
+    final title = dep != null && dep.name.trim().isNotEmpty
+        ? '${dep.name} 安装日志'
+        : '安装日志';
+    final subtitle = dep != null
+        ? '依赖 #${widget.depId} · ${dep.type.toUpperCase()}'
+        : '依赖 #${widget.depId}';
 
-    return Scaffold(
-      backgroundColor: logTheme.background,
-      appBar: AppBar(
-        title: const Text('安装日志'),
-        backgroundColor: logTheme.background,
-        foregroundColor: logTheme.foreground,
-      ),
-      body: Container(
-        color: logTheme.background,
-        child: Column(
-          children: [
-            Expanded(
-              child: ListView.builder(
-                controller: _scrollController,
-                padding: const EdgeInsets.all(12),
-                itemCount: _logs.length,
-                itemBuilder: (_, i) => SelectionArea(
-                  child: RichText(
-                    text: AnsiTextParser.buildTextSpan(
-                      _logs[i],
-                      baseStyle: TextStyle(
-                        color: logTheme.foreground,
-                        fontFamily: 'monospace',
-                        fontSize: 12,
-                        height: 1.6,
-                      ),
-                      brightness: logTheme.brightness,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            if (_errorMessage != null)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                color: doneBannerBackground,
-                child: Text(
-                  _errorMessage!,
-                  textAlign: TextAlign.center,
-                  // 断线不是成功，不能复用绿色 banner。浅色分支取 dangerDark，
-                  // 理由与下面的 successDark 一样：banner 底是 slate100。
-                  style: TextStyle(
-                    color: logTheme.brightness == Brightness.dark
-                        ? AppColors.danger
-                        : AppColors.dangerDark,
-                    fontSize: 13,
-                  ),
-                ),
-              )
-            else if (_done)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                color: doneBannerBackground,
-                child: Text(
-                  '安装完成',
-                  textAlign: TextAlign.center,
-                  // 「完成」是结果成功，走 success；与列表卡「已安装」徽章同族。
-                  // 浅色分支取 successDark：banner 底是 slate100，
-                  // 满强度 success 只有 2.1:1。深色分支沿用日志前景色，不动。
-                  style: TextStyle(
-                    color: logTheme.brightness == Brightness.dark
-                        ? logTheme.foreground
-                        : AppColors.successDark,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
+    return FullscreenLogScaffold(
+      title: title,
+      subtitle: subtitle,
+      statusLabel: _statusLabel,
+      statusTone: _statusTone,
+      buffer: _log,
+      loading: _loading,
+      emptyMessage: _done ? '无安装日志内容' : '等待依赖安装输出...',
+      configuredBackgroundColor: _logBackgroundColor,
+      onStop: !_done ? _cancelInstall : null,
+      stopBusy: _actionBusy,
+      stopLabel: '取消安装',
+      onRerun: _done ? _reinstall : null,
+      rerunBusy: _actionBusy,
+      rerunLabel: '重新安装',
+      copySuccessToast: '安装日志已复制到剪贴板',
     );
   }
 }

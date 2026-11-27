@@ -19,44 +19,6 @@ import '../../tasks/widgets/task_detail_sheet.dart';
 import '../providers/dashboard_provider.dart';
 import '../widgets/execution_bar_chart.dart';
 
-// ── 渐变总览卡的配色（方案书「淡紫渐变」，取自 APP效果演示.html 的 `.hero`）──────
-// 这是一块插画式的装饰底，不属于界面语义色，所以不进 palette，写成文件内常量。
-// 结构：一层 170° 线性底色 + 左上一团紫色径向光 + 右上一团蓝色径向光。
-
-/// 浅色：线性底色（上 → 下）。
-const List<Color> _heroBaseLight = [
-  Color(0xFFD9D0F6),
-  Color(0xFFF1ECFB),
-  Color(0xFFFBFAFF),
-];
-
-/// 浅色：左上紫光（#8b74e6 → 55% → 透明）。
-const List<Color> _heroGlowLight = [
-  Color(0xFF8B74E6),
-  Color(0x8C8B74E6),
-  Color(0x008B74E6),
-];
-
-/// 浅色：右上蓝光（rgba(126,160,255,.5) → 透明）。
-const List<Color> _heroGlow2Light = [Color(0x807EA0FF), Color(0x007EA0FF)];
-
-/// 深色：线性底色。
-const List<Color> _heroBaseDark = [
-  Color(0xFF241C40),
-  Color(0xFF18142A),
-  Color(0xFF141220),
-];
-
-/// 深色：左上紫光（#5b45c9 → 50% → 透明）。
-const List<Color> _heroGlowDark = [
-  Color(0xFF5B45C9),
-  Color(0x805B45C9),
-  Color(0x005B45C9),
-];
-
-/// 深色：右上蓝光（rgba(60,90,220,.45) → 透明）。
-const List<Color> _heroGlow2Dark = [Color(0x733C5ADC), Color(0x003C5ADC)];
-
 final NumberFormat _thousands = NumberFormat.decimalPattern('en');
 
 /// 「概览」Tab（v2.0，原 v1.x「主页」的统计部分）。
@@ -379,11 +341,10 @@ class _MascotAvatar extends StatelessWidget {
   }
 }
 
-/// 渐变总览卡：区间成功率大字 + 失败次数 + 今日 / 运行中 / 任务数。
+/// Nordic Calm 温和健康日报总览卡：洁净纸感卡片 + 护眼健康徽章 + 克制四阶排版。
 ///
 /// 口径（与面板 `Stats` 一致）：成功 / (成功 + 失败)，已终止不进分母；
 /// 区间 = `/system/dashboard?range=30` 返回的 daily_stats（含今天），老面板是 7 天。
-/// 方案书里的「定时 / 手动占比」现有接口不区分触发方式，先不放。
 class _HeroCard extends StatelessWidget {
   final DashboardData data;
 
@@ -392,7 +353,7 @@ class _HeroCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    final light = palette.isLight;
+    final surfaces = AppSurfaces.of(context);
     final days = data.executionTrend.length;
     final rate = data.rangeSuccessRate;
     // 截断到 1 位小数，不往上凑：99.96% 不能显示成 100%
@@ -402,142 +363,139 @@ class _HeroCard extends StatelessWidget {
         ? '100'
         : ((rate * 10).floor() / 10).toStringAsFixed(1);
     final todayRuns = data.todaySuccess + data.todayFailed + data.todayAborted;
+    final allSmooth = data.rangeFailed == 0 && rate != null;
+    final badgeColor = allSmooth ? palette.ok : palette.accent;
+    final badgeInk = allSmooth ? palette.okInk : palette.accentInk;
 
-    final radius = BorderRadius.circular(AppRadius.card);
-    return ClipRRect(
+    return Container(
       key: const Key('overview-hero'),
-      borderRadius: radius,
-      child: Stack(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+      decoration: BoxDecoration(
+        color: palette.card,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: surfaces.cardBorder),
+        boxShadow: surfaces.softShadow,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 三层渐变铺满整卡，内容在最上面
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: const Alignment(-0.17, -1),
-                  end: const Alignment(0.17, 1),
-                  stops: const [0, 0.6, 1],
-                  colors: light ? _heroBaseLight : _heroBaseDark,
-                ),
+          Row(
+            children: [
+              AppIconTile(
+                icon: allSmooth
+                    ? Icons.verified_outlined
+                    : Icons.insights_rounded,
+                color: badgeColor,
+                size: 38,
               ),
-            ),
-          ),
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  center: Alignment.topLeft,
-                  radius: 1.2,
-                  stops: const [0, 0.3, 0.65],
-                  colors: light ? _heroGlowLight : _heroGlowDark,
-                ),
-              ),
-            ),
-          ),
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  center: Alignment.topRight,
-                  radius: 0.9,
-                  stops: const [0, 0.7],
-                  colors: light ? _heroGlow2Light : _heroGlow2Dark,
-                ),
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(22, 20, 22, 22),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
                   days > 0 ? '近 $days 天成功率' : '成功率',
                   style: AppText.cardTitle.copyWith(color: palette.text),
                 ),
-                const SizedBox(height: AppSpacing.sm),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Expanded(
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        alignment: Alignment.centerLeft,
-                        child: Text.rich(
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: palette.tint(badgeColor),
+                  borderRadius: BorderRadius.circular(AppRadius.pill),
+                ),
+                child: Text(
+                  rate == null
+                      ? '待运行'
+                      : (allSmooth ? '运行平稳' : '健康日报'),
+                  style: AppText.meta.copyWith(color: badgeInk),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text.rich(
+                    TextSpan(
+                      text: rateText,
+                      children: [
+                        if (rate != null)
                           TextSpan(
-                            text: rateText,
-                            children: [
-                              if (rate != null)
-                                const TextSpan(
-                                  text: '%',
-                                  style: TextStyle(
-                                    fontSize: 28,
-                                    letterSpacing: -0.5,
-                                  ),
-                                ),
-                            ],
-                          ),
-                          key: const Key('overview-rate'),
-                          style: AppText.tabular(
-                            TextStyle(
-                              fontSize: 58,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -2,
-                              height: 1.05,
-                              color: palette.text,
+                            text: '%',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w500,
+                              letterSpacing: -0.3,
+                              color: palette.text2,
                             ),
                           ),
+                      ],
+                    ),
+                    key: const Key('overview-rate'),
+                    style: AppText.tabular(
+                      TextStyle(
+                        fontSize: 36,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: -1.0,
+                        height: 1.08,
+                        color: palette.text,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      '失败',
+                      style: AppText.caption.copyWith(
+                        color: palette.text2,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    Text(
+                      '${_thousands.format(data.rangeFailed)} 次',
+                      style: AppText.tabular(
+                        TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: data.rangeFailed > 0
+                              ? palette.errInk
+                              : palette.text,
                         ),
                       ),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(
-                            '失败',
-                            style: AppText.caption.copyWith(
-                              color: palette.text2,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          Text(
-                            '${_thousands.format(data.rangeFailed)} 次',
-                            style: AppText.tabular(
-                              TextStyle(
-                                fontSize: 19,
-                                fontWeight: FontWeight.w800,
-                                // 0 次失败不必标红
-                                color: data.rangeFailed > 0
-                                    ? palette.errInk
-                                    : palette.text,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                   ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  rate == null
-                      ? '这段时间还没有执行记录'
-                      : '共执行 ${_thousands.format(data.rangeRuns)} 次'
-                            '${data.rangeAborted > 0 ? '，其中终止 ${_thousands.format(data.rangeAborted)} 次' : ''}',
-                  style: AppText.caption.copyWith(color: palette.text2),
-                ),
-                const SizedBox(height: AppSpacing.xl),
-                Row(
-                  children: [
-                    _heroStat(context, '今日执行', todayRuns),
-                    _heroStat(context, '运行中', data.runningTasks),
-                    _heroStat(context, '任务', data.totalTasks),
-                  ],
-                ),
-              ],
-            ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            rate == null
+                ? '这段时间还没有执行记录'
+                : '共执行 ${_thousands.format(data.rangeRuns)} 次'
+                      '${data.rangeAborted > 0 ? '，其中终止 ${_thousands.format(data.rangeAborted)} 次' : ''}',
+            style: AppText.caption.copyWith(color: palette.text2),
+          ),
+          const SizedBox(height: 16),
+          Divider(height: 1, thickness: 0.5, color: palette.separator),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              _heroStat(context, '今日执行', todayRuns),
+              _heroStat(context, '运行中', data.runningTasks),
+              _heroStat(context, '任务', data.totalTasks),
+            ],
           ),
         ],
       ),
@@ -550,14 +508,14 @@ class _HeroCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: AppText.caption.copyWith(color: palette.text2)),
-          const SizedBox(height: 2),
+          Text(label, style: AppText.meta.copyWith(color: palette.text2)),
+          const SizedBox(height: 3),
           Text(
             _thousands.format(value),
             style: AppText.tabular(
               TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w800,
+                fontSize: 17,
+                fontWeight: FontWeight.w600,
                 color: palette.text,
               ),
             ),
@@ -568,7 +526,7 @@ class _HeroCard extends StatelessWidget {
   }
 }
 
-/// 两列小卡：左上小标题、右上彩色图标方块、下面粗体名称 + 一行说明。
+/// 两列小卡：左上小标题、右上柔和图标方块、下面克制字重名称 + 一行说明。
 class _MiniCard extends StatelessWidget {
   final String label;
   final IconData icon;
@@ -592,8 +550,7 @@ class _MiniCard extends StatelessWidget {
     final palette = context.palette;
     return AppCard(
       radius: AppRadius.cardSm,
-      bordered: false,
-      padding: const EdgeInsets.fromLTRB(18, 16, 14, 18),
+      padding: const EdgeInsets.fromLTRB(16, 15, 14, 16),
       onTap: onTap,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -606,7 +563,7 @@ class _MiniCard extends StatelessWidget {
                   label,
                   style: AppText.caption.copyWith(
                     color: palette.text2,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
               ),
@@ -619,9 +576,9 @@ class _MiniCard extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.3,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              letterSpacing: -0.2,
               color: palette.text,
             ),
           ),

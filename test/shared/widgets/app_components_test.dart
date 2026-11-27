@@ -43,7 +43,7 @@ Color? _colorOf(WidgetTester tester, Finder finder) {
 
 void main() {
   group('AppLargeTitleHeader', () {
-    testWidgets('大标题 34 / w800，副标题次要色，右侧按钮从左到右排', (tester) async {
+    testWidgets('大标题 23 / w600（v3.0 Nordic Calm），副标题次要色，右侧按钮从左到右排', (tester) async {
       await tester.pumpWidget(
         _wrap(
           AppLargeTitleHeader(
@@ -57,8 +57,8 @@ void main() {
         ),
       );
       final title = tester.widget<Text>(find.text('设置'));
-      expect(title.style!.fontSize, 34);
-      expect(title.style!.fontWeight, FontWeight.w800);
+      expect(title.style!.fontSize, 23);
+      expect(title.style!.fontWeight, FontWeight.w600);
       final subtitle = tester.widget<Text>(find.text('家里的 NAS'));
       expect(subtitle.style!.color, AppPalette.light.text2);
       expect(
@@ -231,7 +231,7 @@ void main() {
       );
       final tintDeco = tint.decoration! as BoxDecoration;
       expect(tintDeco.color, p.tint(p.ok));
-      expect(tintDeco.borderRadius, BorderRadius.circular(AppRadius.tile * 36 / 46));
+      expect(tintDeco.borderRadius, BorderRadius.circular(AppRadius.tile * 34 / 46));
       expect(tester.widget<Icon>(find.byIcon(Icons.check)).color, p.ok);
 
       final solid = tester.widget<Container>(
@@ -241,7 +241,7 @@ void main() {
       expect(solidDeco.color, p.ok);
       expect(solidDeco.borderRadius, BorderRadius.circular(AppRadius.tile));
       expect(tester.widget<Icon>(find.byIcon(Icons.lock)).color, p.onStatus);
-      expect(tester.getSize(find.byKey(const Key('tint'))), const Size(36, 36));
+      expect(tester.getSize(find.byKey(const Key('tint'))), const Size(34, 34));
     });
   });
 

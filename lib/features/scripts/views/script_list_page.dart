@@ -14,7 +14,6 @@ import '../../../core/network/dio_client.dart';
 import '../../../core/storage/secure_storage.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/utils/api_utils.dart';
-import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_back_button.dart';
@@ -27,6 +26,7 @@ import '../../tasks/views/task_form_page.dart';
 import '../utils/script_search.dart';
 import '../widgets/script_code_editor.dart';
 import '../widgets/script_find_bar.dart';
+import 'script_debug_log_page.dart';
 
 final scriptProvider = StateNotifierProvider<ScriptNotifier, ScriptState>((
   ref,
@@ -2133,13 +2133,19 @@ class _ScriptViewPageState extends ConsumerState<ScriptViewPage> {
       if (!mounted) {
         return;
       }
-      await showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        showDragHandle: true,
-        builder: (context) =>
-            _ScriptDebugRunSheet(path: widget.path, runId: runId!),
-      );
+      if (GoRouter.maybeOf(context) != null) {
+        await context.push(
+          '/scripts/debug-log',
+          extra: ScriptDebugLogArgs(path: widget.path, initialRunId: runId),
+        );
+      } else {
+        await Navigator.of(context, rootNavigator: true).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) =>
+                ScriptDebugLogPage(path: widget.path, initialRunId: runId!),
+          ),
+        );
+      }
     } catch (error) {
       _showError(_extractScriptError(error, '调试运行失败'));
     } finally {
@@ -2879,267 +2885,3 @@ String? _detectFormatterLanguage(String path) {
 
 String _extractRequestError(dynamic error, String fallback) =>
     extractScriptSaveErrorMessage(error, fallback);
-
-class _ScriptDebugRunSheet extends StatefulWidget {
-  final String path;
-  final String runId;
-
-  const _ScriptDebugRunSheet({required this.path, required this.runId});
-
-  @override
-  State<_ScriptDebugRunSheet> createState() => _ScriptDebugRunSheetState();
-}
-
-class _ScriptDebugRunSheetState extends State<_ScriptDebugRunSheet> {
-  final ScrollController _scrollController = ScrollController();
-  final List<String> _logs = [];
-  bool _loading = true;
-  bool _done = false;
-  bool _autoScroll = true;
-  String _statusText = '启动中...';
-  Timer? _pollTimer;
-  Color? _logBackgroundColor;
-
-  @override
-  void initState() {
-    super.initState();
-    Future.microtask(() async {
-      final color = await loadPanelLogBackgroundColor();
-      if (mounted) {
-        setState(() => _logBackgroundColor = color);
-      }
-    });
-    _loadLogs();
-    _pollTimer = Timer.periodic(const Duration(seconds: 1), (_) => _loadLogs());
-  }
-
-  @override
-  void dispose() {
-    _pollTimer?.cancel();
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadLogs() async {
-    try {
-      final resp = await DioClient.instance.dio.get(
-        ApiEndpoints.scriptsRunLogs(widget.runId),
-      );
-      final data = extractData(resp.data);
-      if (data is! Map) {
-        return;
-      }
-
-      final rawLogs = data['logs'];
-      final nextLogs = rawLogs is List
-          ? rawLogs
-                .map((item) => item.toString())
-                .where((item) => item.trim().isNotEmpty)
-                .toList()
-          : const <String>[];
-      final done = data['done'] == true;
-      final exitCode = data['exit_code'];
-      final status = data['status']?.toString() ?? '';
-
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _logs
-          ..clear()
-          ..addAll(nextLogs);
-        _done = done;
-        _loading = false;
-        _statusText = _buildStatusText(status, exitCode, done);
-      });
-
-      if (_autoScroll) {
-        _scrollToBottom();
-      }
-
-      if (done) {
-        _pollTimer?.cancel();
-      }
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _loading = false;
-        _statusText = '日志读取失败';
-      });
-    }
-  }
-
-  String _buildStatusText(String status, dynamic exitCode, bool done) {
-    if (!done) {
-      return '运行中...';
-    }
-    if (status == 'success') {
-      return '执行成功';
-    }
-    if (status == 'stopped') {
-      return '已停止';
-    }
-    if (exitCode is num && exitCode == 0) {
-      return '执行成功';
-    }
-    return '执行失败';
-  }
-
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 120),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
-
-  Future<void> _stopRun() async {
-    try {
-      await DioClient.instance.dio.put(
-        ApiEndpoints.scriptsRunStop(widget.runId),
-      );
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _done = true;
-        _statusText = '已停止';
-      });
-      _pollTimer?.cancel();
-      await _loadLogs();
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      AppSnack.error(context, extractScriptSaveErrorMessage(error, '停止调试失败'));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final logTheme = resolveLogSurfaceTheme(
-      _logBackgroundColor,
-      themeBrightness: Theme.of(context).brightness,
-    );
-
-    return SafeArea(
-      child: SizedBox(
-        height: MediaQuery.of(context).size.height * 0.8,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '脚本调试',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                widget.path,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _statusText,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: _logs.isEmpty
-                        ? null
-                        : () async {
-                            await Clipboard.setData(
-                              ClipboardData(text: _logs.join('\n')),
-                            );
-                            if (!context.mounted) return;
-                            AppSnack.success(context, '已复制调试日志');
-                          },
-                    icon: const Icon(Icons.copy_all_outlined),
-                  ),
-                  IconButton(
-                    onPressed: () {
-                      setState(() => _autoScroll = !_autoScroll);
-                      if (_autoScroll) {
-                        _scrollToBottom();
-                      }
-                    },
-                    icon: Icon(
-                      _autoScroll
-                          ? Icons.vertical_align_bottom
-                          : Icons.pause_circle_outline,
-                    ),
-                  ),
-                  if (!_done)
-                    IconButton(
-                      onPressed: _stopRun,
-                      icon: const Icon(Icons.stop_circle_outlined),
-                    ),
-                ],
-              ),
-              Expanded(
-                child: AppCard(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(14),
-                  // 调试输出面板原本就没有描边，靠日志主题底色与页面区分。
-                  bordered: false,
-                  color: logTheme.background,
-                  child: _loading
-                      ? Center(
-                          child: CircularProgressIndicator(
-                            color: context.palette.accent,
-                          ),
-                        )
-                      : _logs.isEmpty
-                      ? Center(
-                          child: Text(
-                            '等待调试输出...',
-                            style: TextStyle(color: logTheme.mutedForeground),
-                          ),
-                        )
-                      : Scrollbar(
-                          controller: _scrollController,
-                          child: SingleChildScrollView(
-                            controller: _scrollController,
-                            child: SelectionArea(
-                              child: RichText(
-                                text: AnsiTextParser.buildTextSpan(
-                                  _logs.join('\n'),
-                                  baseStyle: TextStyle(
-                                    color: logTheme.foreground,
-                                    fontFamily: 'monospace',
-                                    fontSize: 12,
-                                    height: 1.55,
-                                  ),
-                                  brightness: logTheme.brightness,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}

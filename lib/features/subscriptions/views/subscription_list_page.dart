@@ -7,13 +7,12 @@ import 'package:go_router/go_router.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/sse_client.dart';
-import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/subscription.dart';
 import '../../../shared/utils/api_utils.dart';
-import '../../../shared/utils/ansi_text.dart';
 import '../../../shared/utils/duration_utils.dart';
 import '../../../shared/utils/log_background.dart';
+import '../../../shared/utils/log_line_buffer.dart';
 import '../../../shared/utils/time_utils.dart';
 import '../../../shared/widgets/app_circle_add_button.dart';
 import '../../../shared/widgets/app_back_button.dart';
@@ -23,6 +22,7 @@ import '../../../shared/widgets/app_pill_button.dart';
 import '../../../shared/widgets/app_notice.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
+import '../../../shared/widgets/fullscreen_log_scaffold.dart';
 import '../utils/subscription_auth.dart';
 
 // ── Provider ──
@@ -1612,62 +1612,44 @@ class _SubscriptionLogsPageState extends ConsumerState<SubscriptionLogsPage> {
   }
 
   void _showLogDetail(Map<String, dynamic> log) {
-    final logTheme = resolveLogSurfaceTheme(
-      _logBackgroundColor,
-      themeBrightness: Theme.of(context).brightness,
-    );
-    // 日志卡片的描边跟着「日志主题」的明暗走（不是 App 明暗），属于日志内容配色，保持原值。
-    final borderColor = logTheme.brightness == Brightness.dark
-        ? AppColors.slate700
-        : AppColors.slate200;
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: SizedBox(
-          height: MediaQuery.of(context).size.height * 0.75,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Text(
-                  '日志详情',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 12),
-                Expanded(
-                  child: AppCard(
-                    padding: const EdgeInsets.all(14),
-                    radius: AppRadius.md,
-                    // 日志底色跟随用户设置的日志主题，与页面明暗无关，
-                    // 必须显式传入，不能落到 AppCard 的默认卡片底色。
-                    color: logTheme.background,
-                    borderColor: borderColor,
-                    child: SingleChildScrollView(
-                      child: SelectionArea(
-                        child: RichText(
-                          text: AnsiTextParser.buildTextSpan(
-                            log['content']?.toString().trim().isNotEmpty == true
-                                ? log['content'].toString()
-                                : '(无日志内容)',
-                            baseStyle: TextStyle(
-                              color: logTheme.foreground,
-                              fontFamily: 'monospace',
-                              fontSize: 12,
-                              height: 1.6,
-                            ),
-                            brightness: logTheme.brightness,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+    final content = log['content']?.toString() ?? '';
+    final lines = content.replaceAll('\r\n', '\n').split('\n');
+    if (lines.isNotEmpty && lines.last.isEmpty) {
+      lines.removeLast();
+    }
+    final logStatus = log['status'];
+    final success = logStatus == 0 || logStatus == 'success';
+    final failed = logStatus == 1 || logStatus == 'failed';
+    final dur = formatDurationSeconds(log['duration'] as num?);
+    final time = log['created_at']?.toString();
+    final parsedTime = time == null ? null : DateTime.tryParse(time);
+    final subParts = <String>[
+      if (parsedTime != null)
+        formatTimeCn(parsedTime)
+      else if (time != null && time.isNotEmpty)
+        time,
+      if (dur != '—') '耗时 $dur',
+    ];
+
+    Navigator.of(context, rootNavigator: true).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => _StaticFullscreenLogPage(
+          title: (widget.subscriptionName?.trim().isNotEmpty ?? false)
+              ? '${widget.subscriptionName} 拉取详情'
+              : '订阅拉取日志详情',
+          subtitle: subParts.join(' · '),
+          statusLabel: success
+              ? '成功'
+              : failed
+              ? '失败'
+              : '已结束',
+          statusTone: success
+              ? FullscreenLogTone.success
+              : failed
+              ? FullscreenLogTone.failed
+              : FullscreenLogTone.neutral,
+          lines: lines,
+          configuredBackgroundColor: _logBackgroundColor,
         ),
       ),
     );
@@ -1882,14 +1864,11 @@ class SubscriptionPullStreamPage extends ConsumerStatefulWidget {
 class _SubscriptionPullStreamPageState
     extends ConsumerState<SubscriptionPullStreamPage> {
   final _sseClient = SseClient();
-  final _logs = <String>[];
-  final _scrollController = ScrollController();
+  final _log = LogLineBuffer();
   bool _done = false;
+  String _statusLabel = '实时输出';
+  FullscreenLogTone _statusTone = FullscreenLogTone.running;
   String? _statusMessage;
-
-  /// 连接失败的原因。与 _statusMessage 分开存：
-  /// 「当前没有正在运行的拉取任务」是正常结论，断线不是，
-  /// 混在一起的话底部 banner 只能一律显示绿色的「拉取完成」—— 是假的成功。
   String? _errorMessage;
   Color? _logBackgroundColor;
 
@@ -1912,38 +1891,69 @@ class _SubscriptionPullStreamPageState
       autoReconnect: true,
       onEvent: (event) {
         if (!mounted) return;
-        setState(() {
-          if (event.event == 'done' &&
-              event.data == 'not_running' &&
-              _logs.isEmpty) {
-            _statusMessage = '当前没有正在运行的拉取任务';
-          } else {
-            _logs.add(event.data);
+        if (event.event == 'done') {
+          if (event.data == 'reconnect') {
+            setState(() {
+              _done = false;
+              _statusLabel = '实时输出';
+              _statusTone = FullscreenLogTone.running;
+            });
+            return;
           }
-          if (event.event == 'done' && event.data != 'reconnect') {
+          setState(() {
             _done = true;
-          }
-        });
-        Future.delayed(const Duration(milliseconds: 50), () {
-          if (_scrollController.hasClients) {
-            _scrollController.jumpTo(
-              _scrollController.position.maxScrollExtent,
-            );
-          }
-        });
+            if (event.data == 'not_running' && _log.isEmpty) {
+              _statusMessage = '当前没有正在运行的拉取任务';
+              _statusLabel = '未在运行';
+              _statusTone = FullscreenLogTone.neutral;
+              return;
+            }
+            switch (event.data) {
+              case 'finished':
+              case 'finished-late':
+                _statusLabel = '拉取完成';
+                _statusTone = FullscreenLogTone.success;
+              case 'timeout':
+                _statusLabel = '拉取超时';
+                _statusTone = FullscreenLogTone.failed;
+              case 'failed':
+                _statusLabel = '拉取失败';
+                _statusTone = FullscreenLogTone.failed;
+              case 'closed':
+              case 'cancelled':
+                _statusLabel = '已停止';
+                _statusTone = FullscreenLogTone.neutral;
+              default:
+                _statusLabel = event.data.isEmpty ? '已结束' : event.data;
+                _statusTone = FullscreenLogTone.neutral;
+            }
+          });
+          return;
+        }
+        final lines = event.data.replaceAll('\r\n', '\n').split('\n');
+        if (lines.isNotEmpty && lines.last.isEmpty) {
+          lines.removeLast();
+        }
+        if (lines.isNotEmpty) {
+          _log.append(lines);
+        }
       },
       onDone: () {
-        if (mounted) setState(() => _done = true);
+        if (!mounted || _done) return;
+        setState(() {
+          _done = true;
+          _statusLabel = '拉取完成';
+          _statusTone = FullscreenLogTone.success;
+        });
       },
       onError: (error) {
         if (!mounted) return;
+        final msg = error is SseAuthFailure ? error.message : '拉取日志连接已断开';
         setState(() {
           _done = true;
-          // 会话失效和普通断线要说清楚是哪一种：前者重试没有意义，
-          // 用户该做的是重新登录，而不是反复点开这个页面。
-          _errorMessage = error is SseAuthFailure
-              ? error.message
-              : '拉取日志连接已断开';
+          _errorMessage = msg;
+          _statusLabel = error is SseAuthFailure ? '登录已失效' : '连接已断开';
+          _statusTone = FullscreenLogTone.failed;
         });
       },
     );
@@ -1952,102 +1962,69 @@ class _SubscriptionPullStreamPageState
   @override
   void dispose() {
     _sseClient.close();
-    _scrollController.dispose();
+    _log.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final logTheme = resolveLogSurfaceTheme(
-      _logBackgroundColor,
-      themeBrightness: Theme.of(context).brightness,
+    return FullscreenLogScaffold(
+      title: '订阅拉取日志',
+      subtitle: '订阅 #${widget.subscriptionId}',
+      statusLabel: _statusLabel,
+      statusTone: _statusTone,
+      buffer: _log,
+      loading: false,
+      emptyMessage:
+          _errorMessage ?? _statusMessage ?? (_done ? '无日志内容' : '等待拉取输出...'),
+      configuredBackgroundColor: _logBackgroundColor,
     );
-    // 底部完成 / 断线 banner 跟着「日志主题」的明暗走（不是 App 明暗），
-    // 属于日志内容配色，保持原值。
-    final doneBannerBackground = logTheme.brightness == Brightness.dark
-        ? AppColors.slate800
-        : AppColors.slate100;
+  }
+}
 
-    return Scaffold(
-      backgroundColor: logTheme.background,
-      appBar: AppBar(
-        title: const Text('拉取日志'),
-        backgroundColor: logTheme.background,
-        foregroundColor: logTheme.foreground,
-      ),
-      body: Container(
-        color: logTheme.background,
-        child: Column(
-          children: [
-            Expanded(
-              child: _logs.isEmpty && (_errorMessage ?? _statusMessage) != null
-                  ? Center(
-                      child: Text(
-                        (_errorMessage ?? _statusMessage)!,
-                        style: TextStyle(color: logTheme.mutedForeground),
-                      ),
-                    )
-                  : ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.all(12),
-                      itemCount: _logs.length,
-                      itemBuilder: (_, i) => SelectionArea(
-                        child: RichText(
-                          text: AnsiTextParser.buildTextSpan(
-                            _logs[i],
-                            baseStyle: TextStyle(
-                              color: logTheme.foreground,
-                              fontFamily: 'monospace',
-                              fontSize: 12,
-                              height: 1.6,
-                            ),
-                            brightness: logTheme.brightness,
-                          ),
-                        ),
-                      ),
-                    ),
-            ),
-            if (_errorMessage != null)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                color: doneBannerBackground,
-                child: Text(
-                  _errorMessage!,
-                  textAlign: TextAlign.center,
-                  // 断线不是成功，不能复用绿色 banner。浅色分支取 dangerDark，
-                  // 理由与下面的 successDark 一样：banner 底是 slate100。
-                  style: TextStyle(
-                    color: logTheme.brightness == Brightness.dark
-                        ? AppColors.danger
-                        : AppColors.dangerDark,
-                    fontSize: 13,
-                  ),
-                ),
-              )
-            else if (_done)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                color: doneBannerBackground,
-                child: Text(
-                  '拉取完成',
-                  textAlign: TextAlign.center,
-                  // 「完成」是结果成功，不是「进行中」，所以走 success 而不是 primary。
-                  // 浅色分支取 successDark：这条 banner 压在 slate100 上，
-                  // 满强度 success 只有 2.1:1，加深一档才看得清。
-                  // 深色分支沿用日志前景色，不动。
-                  style: TextStyle(
-                    color: logTheme.brightness == Brightness.dark
-                        ? logTheme.foreground
-                        : AppColors.successDark,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
+class _StaticFullscreenLogPage extends StatefulWidget {
+  final String title;
+  final String subtitle;
+  final String statusLabel;
+  final FullscreenLogTone statusTone;
+  final List<String> lines;
+  final Color? configuredBackgroundColor;
+
+  const _StaticFullscreenLogPage({
+    required this.title,
+    required this.subtitle,
+    required this.statusLabel,
+    required this.statusTone,
+    required this.lines,
+    this.configuredBackgroundColor,
+  });
+
+  @override
+  State<_StaticFullscreenLogPage> createState() =>
+      _StaticFullscreenLogPageState();
+}
+
+class _StaticFullscreenLogPageState extends State<_StaticFullscreenLogPage> {
+  late final LogLineBuffer _log = LogLineBuffer()..replaceAll(widget.lines);
+
+  @override
+  void dispose() {
+    _log.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FullscreenLogScaffold(
+      title: widget.title,
+      subtitle: widget.subtitle,
+      statusLabel: widget.statusLabel,
+      statusTone: widget.statusTone,
+      buffer: _log,
+      loading: false,
+      follow: false,
+      emptyMessage: '(无日志内容)',
+      configuredBackgroundColor: widget.configuredBackgroundColor,
     );
   }
 }

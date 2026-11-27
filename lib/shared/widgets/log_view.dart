@@ -4,44 +4,56 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 
+import '../../core/theme/app_theme.dart';
 import '../../core/theme/design_tokens.dart';
 import '../utils/ansi_text.dart';
 import '../utils/log_line_buffer.dart';
 
 /// 距底部多少像素以内算「停在底部」。
-///
-/// 下内边距 12 + 一行约 20，最后一行只要还露在屏幕上就算在底部；
-/// 与面板 Web 端 useLogAutoFollow 的取值思路一致（它是 40，容器内边距更大）。
 const double kLogFollowTolerance = 32;
 
-/// 回到底部时，锚点下方只放最后这么多行；跟随期间锚点也随尾部滑动，一直保持这么多行。
-///
-/// 按行高不定的懒加载列表，跳到很远的偏移要把中间每一行都布局一遍
-/// （几千行就是明显的一顿）。所以「回到底部」不直接跳，而是把锚点挪到末尾附近：
-/// 锚点之上的行交给反向生长的列表，按需往上加载；锚点之下只剩这一小段，
-/// 贴底时最多布局这么多行。取 200 是为了在大屏上也一定超过一屏高。
+/// 回到底部时，锚点下方只放最后这么多行；跟随期间锚点也随尾部滑动。
 const int _kTailWindow = 200;
 
-/// 日志正文视图：按行懒渲染、在底部时跟随新日志、上翻时不被拉回（issue #10）。
-///
-/// 跟随规则：
-/// - 停在底部（误差 [kLogFollowTolerance] 以内）时，新日志到来自动贴底；
-/// - 用户手动往上翻，就不再跟随，新日志只往下面接，眼前的内容一动不动；
-/// - 手动滚回底部、或点「回到底部」按钮，恢复跟随；
-/// - 选中了文字（长按 / 拖选）时暂停跟随，选区清掉后接着跟（APP #15）。
-///
-/// 「是不是用户在滚」只认手势（拖动 / 惯性 / 滚轮），程序自己的贴底跳转不算：
-/// 内容变高不会改变滚动位置，只有用户操作才会让它离开底部。
-///
-/// [follow] 为 false 时是静态日志（一次性加载完），从顶部开始显示，没有跟随与按钮。
+/// 供全屏日志容器按绝对行号跳转（如页内搜索上下跳转、「↑ 首处报错」一键定位）。
+class LogViewController {
+  _LogViewState? _state;
+
+  void _attach(_LogViewState state) => _state = state;
+
+  void _detach(_LogViewState state) {
+    if (identical(_state, state)) {
+      _state = null;
+    }
+  }
+
+  /// 立即跳转到指定的绝对行号（`buffer.droppedCount .. buffer.totalCount - 1`），
+  /// 并将该行置于视口靠上位置，同时暂停自动贴底跟随以便用户阅读上下文。
+  void jumpToAbsoluteLine(int absoluteLine) {
+    _state?._jumpToAbsoluteLine(absoluteLine);
+  }
+
+  /// 恢复到底部跟随。
+  void jumpToLatest() {
+    _state?._jumpToLatest();
+  }
+}
+
+/// 日志正文视图：双 Sliver 尾窗懒渲染、贴底自动跟随、上翻暂停并统计新增行数、
+/// 支持页内关键字高亮定位、可选行号与自动换行。
 class LogView extends StatefulWidget {
   const LogView({
     super.key,
     required this.buffer,
     required this.textStyle,
     required this.brightness,
-    this.padding = const EdgeInsets.all(12),
+    this.controller,
+    this.padding = const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
     this.follow = true,
+    this.showLineNumbers = false,
+    this.softWrap = true,
+    this.searchQuery = '',
+    this.activeMatchAbsoluteLine,
     this.mutedColor,
     this.truncatedHint,
     this.truncatedActionLabel,
@@ -50,19 +62,25 @@ class LogView extends StatefulWidget {
 
   final LogLineBuffer buffer;
   final TextStyle textStyle;
-
-  /// 日志底色的明暗（不是页面主题的），决定 ANSI 配色。
   final Brightness brightness;
+  final LogViewController? controller;
   final EdgeInsets padding;
   final bool follow;
 
-  /// 截断提示的文字颜色，缺省从正文颜色淡化。
+  /// 是否显示左侧等宽行号栏（不参与长按选词复制）。
+  final bool showLineNumbers;
+
+  /// 是否自动软换行。
+  final bool softWrap;
+
+  /// 页内关键字高亮词（大小写不敏感）。
+  final String searchQuery;
+
+  /// 当前选中的搜索命中所在绝对行号（以强高亮色标识）。
+  final int? activeMatchAbsoluteLine;
+
   final Color? mutedColor;
-
-  /// 日志被截断时接在提示后面的一句话，告诉用户完整日志去哪儿拿。
   final String? truncatedHint;
-
-  /// 日志被截断时，提示条上的操作（比如「下载完整日志」）。两者都给才显示。
   final String? truncatedActionLabel;
   final VoidCallback? onTruncatedAction;
 
@@ -73,44 +91,28 @@ class LogView extends StatefulWidget {
 class _LogViewState extends State<LogView> {
   final _controller = ScrollController();
 
-  /// 锚点的绝对行号：它之前的行在「上方列表」里（从锚点往上反向生长），
-  /// 它及之后的行在「下方列表」里（往下正向生长，新日志都接在这里）。
   int _anchor = 0;
-
-  /// 是否以下方列表为滚动原点。只在锚点之上确实有行时才启用，
-  /// 否则短日志会被原点顶在屏幕中间，上面空一截。
   bool _centered = false;
-
-  /// 换锚点时递增，用作两个列表的 key：新列表从空白开始按需布局，
-  /// 而不是拿着旧的已布局行一路往回补。
   int _sliverGeneration = 0;
   int _bufferGeneration = 0;
-
-  /// 锚点是否紧贴尾部：下方列表恰好是最后 [_kTailWindow] 行（APP #15）。
-  ///
-  /// 只有紧贴着，跟随时才能原地滑锚点。不紧贴（刚恢复跟随，或手势、选区期间
-  /// 新行接在下方列表末尾、锚点没滑）时原地滑会让下方列表一下子缩短，
-  /// 屏幕附近已经排好版的行全部被回收、从第 0 行重排，所以一律走「回到底部」重建。
   bool _glued = false;
 
   bool _following = true;
   bool _userScrolling = false;
   bool _stickScheduled = false;
-
-  /// 用户有没有选中文字（长按 / 拖选）。
-  ///
-  /// 有选区时按「不跟随」处理：不滑锚点、不贴底，并暂缓裁剪。锚点一滑，
-  /// 屏幕上每一行都会换成别的内容，选区还停在原来那几个位置上，
-  /// 选中的字就成了下一行的字，点「复制」拿到的不是用户选的那段（APP #15 核实时实测过）。
   bool _hasSelection = false;
 
-  /// 换锚点重建列表时要顺手清掉选区，靠它拿到 SelectionArea 里的选区状态。
+  /// 暂停跟随时记录的 `buffer.totalCount`，用于悬浮胶囊实时提示「新增 N 行」。
+  int _pausedAtTotalCount = 0;
+
   final _selectionAreaKey = GlobalKey<SelectionAreaState>();
 
   @override
   void initState() {
     super.initState();
+    widget.controller?._attach(this);
     _following = widget.follow;
+    _pausedAtTotalCount = widget.buffer.totalCount;
     _bufferGeneration = widget.buffer.generation;
     widget.buffer.addListener(_handleBufferChanged);
     _resetAnchor();
@@ -122,12 +124,17 @@ class _LogViewState extends State<LogView> {
   @override
   void didUpdateWidget(LogView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.controller, widget.controller)) {
+      oldWidget.controller?._detach(this);
+      widget.controller?._attach(this);
+    }
     if (!identical(oldWidget.buffer, widget.buffer)) {
       oldWidget.buffer.removeListener(_handleBufferChanged);
       oldWidget.buffer.holdTrim = false;
       widget.buffer.addListener(_handleBufferChanged);
       _bufferGeneration = widget.buffer.generation;
       _following = widget.follow;
+      _pausedAtTotalCount = widget.buffer.totalCount;
       _resetAnchor();
       _sliverGeneration++;
       if (_following) {
@@ -138,8 +145,8 @@ class _LogViewState extends State<LogView> {
 
   @override
   void dispose() {
+    widget.controller?._detach(this);
     widget.buffer.removeListener(_handleBufferChanged);
-    // 缓冲区归页面所有，比视图活得久；别把「暂缓裁剪」留在它身上。
     widget.buffer.holdTrim = false;
     _controller.dispose();
     super.dispose();
@@ -161,27 +168,19 @@ class _LogViewState extends State<LogView> {
     final buffer = widget.buffer;
     if (buffer.generation != _bufferGeneration) {
       _bufferGeneration = buffer.generation;
+      _pausedAtTotalCount = buffer.totalCount;
       if (_following) {
-        // 整段换了内容：跟随中就直接落到新内容的末尾。
         _jumpToLatest();
         return;
       }
-      // 没在跟随时尽量原地不动。轮询把同一份快照再推一遍是最常见的情况，
-      // 绝对行号一致，什么都不会变。
       _anchor = _anchor.clamp(buffer.droppedCount, buffer.totalCount);
     }
-    // 跟随中、手指不在屏幕上、也没有选区：锚点随尾部原地滑动（APP #15）。
-    // 以前锚点不动、新行全接在下方列表末尾，贴底一跳要把跳过的每一行都建出来排一遍版，
-    // 打开运行中的任务时历史一次涌进来几百上千行，就是明显的一顿。
-    // 滑动之后下方列表始终只放最后 _kTailWindow 行，来再多行也只重排屏幕上那几十行；
-    // 代价是平时每批新行都要重排一屏（不做滞回，日志不到一万行时稳态每帧约多一倍）。
     if (_following && !_userScrolling && !_hasSelection) {
       final next = math.max(
         buffer.droppedCount,
         buffer.totalCount - _kTailWindow,
       );
       if (!_glued || (next > buffer.droppedCount) != _centered) {
-        // 锚点没紧贴尾部，或者短日志第一次变长、滚动原点要换：都走「回到底部」重建。
         _jumpToLatest();
         return;
       }
@@ -193,29 +192,56 @@ class _LogViewState extends State<LogView> {
     }
   }
 
-  /// 「回到底部」：换锚点、从末尾附近重新布局，并恢复跟随。
+  /// 按绝对行号 O(1) 重建锚点并滚至目标行（不遍历中间数千行）。
+  void _jumpToAbsoluteLine(int targetAbsolute) {
+    final buffer = widget.buffer;
+    if (buffer.isEmpty) return;
+    final clamped = targetAbsolute.clamp(
+      buffer.droppedCount,
+      buffer.totalCount - 1,
+    );
+    if (_hasSelection) {
+      _hasSelection = false;
+      _selectionAreaKey.currentState?.selectableRegion.clearSelection();
+    }
+    final nextAnchor = math.max(buffer.droppedCount, clamped - 2);
+    setState(() {
+      _anchor = nextAnchor;
+      _centered = _anchor > buffer.droppedCount;
+      _glued = false;
+      _sliverGeneration++;
+      if (widget.follow) {
+        if (_following) {
+          _pausedAtTotalCount = buffer.totalCount;
+        }
+        _following = false;
+        buffer.holdTrim = true;
+      }
+    });
+    if (_controller.hasClients) {
+      _controller.position.jumpTo(0);
+    }
+  }
+
   void _jumpToLatest() {
     if (_hasSelection) {
-      // 重建会把两个列表连同选中的那几行一起回收，选区已经没有意义，顺手清掉。
-      // 不清的话「有选区」的标记会一直挂着（行被回收不会触发选区回调），跟随就恢复不了。
-      // 先改标记再清：清选区会同步回调 _handleSelectionChanged，那时它看到的已是「无选区」。
       _hasSelection = false;
       widget.buffer.holdTrim = !_following;
       _selectionAreaKey.currentState?.selectableRegion.clearSelection();
     }
     setState(() {
       _resetAnchor();
+      _pausedAtTotalCount = widget.buffer.totalCount;
       _sliverGeneration++;
     });
     _setFollowing(true);
     if (_controller.hasClients) {
-      // 必须在新列表布局之前把位置挪到尾段附近，否则新列表会在旧的
-      // （可能很远的）偏移上布局，又回到「把中间每一行都排一遍」。
-      // 估算按每行只有一行高，只会偏小不会越过底部，剩下的交给贴底校正。
       final position = _controller.position;
       final tailLines = widget.buffer.totalCount - _anchor;
       final lineExtent =
-          MediaQuery.textScalerOf(context).scale(widget.textStyle.fontSize ?? 14) *
+          MediaQuery.textScalerOf(
+            context,
+          ).scale(widget.textStyle.fontSize ?? 14) *
           (widget.textStyle.height ?? 1.0);
       final leading = _centered ? 0.0 : widget.padding.top;
       final estimate =
@@ -234,35 +260,42 @@ class _LogViewState extends State<LogView> {
     }
     _following = value;
     if (!value) {
-      // 不跟随期间锚点不再滑，之后新行都接在下方列表末尾，恢复跟随时得重建。
       _glued = false;
+      _pausedAtTotalCount = widget.buffer.totalCount;
     }
-    // 有选区时继续暂缓裁剪，见 _hasSelection。
     widget.buffer.holdTrim = !value || _hasSelection;
     _rebuildSoon();
   }
 
-  /// 选区变了（长按选词、拖选、点别处清掉、复制后清掉……）。
   void _handleSelectionChanged(SelectedContent? content) {
-    // 点一下只会落一个光标（选中内容为空串），不算选区。
     final hasSelection = content != null && content.plainText.isNotEmpty;
-    // 视图已经拆了就别再碰缓冲区：它归页面所有，dispose 时已经把暂缓裁剪复位。
     if (!mounted || hasSelection == _hasSelection) {
       return;
     }
     _hasSelection = hasSelection;
-    // 选区保持期间也暂缓裁剪：缓冲区要是裁到锚点之前，下方列表整体错位，选中的字照样会跑。
     widget.buffer.holdTrim = !_following || hasSelection;
     if (!hasSelection) {
+      if (_following && !_userScrolling) {
+        final buffer = widget.buffer;
+        final anchor = _anchor.clamp(buffer.droppedCount, buffer.totalCount);
+        if (buffer.totalCount - anchor > _kTailWindow) {
+          if (SchedulerBinding.instance.schedulerPhase ==
+              SchedulerPhase.persistentCallbacks) {
+            SchedulerBinding.instance.addPostFrameCallback((_) {
+              if (mounted && _following && !_userScrolling && !_hasSelection) {
+                _jumpToLatest();
+              }
+            });
+          } else {
+            _jumpToLatest();
+          }
+          return;
+        }
+      }
       _resumeAfterPause();
     }
   }
 
-  /// 手势或选区让跟随暂停过，停下来后接着跟随。
-  ///
-  /// 暂停期间锚点没滑，新来的行都接在了下方列表末尾。只要接过行（下方列表超过尾段窗口），
-  /// 之后就不能原地滑了，标成「不紧贴」交给「回到底部」重建；
-  /// 人还停在底部时先补一次贴底，等下一批新行来了再重建。
   void _resumeAfterPause() {
     if (!_following || _userScrolling || _hasSelection) {
       return;
@@ -272,40 +305,23 @@ class _LogViewState extends State<LogView> {
     if (buffer.totalCount - anchor > _kTailWindow) {
       _glued = false;
     }
-    // 挪到这一帧之后再动：滚动结束的通知是在滚动位置内部派发的（惯性收尾时还可能正在布局），
-    // 选区回调也可能只是「先清掉、再全选」中间的一步。到时候再看一眼，暂停没真结束就什么都不做。
     SchedulerBinding.instance.addPostFrameCallback((_) {
-      if (!mounted ||
-          !_following ||
-          _userScrolling ||
-          _hasSelection ||
-          !_controller.hasClients) {
-        return;
-      }
-      if (!_glued && !_isAtBottom(_controller.position)) {
-        // 选区保持期间没贴底，下面攒了一截：直接贴底要把攒下的每一行都排一遍版，
-        // 正是 APP #15 要消掉的那一顿，改走重建。
-        _jumpToLatest();
+      if (!mounted || !_following || _userScrolling || _hasSelection) {
         return;
       }
       _stickToBottom();
     });
-    SchedulerBinding.instance.ensureVisualUpdate();
   }
 
-  /// 滚动通知有可能在布局阶段派发（例如惯性滚动途中内容变高），
-  /// 那一刻不能 setState，挪到这一帧结束之后。
   void _rebuildSoon() {
     if (SchedulerBinding.instance.schedulerPhase ==
         SchedulerPhase.persistentCallbacks) {
       SchedulerBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          setState(() {});
-        }
+        if (mounted) setState(() {});
       });
       return;
     }
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   void _stickAfterFrame() {
@@ -317,12 +333,9 @@ class _LogViewState extends State<LogView> {
       _stickScheduled = false;
       _stickToBottom();
     });
-    SchedulerBinding.instance.ensureVisualUpdate();
   }
 
   void _stickToBottom() {
-    // 用户手指还在屏幕上（或惯性还没停）时绝不能跳：jumpTo 会打断当前手势，
-    // 日志刷得快时用户就永远拖不动。有选区时也不跳，否则选中的字会被带走。
     if (!mounted ||
         !_following ||
         _userScrolling ||
@@ -348,21 +361,17 @@ class _LogViewState extends State<LogView> {
       _userScrolling = true;
     } else if (notification is UserScrollNotification &&
         notification.direction != ScrollDirection.idle) {
-      // 滚轮 / 触控板没有 dragDetails，靠用户滚动方向认出来。
       _userScrolling = true;
     } else if (notification is ScrollUpdateNotification && _userScrolling) {
       _setFollowing(_isAtBottom(notification.metrics));
     } else if (notification is ScrollEndNotification && _userScrolling) {
       _userScrolling = false;
       _setFollowing(_isAtBottom(notification.metrics));
-      // 手势期间到的新日志没有贴底、锚点也没滑，停下来且仍在底部时补上。
       _resumeAfterPause();
     }
     return false;
   }
 
-  /// 内容变高、视口尺寸变化、以及懒加载列表把估算高度修正成实际高度时都会触发。
-  /// 贴底一次可能因为估算偏小而没到真正的底，靠它接着校正到位。
   bool _handleMetricsNotification(ScrollMetricsNotification notification) {
     if (widget.follow && notification.depth == 0) {
       _stickToBottom();
@@ -370,20 +379,145 @@ class _LogViewState extends State<LogView> {
     return false;
   }
 
+  /// 在保持 ANSI 着色的前提下叠加关键字搜索高亮。
+  TextSpan _highlightSpan(TextSpan source, String query, Color bgColor) {
+    final lowerQuery = query.toLowerCase();
+    if (lowerQuery.isEmpty) return source;
+
+    List<InlineSpan> processSpan(TextSpan span, TextStyle? inherited) {
+      final effectiveStyle = inherited?.merge(span.style) ?? span.style;
+      final out = <InlineSpan>[];
+      final text = span.text;
+      if (text != null && text.isNotEmpty) {
+        final lower = text.toLowerCase();
+        var cursor = 0;
+        while (true) {
+          final hit = lower.indexOf(lowerQuery, cursor);
+          if (hit < 0) {
+            if (cursor < text.length) {
+              out.add(
+                TextSpan(text: text.substring(cursor), style: effectiveStyle),
+              );
+            }
+            break;
+          }
+          if (hit > cursor) {
+            out.add(
+              TextSpan(
+                text: text.substring(cursor, hit),
+                style: effectiveStyle,
+              ),
+            );
+          }
+          out.add(
+            TextSpan(
+              text: text.substring(hit, hit + lowerQuery.length),
+              style: (effectiveStyle ?? const TextStyle()).copyWith(
+                backgroundColor: bgColor,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          );
+          cursor = hit + lowerQuery.length;
+        }
+      }
+      final children = span.children;
+      if (children != null) {
+        for (final child in children) {
+          if (child is TextSpan) {
+            out.addAll(processSpan(child, effectiveStyle));
+          } else {
+            out.add(child);
+          }
+        }
+      }
+      return out;
+    }
+
+    return TextSpan(children: processSpan(source, null));
+  }
+
   Widget _buildLine(int absolute) {
     final buffer = widget.buffer;
     final index = absolute - buffer.droppedCount;
     if (index < 0 || index >= buffer.length) {
-      // 这一行已经被裁掉，下一次重建前的过渡帧里可能还会被问到。
       return const SizedBox.shrink();
     }
-    return Text.rich(
-      AnsiTextParser.buildTextSpan(
-        buffer.lineAt(index),
-        baseStyle: widget.textStyle,
-        brightness: widget.brightness,
-        start: buffer.ansiStateAt(index),
-      ),
+    final rawLine = buffer.lineAt(index);
+    var span = AnsiTextParser.buildTextSpan(
+      rawLine,
+      baseStyle: widget.textStyle,
+      brightness: widget.brightness,
+      start: buffer.ansiStateAt(index),
+    );
+
+    final query = widget.searchQuery.trim();
+    final isActiveMatch = widget.activeMatchAbsoluteLine == absolute;
+    if (query.isNotEmpty) {
+      span = _highlightSpan(
+        span,
+        query,
+        isActiveMatch ? AppColors.searchMatchCurrent : AppColors.searchMatch,
+      );
+    }
+
+    Widget lineText = Text.rich(
+      span,
+      softWrap: widget.softWrap,
+      overflow: widget.softWrap ? TextOverflow.clip : TextOverflow.visible,
+    );
+    if (!widget.softWrap) {
+      lineText = SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        physics: const ClampingScrollPhysics(),
+        child: lineText,
+      );
+    }
+
+    if (!widget.showLineNumbers) {
+      if (!isActiveMatch) return lineText;
+      return ColoredBox(
+        color: AppColors.searchMatch.withAlpha(28),
+        child: lineText,
+      );
+    }
+
+    final digits = math.max(3, buffer.totalCount.toString().length);
+    final gutterWidth = digits * 8.5 + 10;
+    final gutterColor =
+        widget.mutedColor?.withAlpha(150) ??
+        widget.textStyle.color?.withAlpha(110) ??
+        context.palette.text3;
+
+    final row = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SelectionContainer.disabled(
+          child: SizedBox(
+            width: gutterWidth,
+            child: Padding(
+              padding: const EdgeInsets.only(right: 10),
+              child: Text(
+                '${absolute + 1}',
+                textAlign: TextAlign.right,
+                style: AppText.tabular(
+                  widget.textStyle.copyWith(
+                    color: gutterColor,
+                    fontSize: (widget.textStyle.fontSize ?? 12.5) - 1,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        Expanded(child: lineText),
+      ],
+    );
+
+    if (!isActiveMatch) return row;
+    return ColoredBox(
+      color: AppColors.searchMatch.withAlpha(28),
+      child: row,
     );
   }
 
@@ -394,7 +528,6 @@ class _LogViewState extends State<LogView> {
     return SliverChildBuilderDelegate(
       (context, index) => _buildLine(absoluteOf(index)),
       childCount: count,
-      // 日志行滚出去就该回收，保活只会让内存跟着翻看的范围涨。
       addAutomaticKeepAlives: false,
     );
   }
@@ -407,7 +540,6 @@ class _LogViewState extends State<LogView> {
     final label = widget.truncatedActionLabel;
     final action = widget.onTruncatedAction;
     final hint = widget.truncatedHint;
-    // 提示不是日志正文，不参与选择复制。
     return SelectionContainer.disabled(
       child: Padding(
         padding: const EdgeInsets.only(bottom: 8),
@@ -435,6 +567,49 @@ class _LogViewState extends State<LogView> {
     );
   }
 
+  Widget _buildFollowPill(BuildContext context) {
+    final palette = context.palette;
+    final unread = math.max(0, widget.buffer.totalCount - _pausedAtTotalCount);
+    final text = unread > 0 ? '恢复跟随 · 新增 $unread 行' : '恢复跟随';
+    return Tooltip(
+      message: '回到底部',
+      child: Material(
+        color: palette.primaryBtnBg,
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+        elevation: 3,
+        shadowColor: const Color(0x33000000),
+        child: InkWell(
+          onTap: _jumpToLatest,
+          borderRadius: BorderRadius.circular(AppRadius.pill),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.arrow_downward_rounded,
+                  size: 15,
+                  color: palette.primaryBtnFg,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  text,
+                  style: AppText.tabular(
+                    TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: palette.primaryBtnFg,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final buffer = widget.buffer;
@@ -448,8 +623,6 @@ class _LogViewState extends State<LogView> {
     );
     final belowKey = ValueKey<String>('log-below-$_sliverGeneration');
 
-    // 以下方列表为原点时，排在它前面的 sliver 从原点往上反向排布：
-    // 上方列表紧贴原点，截断提示与顶部留白依次在更上面。
     final slivers = <Widget>[
       SliverToBoxAdapter(child: SizedBox(height: widget.padding.top)),
       if (dropped > 0)
@@ -462,7 +635,6 @@ class _LogViewState extends State<LogView> {
           key: ValueKey<String>('log-above-$_sliverGeneration'),
           padding: horizontal,
           sliver: SliverList(
-            // 上方列表的第 0 项是紧挨锚点的那一行，越往后越早。
             delegate: _lineDelegate(anchor - dropped, (i) => anchor - 1 - i),
           ),
         ),
@@ -488,8 +660,9 @@ class _LogViewState extends State<LogView> {
           Positioned.fill(
             child: SelectionArea(
               key: _selectionAreaKey,
-              // 静态日志不跟随，用不着选区保护。
-              onSelectionChanged: widget.follow ? _handleSelectionChanged : null,
+              onSelectionChanged: widget.follow
+                  ? _handleSelectionChanged
+                  : null,
               child: Scrollbar(
                 controller: _controller,
                 child: NotificationListener<ScrollMetricsNotification>(
@@ -509,14 +682,8 @@ class _LogViewState extends State<LogView> {
           if (widget.follow && !_following)
             Positioned(
               right: 16,
-              bottom: 16,
-              child: FloatingActionButton.small(
-                // 页面上可能还有别的 FAB，不参与路由切换的 Hero 动画。
-                heroTag: null,
-                tooltip: '回到底部',
-                onPressed: _jumpToLatest,
-                child: const Icon(Icons.vertical_align_bottom),
-              ),
+              bottom: 14,
+              child: _buildFollowPill(context),
             ),
         ],
       ),

@@ -2,18 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/design_tokens.dart';
 
-/// 彩色图标方块（方案书 §2.4）：列表行、日志筛选、小卡片的前导图标。
-///
-/// - 默认「浅底配同色图标」：底是 `palette.tint(color)`，图标是 [color] 实色；
-/// - [solid] 为 true 时是实色底 + 白色图标（设置页「服务器管理」「应用锁」那种）。
-///
-/// [color] 传色板里的状态色（`palette.ok` / `err` / `accent` / `purple` / `warn`），
-/// 不要传写死的颜色。
+/// 柔和语义图标方块（v3.0 Nordic Calm：默认 34dp 轻盈比例、细腻图标尺寸）。
 class AppIconTile extends StatelessWidget {
   final IconData icon;
   final Color color;
-
-  /// 方块边长。默认 36（列表行）；日志筛选方块之类用 46。
   final double size;
   final bool solid;
 
@@ -21,16 +13,14 @@ class AppIconTile extends StatelessWidget {
     super.key,
     required this.icon,
     required this.color,
-    this.size = 36,
+    this.size = 34,
     this.solid = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    // AppRadius.tile 是按 46dp 方块定的；方块小了圆角跟着按比例缩，
-    // 否则 36dp 的方块配 15 的圆角几乎成了圆。
-    final radius = AppRadius.tile * size / 46;
+    final radius = solid ? AppRadius.tile : AppRadius.tile * size / 46;
     return Container(
       width: size,
       height: size,
@@ -41,7 +31,7 @@ class AppIconTile extends StatelessWidget {
       ),
       child: Icon(
         icon,
-        size: size * 0.56,
+        size: size * 0.52,
         color: solid ? palette.onStatus : color,
       ),
     );

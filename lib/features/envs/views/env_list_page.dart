@@ -2704,7 +2704,7 @@ class _EnvValueSheetEditor extends StatelessWidget {
                         title,
                         style: const TextStyle(
                           fontSize: 16,
-                          fontWeight: FontWeight.w800,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),

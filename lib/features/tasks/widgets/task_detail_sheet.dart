@@ -372,10 +372,10 @@ class _TaskDetailContentState extends ConsumerState<TaskDetailContent>
           Text(
             current.name,
             style: TextStyle(
-              fontSize: 30,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.6,
-              height: 1.2,
+              fontSize: 21,
+              fontWeight: FontWeight.w600,
+              letterSpacing: -0.35,
+              height: 1.25,
               color: palette.text,
             ),
           ),
@@ -465,7 +465,8 @@ class _TaskDetailContentState extends ConsumerState<TaskDetailContent>
           padding: const EdgeInsets.fromLTRB(14, 12, 10, 14),
           decoration: BoxDecoration(
             color: palette.card,
-            borderRadius: BorderRadius.circular(22),
+            borderRadius: BorderRadius.circular(AppRadius.cardSm),
+            border: Border.all(color: AppSurfaces.of(context).cardBorder),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -474,7 +475,7 @@ class _TaskDetailContentState extends ConsumerState<TaskDetailContent>
                 label,
                 style: AppText.caption.copyWith(color: palette.text2),
               ),
-              const SizedBox(height: 2),
+              const SizedBox(height: 3),
               FittedBox(
                 fit: BoxFit.scaleDown,
                 alignment: Alignment.centerLeft,
@@ -483,8 +484,8 @@ class _TaskDetailContentState extends ConsumerState<TaskDetailContent>
                   maxLines: 1,
                   style: AppText.tabular(
                     TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
                       color: palette.text,
                     ),
                   ),

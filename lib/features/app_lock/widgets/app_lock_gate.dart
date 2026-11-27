@@ -262,7 +262,7 @@ class _AppLockOverlayState extends State<_AppLockOverlay> {
                     Text(
                       '应用已锁定',
                       style: AppText.section.copyWith(
-                        fontWeight: FontWeight.w800,
+                        fontWeight: FontWeight.w600,
                         color: palette.text,
                       ),
                     ),

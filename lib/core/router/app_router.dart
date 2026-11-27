@@ -18,6 +18,7 @@ import '../../features/settings/views/about_page.dart';
 import '../../features/settings/views/settings_page.dart';
 import '../../features/settings/views/sponsor_page.dart';
 import '../../features/subscriptions/views/subscription_list_page.dart';
+import '../../features/scripts/views/script_debug_log_page.dart';
 import '../../features/scripts/views/script_list_page.dart';
 import '../../features/notifications/views/notification_list_page.dart';
 import '../../features/deps/views/dep_list_page.dart';
@@ -239,6 +240,17 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, state) {
           final path = state.extra as String? ?? '';
           return ScriptViewPage(path: path);
+        },
+      ),
+      GoRoute(
+        path: '/scripts/debug-log',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (_, state) {
+          final args = state.extra as ScriptDebugLogArgs?;
+          return ScriptDebugLogPage(
+            path: args?.path ?? '',
+            initialRunId: args?.initialRunId ?? '',
+          );
         },
       ),
       GoRoute(

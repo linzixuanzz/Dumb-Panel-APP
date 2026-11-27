@@ -952,7 +952,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                       Text(
                         '数据备份与恢复',
                         style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                       const SizedBox(height: 6),
@@ -1039,7 +1039,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                       Text(
                         progress.active ? '正在恢复备份' : '恢复进度',
                         style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                       const SizedBox(height: 6),
@@ -1332,7 +1332,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                         Text(
                           '备份文件',
                           style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w800,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                         const Spacer(),

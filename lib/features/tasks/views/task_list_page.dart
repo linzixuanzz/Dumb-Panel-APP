@@ -34,7 +34,8 @@ import '../../../shared/widgets/app_pill_button.dart';
 import '../../../shared/widgets/app_sheet.dart';
 import '../../../shared/widgets/app_snack.dart';
 import '../../../shared/widgets/app_state_views.dart';
-import '../../../shared/widgets/log_view.dart';
+import '../../../shared/widgets/fullscreen_log_scaffold.dart';
+import '../../logs/utils/task_command_lookup.dart';
 import '../providers/favorite_tasks_provider.dart';
 import '../providers/task_provider.dart';
 import '../providers/task_view_provider.dart';
@@ -3526,10 +3527,10 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
         if (error is SseAuthFailure) {
           // 会话已经死了，轮询接口同样会 401。这里不再降级轮询：
           // 只会刷一串失败请求，然后被路由踢回登录页，反而盖掉真正的原因。
-          // 文案取短的：_statusText 挂在 AppBar 的 Chip 里，
-          // 整句「登录已失效，请重新登录」会把 actions 撑到溢出，
-          // 完整说明由登录页顶部负责。
-          setState(() => _statusText = '登录已失效');
+          setState(() {
+            _done = true;
+            _statusText = '登录已失效';
+          });
           return;
         }
         if (!_done) {
@@ -3540,6 +3541,125 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
         }
       },
     );
+  }
+
+  bool _actionBusy = false;
+  bool _resolvingScript = false;
+  String? _cachedCommand;
+
+  Future<void> _stopLiveTask() async {
+    if (_actionBusy || _done) return;
+    setState(() => _actionBusy = true);
+    try {
+      await ref.read(taskProvider.notifier).stopTask(widget.taskId);
+      if (!mounted) return;
+      _sseClient.close();
+      _pollTimer?.cancel();
+      _pollTimer = null;
+      setState(() {
+        _done = true;
+        _statusText = '已停止';
+      });
+      AppSnack.show(context, '已发送停止指令');
+    } catch (error) {
+      if (mounted) {
+        AppSnack.error(context, extractErrorMessage(error, '停止任务失败'));
+      }
+    } finally {
+      if (mounted) setState(() => _actionBusy = false);
+    }
+  }
+
+  Future<void> _rerunLiveTask() async {
+    if (_actionBusy) return;
+    setState(() => _actionBusy = true);
+    try {
+      await ref.read(taskProvider.notifier).runTask(widget.taskId);
+      if (!mounted) return;
+      _sseClient.close();
+      _pollTimer?.cancel();
+      _pollTimer = null;
+      setState(() {
+        _log.clear();
+        _replayBuffer.clear();
+        _logFromSse = false;
+        _liveStatus = kTaskStatusRunning;
+        _loading = true;
+        _done = false;
+        _statusText = '连接中...';
+      });
+      await _init();
+    } catch (error) {
+      if (mounted) {
+        AppSnack.error(context, extractErrorMessage(error, '重新运行失败'));
+      }
+    } finally {
+      if (mounted) setState(() => _actionBusy = false);
+    }
+  }
+
+  Future<void> _openScriptEditor() async {
+    if (_resolvingScript) return;
+    final cmd = await _resolveCommand();
+    if (!mounted) return;
+    if (cmd == null) {
+      AppSnack.error(context, '无法获取任务命令');
+      return;
+    }
+    final scriptPath = extractScriptPathFromCommand(cmd);
+    if (scriptPath == null) {
+      AppSnack.show(context, '该任务不是脚本文件命令：$cmd');
+      return;
+    }
+    if (GoRouter.maybeOf(context) != null) {
+      context.push('/scripts/view', extra: scriptPath);
+    }
+  }
+
+  Future<String?> _resolveCommand() async {
+    if ((_cachedCommand ?? '').trim().isNotEmpty) {
+      return _cachedCommand;
+    }
+    final fromMemory = pickCommandFromTasks(
+      ref.read(taskProvider).tasks,
+      widget.taskId,
+    );
+    if (fromMemory != null) {
+      _cachedCommand = fromMemory;
+      return fromMemory;
+    }
+    setState(() => _resolvingScript = true);
+    try {
+      final response = await DioClient.instance.dio.get(
+        ApiEndpoints.tasks,
+        queryParameters: {'all': 1},
+      );
+      final paginated = extractPaginated(response.data);
+      final tasks = paginated.items.map(Task.fromJson).toList();
+      final fetched = pickCommandFromTasks(tasks, widget.taskId);
+      _cachedCommand = fetched;
+      return fetched;
+    } catch (_) {
+      return null;
+    } finally {
+      if (mounted) setState(() => _resolvingScript = false);
+    }
+  }
+
+  FullscreenLogTone _resolveLiveTone() {
+    if (_statusText == '登录已失效' ||
+        _statusText == '连接错误' ||
+        _statusText == 'failed' ||
+        _statusText.contains('失败')) {
+      return FullscreenLogTone.failed;
+    }
+    if (!_done) {
+      return FullscreenLogTone.running;
+    }
+    if (_statusText == '已完成') {
+      return FullscreenLogTone.success;
+    }
+    return FullscreenLogTone.neutral;
   }
 
   String _statusFromLiveTask(double? status, {required bool done}) {
@@ -3582,96 +3702,27 @@ class _TaskLiveLogPageState extends ConsumerState<TaskLiveLogPage> {
     final title = (widget.taskName?.trim().isNotEmpty ?? false)
         ? '${widget.taskName} 运行日志'
         : '运行日志';
-    final logTheme = resolveLogSurfaceTheme(
-      _logBackgroundColor,
-      themeBrightness: Theme.of(context).brightness,
-    );
-    // 日志底色是用户自选的，跟 APP 明暗无关：按日志底色的明暗取对应那套色板的灰
-    final chipBackground =
-        (logTheme.brightness == Brightness.dark
-                ? AppPalette.dark
-                : AppPalette.light)
-            .fill;
+    final canOperate = ref.watch(authProvider).user?.isOperator ?? false;
 
-    return Scaffold(
-      backgroundColor: logTheme.background,
-      appBar: AppBar(
-        title: Text(title),
-        backgroundColor: logTheme.background,
-        foregroundColor: logTheme.foreground,
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 4),
-            child: Chip(
-              backgroundColor: chipBackground,
-              label: Text(
-                _statusText,
-                style: TextStyle(fontSize: 11, color: logTheme.foreground),
-              ),
-              avatar: _done
-                  ? Icon(Icons.check, size: 14, color: logTheme.foreground)
-                  : SizedBox(
-                      width: 12,
-                      height: 12,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: logTheme.foreground,
-                      ),
-                    ),
-              visualDensity: VisualDensity.compact,
-            ),
-          ),
-          if (_log.isNotEmpty)
-            IconButton(
-              icon: Icon(Icons.copy, color: logTheme.foreground),
-              tooltip: '复制全部',
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: _log.joinAll()));
-                // 特意保留 2s（默认 4s）：这里是日志页，提示条浮在正文上方，
-                // 而复制成功是即时可感知的，没必要占着屏幕挡住刚复制的那几行。
-                // success 快捷方法不转发 duration，所以走 show(tone:)。
-                AppSnack.show(
-                  context,
-                  // 截断后内存里只有最近一部分，得说清楚复制到的不是全部。
-                  _log.droppedCount > 0
-                      ? '已复制最近 ${_log.length} 行'
-                      : '日志已复制到剪贴板',
-                  tone: AppSnackTone.success,
-                  duration: const Duration(seconds: 2),
-                );
-              },
-            ),
-          // 原来这里还有一个「自动滚动」开关，已经去掉：停在底部就跟随、
-          // 上翻就停，回到底部由正文右下角的按钮负责（issue #10）。
-        ],
-      ),
-      body: Container(
-        color: logTheme.background,
-        child: _loading && _log.isEmpty
-            ? Center(
-                child: CircularProgressIndicator(color: context.palette.accent),
-              )
-            : _log.isEmpty
-            ? Center(
-                child: Text(
-                  _done ? '无日志内容' : '等待日志输出...',
-                  style: TextStyle(color: logTheme.mutedForeground),
-                ),
-              )
-            : LogView(
-                buffer: _log,
-                textStyle: TextStyle(
-                  color: logTheme.foreground,
-                  fontFamily: 'monospace',
-                  fontSize: 12,
-                  height: 1.6,
-                ),
-                brightness: logTheme.brightness,
-                mutedColor: logTheme.mutedForeground,
-                // 这个页面只知道任务、不知道日志记录 id，下载入口在日志详情页。
-                truncatedHint: '完整日志可在「运行日志」里打开这条记录下载',
-              ),
-      ),
+    return FullscreenLogScaffold(
+      title: title,
+      subtitle: '任务 #${widget.taskId}',
+      statusLabel: _statusText,
+      statusTone: _resolveLiveTone(),
+      buffer: _log,
+      loading: _loading,
+      emptyMessage: _done ? '无日志内容' : '等待日志输出...',
+      configuredBackgroundColor: _logBackgroundColor,
+      truncatedHint: '完整日志可在「运行日志」里打开这条记录下载',
+      onStop: (!_done && canOperate) ? _stopLiveTask : null,
+      stopBusy: _actionBusy,
+      onRerun: (_done && canOperate) ? _rerunLiveTask : null,
+      rerunBusy: _actionBusy,
+      onOpenScript: canOperate ? _openScriptEditor : null,
+      openScriptBusy: _resolvingScript,
+      copySuccessToast: _log.droppedCount > 0
+          ? '已复制最近 ${_log.length} 行'
+          : '日志已复制到剪贴板',
     );
   }
 }

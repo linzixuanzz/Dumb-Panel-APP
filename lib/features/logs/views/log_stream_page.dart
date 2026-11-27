@@ -1,29 +1,27 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
 import '../../../core/auth/auth_provider.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/network/dio_client.dart';
 import '../../../core/network/sse_client.dart';
-import '../../../core/theme/design_tokens.dart';
 import '../../../shared/models/task.dart';
 import '../../../shared/models/task_log.dart';
 import '../../../shared/utils/api_utils.dart';
+import '../../../shared/utils/duration_utils.dart';
 import '../../../shared/utils/log_background.dart';
 import '../../../shared/utils/log_line_buffer.dart';
+import '../../../shared/utils/panel_enums.dart';
 import '../../../shared/utils/sse_replay_buffer.dart';
 import '../../../shared/utils/task_command.dart';
 import '../../../shared/widgets/app_snack.dart';
-import '../../../shared/widgets/log_view.dart';
+import '../../../shared/widgets/fullscreen_log_scaffold.dart';
 import '../../tasks/providers/task_provider.dart';
 import '../utils/log_open_preference.dart';
 import '../utils/raw_log_download.dart';
 import '../utils/task_command_lookup.dart';
-
-/// AppBar 溢出菜单里的动作。
-enum _LogStreamAction { copyAll, downloadRaw, openScript, openAtBottom }
 
 class LogStreamPage extends ConsumerStatefulWidget {
   final int logId;
@@ -36,44 +34,26 @@ class LogStreamPage extends ConsumerStatefulWidget {
 
 class _LogStreamPageState extends ConsumerState<LogStreamPage> {
   final _sseClient = SseClient();
-
-  /// 日志正文。增量追加、超长只留最近一部分，渲染与滚动跟随都交给 LogView。
   final _log = LogLineBuffer();
-
-  /// 服务端重连一律从头重放整段历史（没有 Last-Event-ID），
-  /// 靠它把重放的行抵扣掉，用户才不会看到日志翻倍。
   final _replayBuffer = SseReplayBuffer();
 
   bool _loading = true;
   bool _done = false;
   int? _taskId;
+  int? _logStatus;
+  num? _durationSeconds;
   String _status = '加载中...';
   Color? _logBackgroundColor;
 
-  /// 这条日志在磁盘上有没有独立的原始日志文件。
-  ///
-  /// null 表示「还没拿到日志详情」（加载中或加载失败），此时不给下载入口 ——
-  /// 那种状态下既不知道文件存不存在，也说不出为什么不能下。
   bool? _hasRawFile;
   bool _downloadingRaw = false;
 
-  /// 这条日志对应任务的名字与命令，只服务「编辑对应脚本」。
-  ///
-  /// [_command] 允许一直是 null —— 老面板的日志详情不返回它，那时靠
-  /// [_resolveCommand] 在**点击那一刻**去任务列表兜底，拿到后回填这里，
-  /// 免得同一个页面点两次就请求两次。
   String? _taskName;
   String? _command;
   bool _resolvingScript = false;
+  bool _actionBusy = false;
 
-  /// 交给 LogView 的 follow，只在加载时定一次（issue #147）：
-  /// 运行中的日志跟随；已结束的日志按账户偏好，定位到底部就借用跟随模式
-  /// （缓冲区不会再变，等于「打开就在底部 + 上翻后给回到底部按钮」），否则从顶部开始。
-  /// ⚠️ 不能跟着 _done 变：运行中的日志收到 done 时 _done 会翻成 true，
-  /// LogView 中途切换 follow 会把正在看的位置整个重排。
   bool _follow = true;
-
-  /// 账户偏好「打开已结束的日志时定位到底部」的当前值；null = 面板不支持，菜单里不给这一项。
   bool? _openAtBottom;
 
   @override
@@ -85,9 +65,7 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
 
   Future<void> _loadAppearance() async {
     final color = await loadPanelLogBackgroundColor();
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
     setState(() => _logBackgroundColor = color);
   }
 
@@ -98,7 +76,6 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
     });
 
     try {
-      // 偏好与日志详情一起发，不多等一个往返；它自己吞掉所有错误，不会让日志加载失败。
       final openAtBottomFuture = loadOpenFinishedLogAtBottom();
       final response = await DioClient.instance.dio.get(
         ApiEndpoints.logById(widget.logId),
@@ -109,18 +86,14 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
       }
 
       final payload = Map<String, dynamic>.from(data);
-
       final log = TaskLog.fromJson(payload);
       final content = payload['content']?.toString() ?? '';
       final historyLines = log.isRunning
           ? const <String>[]
           : _splitLines(content);
-      // LogView 只在第一次建出来时按 follow 定位，所以得先等偏好回来再填正文。
       final openAtBottom = await openAtBottomFuture;
 
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       setState(() {
         _openAtBottom = openAtBottom;
@@ -128,18 +101,13 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
             log.isRunning || (openAtBottom ?? kOpenFinishedLogAtBottomDefault);
         _taskId = log.taskId;
         _taskName = log.taskName;
-        // 面板 v3.2.0 起才在日志详情里带 command；拿不到就保持 null，
-        // 由「编辑对应脚本」点击时的兜底查询补。这里**不预取任务列表**：
-        // 日志详情是高频入口，为一个可能没人点的菜单项多打一发全量请求
-        // 会直接拖慢首屏。
+        _logStatus = log.status;
+        _durationSeconds = log.duration;
         _command = log.command;
         _log.replaceAll(historyLines);
         _done = !log.isRunning;
         _loading = false;
         _status = log.isRunning ? '连接中...' : log.statusText;
-        // 与面板签发票据前的前置判断同源：resolveTaskLogRecordRawFile 要求
-        // task_logs.log_path 非空，否则直接回「该日志没有独立的原始日志文件」。
-        // 这里读的是同一个字段，不是客户端另立的一套规则。
         _hasRawFile = (log.logPath ?? '').trim().isNotEmpty;
       });
 
@@ -147,48 +115,34 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
         _connect();
       }
     } catch (_) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       setState(() {
         _loading = false;
         _done = true;
+        _logStatus = kLogStatusFailed;
         _status = '加载失败';
       });
     }
   }
 
-  /// 重连前把已显示的行交给去重缓冲。
-  ///
-  /// 日志太长时前面的行已经从内存里丢掉了，但服务端仍从第一行开始重放，
-  /// 所以要告诉它先按行数跳过那一段，否则第一行就对不上、整段历史被重复追加一遍。
   void _resetReplayBuffer() {
     _replayBuffer.reset(_log.lines, skipLeading: _log.droppedCount);
   }
 
   void _connect() {
     final taskId = _taskId;
-    if (taskId == null) {
-      return;
-    }
+    if (taskId == null) return;
 
     _resetReplayBuffer();
     _sseClient.connect(
       path: ApiEndpoints.logStream(taskId),
       autoReconnect: true,
-      // 重放去重统一挂在这里：不管重连是服务端 done:reconnect 触发的，
-      // 还是 token 续期后客户端自己发起的，行为都一样。
       onReconnect: _resetReplayBuffer,
       onEvent: (event) {
-        if (!mounted) {
-          return;
-        }
+        if (!mounted) return;
 
         if (event.event == 'done') {
           if (event.data == 'reconnect') {
-            // reconnect 是「任务还在跑，换条连接继续」，不是结束。
-            // 以前这里一律置 _done=true，重连回来日志继续刷，
-            // 页面却挂着一个「已结束」的状态。
             setState(() {
               _done = false;
               _status = '运行中';
@@ -197,64 +151,48 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
           }
           setState(() {
             _done = true;
-            _status = event.data == 'finished' ? '已完成' : event.data;
+            if (event.data == 'finished' || event.data == 'finished-late') {
+              _logStatus = kLogStatusSuccess;
+              _status = '已完成';
+            } else {
+              _status = event.data;
+            }
           });
           return;
         }
 
         final newLines = _replayBuffer.consume(_splitLines(event.data));
-        if (newLines.isEmpty) {
-          return;
-        }
+        if (newLines.isEmpty) return;
 
         final wasEmpty = _log.isEmpty;
         _log.append(newLines);
-        // 正文由 LogView 监听缓冲区自己刷新。整页只在「从无到有」或状态变了时重建，
-        // 不再每来一段日志就把 AppBar 连同整页重建一遍。
         if (wasEmpty || _status != '运行中') {
           setState(() => _status = '运行中');
         }
       },
       onDone: () {
-        if (!mounted) {
-          return;
-        }
+        if (!mounted) return;
         setState(() {
           _done = true;
-          _status = '连接结束';
+          if (_status == '运行中' || _status == '连接中...') {
+            _status = '连接结束';
+          }
         });
       },
       onError: (error) {
-        if (!mounted) {
-          return;
-        }
+        if (!mounted) return;
         setState(() {
           _done = true;
-          // 这个 _status 挂在 AppBar 的 Chip 里，塞整句会把 actions 撑到溢出；
-          // 完整的「登录已失效，请重新登录」由登录页顶部负责说，这里只给短标签。
+          _logStatus = kLogStatusFailed;
           _status = error is SseAuthFailure ? '登录已失效' : '连接错误';
         });
       },
     );
   }
 
-  /// 下载服务端磁盘上的原始日志文件。
-  ///
-  /// 与页面上这份文本的区别：页面里的内容已经按终端语义折叠过裸 `\r`，
-  /// 「复制全部」拿到的也是折叠后的；原始文件是逐字节的，控制序列一个不少。
-  /// 日志很大时它还能整个绕开渲染 —— 不用先把几 MB 文本铺成 TextSpan 才拿到手。
-  ///
-  /// 顺序是「先把字节拉完，再弹系统保存框」，**不能反过来**：
-  /// 票据只活 120 秒（见 utils/raw_log_download.dart），
-  /// 先让用户去保存框里挑目录的话，挑久一点票就过期了。
   Future<void> _downloadRawLog() async {
-    if (_downloadingRaw) {
-      return;
-    }
+    if (_downloadingRaw) return;
     if (_hasRawFile != true) {
-      // 短日志会被压缩后直接存进 task_logs.content，磁盘上没有独立文件。
-      // 面板 Web 端的做法是把按钮置灰 + 挂 title 说明原因，但触屏上 tooltip
-      // 要长按才出得来，所以这里改成「点了就直接告诉他为什么」。
       AppSnack.warn(context, '这条日志的内容存在数据库里，没有独立的原始日志文件');
       return;
     }
@@ -262,42 +200,27 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
     setState(() => _downloadingRaw = true);
     try {
       final file = await const RawLogDownloader().downloadTaskLog(widget.logId);
-      if (!mounted) {
-        return;
-      }
-      // 系统保存框（SAF）由用户自己挑位置，不需要存储权限，也不受分区存储影响。
-      // 与备份 / 脚本下载走的是同一套（backup_page、script_list_page）。
+      if (!mounted) return;
       final savedPath = await FilePicker.platform.saveFile(
         dialogTitle: '保存原始日志',
         fileName: file.filename,
         type: FileType.any,
         bytes: file.bytes,
       );
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       if (savedPath == null) {
-        // 用户自己在系统保存框里按了取消，不是失败，保持中性。
         AppSnack.show(context, '已取消保存');
         return;
       }
       AppSnack.success(context, '原始日志已保存');
     } on RawLogDownloadException catch (error) {
-      if (!mounted) {
-        return;
-      }
-      // 这一支的文案已经是翻译好的中文原因（含票据过期 / 无权限 / 文件已清理）。
+      if (!mounted) return;
       AppSnack.error(context, error.message);
     } on UnsupportedError {
-      // 平台能力缺失而不是这次操作出错，用警告。
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       AppSnack.warn(context, '当前平台暂不支持直接保存文件');
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       AppSnack.error(context, extractListErrorMessage(error, '下载原始日志失败'));
     } finally {
       if (mounted) {
@@ -306,40 +229,13 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
     }
   }
 
-  void _copyAll() {
-    Clipboard.setData(ClipboardData(text: _log.joinAll()));
-    // 这里保留原有的 2 秒，不用默认的 4 秒：复制是瞬时完成的动作，
-    // 用户下一步多半立刻切到别的 App 去粘贴，提示条浮在日志正文上
-    // 压满 4 秒只会挡住他刚复制的那几行。
-    // 快捷方法 success() 故意不转发 duration，按 app_snack.dart 的
-    // 说明，需要改停留时长时走 show(..., tone: ...)。
-    AppSnack.show(
-      context,
-      // 截断后内存里只有最近一部分，得说清楚复制到的不是全部。
-      _log.droppedCount > 0
-          ? '已复制最近 ${_log.length} 行，完整日志请下载原始日志'
-          : '日志已复制到剪贴板',
-      tone: AppSnackTone.success,
-      duration: const Duration(seconds: 2),
-    );
-  }
-
-  /// 切换账户偏好「打开已结束的日志时定位到底部」。
-  ///
-  /// 只影响**下次**打开：眼前这条不重排，免得正在看的位置被整个挪走。
-  /// 先改界面再发请求，失败时改回去并告诉用户（这是用户动作，不能像网页端首载迁移那样静默）。
   Future<void> _toggleOpenAtBottom() async {
-    // 菜单项只在 _openAtBottom 非 null 时出现，走到这里一定有值。
     final next = !_openAtBottom!;
     setState(() => _openAtBottom = next);
     try {
       final saved = await saveOpenFinishedLogAtBottom(next);
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       if (!saved) {
-        // v3.3.1 / v3.3.2：认 list 组但不认这个键，回 200 却没存，只能靠回显认出来。
-        // 文案与批量设置通知的老面板提示一致（task_provider.dart）。
         setState(() => _openAtBottom = !next);
         AppSnack.warn(context, '当前面板版本不支持，请升级到 v3.3.3 或更高');
         return;
@@ -349,35 +245,19 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
         next ? '已开启：下次打开已结束的日志会定位到底部' : '已关闭：下次打开已结束的日志从顶部开始',
       );
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       setState(() => _openAtBottom = !next);
-      // 与本页下载原始日志一样用 extractListErrorMessage：断网时给中文说明，不甩英文。
       AppSnack.error(context, extractListErrorMessage(error, '保存设置失败'));
     }
   }
 
-  /// 跳到这条日志对应任务所执行的脚本编辑页。
-  ///
-  /// 复用现成的 `/scripts/view` 深链（`state.extra` 就是脚本路径，ScriptViewPage
-  /// 自己会 loadContent），不新增路由。
-  ///
-  /// 降级是逐级的，每一级都要说清楚原因 —— 本页 `_downloadRawLog` 已经确立了
-  /// 「点了就直接告诉他为什么」的基调，不静默失败。
   Future<void> _openScriptEditor() async {
-    if (_resolvingScript) {
-      return;
-    }
+    if (_resolvingScript) return;
     final taskId = _taskId;
-    if (taskId == null) {
-      return;
-    }
+    if (taskId == null) return;
 
     final command = await _resolveCommand(taskId);
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
     if (command == null) {
       AppSnack.warn(context, '未能获取任务命令，无法定位脚本');
       return;
@@ -385,8 +265,6 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
 
     final scriptPath = extractScriptPathFromCommand(command);
     if (scriptPath == null) {
-      // curl / 内联 shell / 不认识的入口命令都会走到这里。解析器故意判得窄
-      // （它同时是「删除任务时顺带删脚本」的依据），宁可让用户自己去脚本页找。
       AppSnack.warn(context, '该任务不是脚本任务，命令里没有可打开的脚本文件');
       return;
     }
@@ -394,15 +272,56 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
     context.push('/scripts/view', extra: scriptPath);
   }
 
-  /// 拿到任务命令：日志详情自带 > 任务列表内存缓存 > 现查任务列表。
-  ///
-  /// 三级都拿不到时返回 null。中间那级是白捡的：taskProvider 不是
-  /// autoDispose，用户只要进过任务页，全量列表就还在内存里。
+  Future<void> _stopTask() async {
+    final taskId = _taskId;
+    if (taskId == null || _actionBusy) return;
+    setState(() => _actionBusy = true);
+    try {
+      await ref.read(taskProvider.notifier).stopTask(taskId);
+      if (!mounted) return;
+      setState(() {
+        _done = true;
+        _logStatus = kLogStatusAborted;
+        _status = '已停止';
+      });
+      AppSnack.success(context, '任务已停止');
+    } catch (error) {
+      if (mounted) {
+        AppSnack.error(context, extractErrorMessage(error, '停止任务失败'));
+      }
+    } finally {
+      if (mounted) setState(() => _actionBusy = false);
+    }
+  }
+
+  Future<void> _rerunTask() async {
+    final taskId = _taskId;
+    if (taskId == null || _actionBusy) return;
+    setState(() => _actionBusy = true);
+    try {
+      await ref.read(taskProvider.notifier).runTask(taskId);
+      if (!mounted) return;
+      if (GoRouter.maybeOf(context) != null) {
+        context.pushReplacement('/tasks/$taskId/live-logs', extra: _taskName);
+      } else {
+        await _loadLog();
+      }
+    } catch (error) {
+      if (!mounted) return;
+      final message = extractErrorMessage(error, '启动任务失败');
+      if (message.contains('运行中') && GoRouter.maybeOf(context) != null) {
+        context.pushReplacement('/tasks/$taskId/live-logs', extra: _taskName);
+      } else {
+        AppSnack.error(context, message);
+      }
+    } finally {
+      if (mounted) setState(() => _actionBusy = false);
+    }
+  }
+
   Future<String?> _resolveCommand(int taskId) async {
     final cached = _command;
-    if (cached != null) {
-      return cached;
-    }
+    if (cached != null) return cached;
 
     final fromMemory = pickCommandFromTasks(
       ref.read(taskProvider).tasks,
@@ -419,8 +338,6 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
       _command = fetched;
       return fetched;
     } catch (_) {
-      // 兜底查询本身失败（断网 / 面板 5xx）与「面板里查不到这条任务」
-      // 对用户是同一件事：定位不了脚本。文案由调用方统一给。
       return null;
     } finally {
       if (mounted) {
@@ -429,11 +346,6 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
     }
   }
 
-  /// 老面板兜底：日志详情不给 command 时，去任务列表把它捞回来。
-  ///
-  /// `all=1` 是一次性全量（面板侧上限 5000 条），所以必须带 `keyword` 收窄；
-  /// 任务名为空时才退回真正的全量。角色门槛与日志详情同为 viewer，
-  /// 不会因为这一发请求多出权限问题。
   Future<String?> _fetchCommandFromTaskList(int taskId) async {
     final query = <String, dynamic>{'all': 1};
     final keyword = (_taskName ?? '').trim();
@@ -459,6 +371,23 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
     return lines;
   }
 
+  FullscreenLogTone _resolveTone() {
+    if (!_done) return FullscreenLogTone.running;
+    if (_status == '加载失败' ||
+        _status == '连接错误' ||
+        _status == '登录已失效' ||
+        _logStatus == kLogStatusFailed ||
+        _status.contains('失败')) {
+      return FullscreenLogTone.failed;
+    }
+    if (_status == '已完成' ||
+        _status == '成功' ||
+        _logStatus == kLogStatusSuccess) {
+      return FullscreenLogTone.success;
+    }
+    return FullscreenLogTone.neutral;
+  }
+
   @override
   void dispose() {
     _sseClient.close();
@@ -468,227 +397,64 @@ class _LogStreamPageState extends ConsumerState<LogStreamPage> {
 
   @override
   Widget build(BuildContext context) {
-    final logTheme = resolveLogSurfaceTheme(
-      _logBackgroundColor,
-      themeBrightness: Theme.of(context).brightness,
-    );
-    // 日志正文的底色是账户可配的（面板「日志背景色」），不一定跟着 APP 明暗走，
-    // 所以状态胶囊按日志底色的明暗挑对应那一套色板，而不是 context.palette。
-    final logPalette = logTheme.brightness == Brightness.dark
-        ? AppPalette.dark
-        : AppPalette.light;
-
-    // 「编辑对应脚本」的两道门禁：
-    // 1. `_taskId == null` 说明日志详情还没到手，这时连要跳哪个任务都不知道
-    //    （与下面 `_hasRawFile != null` 同一个思路）；
-    // 2. `/api/scripts/*` 在面板侧要 operator，而日志只要 viewer。viewer 点进去
-    //    只会在编辑器里吃一个 403，不如直接不给这个入口。
     final user = ref.watch(authProvider).user;
-    final canOpenScript = _taskId != null && (user?.isOperator ?? false);
-    final hasMenuActions =
-        _log.isNotEmpty || _hasRawFile != null || canOpenScript;
-    final menuBusy = _downloadingRaw || _resolvingScript;
+    final canOperate = _taskId != null && (user?.isOperator ?? false);
+    final canOpenScript = canOperate;
 
-    return Scaffold(
-      backgroundColor: logTheme.background,
-      appBar: AppBar(
-        // actions 现在是 2 项（状态 chip + 溢出菜单）。复制 / 下载 /
-        // 编辑脚本 / 定位偏好全折进溢出菜单，就是为了不让它继续往上涨：曾经的 4 个图标在
-        // 窄屏上已经把标题压到要截断，再直接加第 5 个就会撑溢出。
-        // 原来的「自动滚动」开关已经去掉：停在底部就跟随、上翻就停，
-        // 回到底部由正文右下角的按钮负责（issue #10）。
-        // ellipsis 保留 —— 状态 chip 的文案本身也会变长。
-        // 标题写任务名（拿到日志详情之后），日志编号挪到下面一行小字。
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              _taskName ?? '日志 #${widget.logId}',
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
-            ),
-            if (_taskName != null)
-              Text(
-                '日志 #${widget.logId}',
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: logTheme.mutedForeground,
-                ),
-              ),
-          ],
+    final subtitleParts = <String>[
+      if (_taskName != null) '日志 #${widget.logId}',
+      if (_durationSeconds != null)
+        '耗时 ${formatDurationSeconds(_durationSeconds)}',
+    ];
+
+    final extraMenus = <FullscreenLogMenuEntry>[
+      if (_hasRawFile != null)
+        FullscreenLogMenuEntry(
+          id: 'download_raw',
+          label: '下载原始日志',
+          icon: Icons.download_outlined,
+          enabled: !_downloadingRaw,
+          onTap: _downloadRawLog,
         ),
-        backgroundColor: logTheme.background,
-        foregroundColor: logTheme.foreground,
-        actions: [
-          // 状态胶囊：灰色填充 + 左边的完成勾 / 转圈，文案就是 _status。
-          Padding(
-            padding: const EdgeInsets.only(right: 4),
-            child: Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: logPalette.fill,
-                  borderRadius: BorderRadius.circular(AppRadius.pill),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (_done)
-                      Icon(
-                        Icons.check_rounded,
-                        size: 15,
-                        color: logTheme.foreground,
-                      )
-                    else
-                      SizedBox(
-                        width: 13,
-                        height: 13,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: logTheme.foreground,
-                        ),
-                      ),
-                    const SizedBox(width: 6),
-                    Text(
-                      _status,
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w600,
-                        color: logTheme.foreground,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          // 各项全被门禁挡掉时（日志详情没加载出来、又不是 operator）整个按钮
-          // 都不出现 —— 留一个点开是空的菜单比没有按钮更让人困惑。
-          // 「定位到底部」开关不用算进 hasMenuActions：它只在日志详情加载成功后
-          // 才有值，那时 _hasRawFile 一定非 null，按钮本来就在。
-          if (hasMenuActions)
-            PopupMenuButton<_LogStreamAction>(
-              // 有请求在飞时原地转圈：下载 / 兜底查询都可能要几秒，折进菜单之后
-              // 没了那个 IconButton 的位置，进度反馈只能挂在这里。
-              //
-              // ⚠️ 这个 spinner **只是反馈，不兼任锁**。菜单整体绝不能 disable：
-              // 原始日志有几十 MB 时，下载要先把字节整个拉完才弹保存框（见
-              // _downloadRawLog 的注释），这期间用户多半正想复制屏幕上的报错行
-              // 去搜索。把整个菜单锁死会让「复制全部」跟着一起点不开，
-              // 而它在折进菜单之前是个从不受 busy 影响的独立按钮。
-              // 门禁按项挂在下面各自的 enabled 上。
-              icon: menuBusy
-                  ? SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: logTheme.foreground,
-                      ),
-                    )
-                  : const Icon(Icons.more_vert),
-              tooltip: '更多操作',
-              itemBuilder: (_) => [
-                // 复制是纯本地、瞬时完成的，不受任何在飞的请求影响，
-                // 所以这一项**永远可点**（下载几十 MB 原始日志时尤其需要它）。
-                if (_log.isNotEmpty)
-                  PopupMenuItem(
-                    value: _LogStreamAction.copyAll,
-                    child: ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.copy, size: 20),
-                      // 截断后只能复制内存里留着的那部分，菜单上直接说实话。
-                      title: Text(
-                        _log.droppedCount > 0
-                            ? '复制最近 ${_log.length} 行'
-                            : '复制全部',
-                      ),
-                    ),
-                  ),
-                // 只在拿到日志详情之后才出现：在那之前既不知道有没有原始文件，
-                // 也说不清楚点了会发生什么。
-                if (_hasRawFile != null)
-                  PopupMenuItem(
-                    value: _LogStreamAction.downloadRaw,
-                    // 只锁自己：重复点会重复发票据请求。
-                    enabled: !_downloadingRaw,
-                    child: const ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(Icons.download_outlined, size: 20),
-                      title: Text('下载原始日志'),
-                    ),
-                  ),
-                if (canOpenScript)
-                  PopupMenuItem(
-                    value: _LogStreamAction.openScript,
-                    // 同上，只锁自己：兜底查任务列表期间别再打一发。
-                    enabled: !_resolvingScript,
-                    child: const ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(Icons.code, size: 20),
-                      title: Text('编辑对应脚本'),
-                    ),
-                  ),
-                // 面板没有 list 组（v3.3.0 及更早）时不给：v3.2.4 ~ v3.3.0 的 PUT 会误写编辑器偏好。
-                if (_openAtBottom != null)
-                  CheckedPopupMenuItem(
-                    value: _LogStreamAction.openAtBottom,
-                    checked: _openAtBottom!,
-                    child: const Text('打开已结束的日志时定位到底部'),
-                  ),
-              ],
-              onSelected: (action) async {
-                switch (action) {
-                  case _LogStreamAction.copyAll:
-                    _copyAll();
-                    break;
-                  case _LogStreamAction.downloadRaw:
-                    await _downloadRawLog();
-                    break;
-                  case _LogStreamAction.openScript:
-                    await _openScriptEditor();
-                    break;
-                  case _LogStreamAction.openAtBottom:
-                    await _toggleOpenAtBottom();
-                    break;
-                }
-              },
-            ),
-        ],
-      ),
-      body: Container(
-        color: logTheme.background,
-        child: _loading && _log.isEmpty
-            ? const Center(child: CircularProgressIndicator())
-            : _log.isEmpty
-            ? Center(
-                child: Text(
-                  _done ? '无日志内容' : '等待日志...',
-                  style: TextStyle(color: logTheme.mutedForeground),
-                ),
-              )
-            : LogView(
-                buffer: _log,
-                follow: _follow,
-                textStyle: TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 13,
-                  color: logTheme.foreground,
-                  height: 1.5,
-                ),
-                brightness: logTheme.brightness,
-                mutedColor: logTheme.mutedForeground,
-                // 超长被截断后，完整内容只在磁盘上的原始日志文件里。
-                // 没有独立文件的日志存在数据库里、本来就短，不会走到截断。
-                truncatedActionLabel: _hasRawFile == true ? '下载完整日志' : null,
-                onTruncatedAction: _downloadRawLog,
-              ),
-      ),
+      if (canOpenScript)
+        FullscreenLogMenuEntry(
+          id: 'open_script',
+          label: '编辑对应脚本',
+          icon: Icons.code_rounded,
+          enabled: !_resolvingScript,
+          onTap: _openScriptEditor,
+        ),
+      if (_openAtBottom != null)
+        FullscreenLogMenuEntry(
+          id: 'open_at_bottom',
+          label: '打开已结束的日志时定位到底部',
+          checked: _openAtBottom!,
+          onTap: _toggleOpenAtBottom,
+        ),
+    ];
+
+    return FullscreenLogScaffold(
+      title: _taskName ?? '日志 #${widget.logId}',
+      subtitle: subtitleParts.join(' · '),
+      statusLabel: _status,
+      statusTone: _resolveTone(),
+      buffer: _log,
+      loading: _loading,
+      emptyMessage: _done ? '无日志内容' : '等待日志...',
+      follow: _follow,
+      configuredBackgroundColor: _logBackgroundColor,
+      truncatedActionLabel: _hasRawFile == true ? '下载完整日志' : null,
+      onTruncatedAction: _downloadRawLog,
+      onStop: (!_done && canOperate) ? _stopTask : null,
+      stopBusy: _actionBusy,
+      onRerun: (_done && canOperate) ? _rerunTask : null,
+      rerunBusy: _actionBusy,
+      onOpenScript: canOpenScript ? _openScriptEditor : null,
+      openScriptBusy: _resolvingScript,
+      extraMenuEntries: extraMenus,
+      copySuccessToast: _log.droppedCount > 0
+          ? '已复制最近 ${_log.length} 行，完整日志请下载原始日志'
+          : '日志已复制到剪贴板',
     );
   }
 }

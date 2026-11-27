@@ -23,11 +23,6 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
   @override
   void initState() {
     super.initState();
-    // 每次进入主界面跑一次、与落在哪一页无关的两件事（APP #24）。
-    // 它们原来挂在主页的 initState 里，「默认打开页面」设成任务 / 日志 / 变量时就不会跑：
-    // 1. 用户信息为空时补拉 —— 「更多」页的管理员分区靠它；
-    // 2. 静默检查更新 —— 每次启动最多弹一次，由服务里的进程级标记保证（issue #19）。
-    // 主页自己的数据加载仍留在主页。
     Future.microtask(() async {
       if (!mounted) return;
       if (ref.read(authProvider).user == null) {
@@ -38,7 +33,6 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
     });
   }
 
-  /// 当前落在哪个 Tab。二级路由（如 `/tasks/new`）不在外壳里，这里只会看到 5 个 Tab 路径。
   int _currentIndex(BuildContext context) {
     final location = GoRouterState.of(context).matchedLocation;
     for (var i = 0; i < mainTabs.length; i++) {
@@ -56,16 +50,10 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
     if (_lastExitAttemptAt == null ||
         now.difference(_lastExitAttemptAt!) > const Duration(seconds: 5)) {
       _lastExitAttemptAt = now;
-      // 走 AppSnack 而不是裸 showSnackBar：它是全 App 出现频率最高的提示条之一，
-      // 留在裸写法上会成为唯一一条还是通栏方块的提示，跟其余全部浮起圆角的对不上。
-      // 中性色调 —— 这是操作指引，不是成功也不是失败。
-      // replaceCurrent 等价于原来的 `..hideCurrentSnackBar()` 级联：AppSnack 内部
-      // 就是先 hideCurrentSnackBar 再 showSnackBar，顺序与关闭原因(hide)都一致。
       AppSnack.show(
         context,
         '5秒内再按一次返回键退出应用',
         replaceCurrent: true,
-        // 停留时长必须跟上面那个 5 秒判定窗口一致：提示消失即代表窗口关闭。
         duration: const Duration(seconds: 5),
       );
       return;
@@ -76,9 +64,6 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
 
   @override
   Widget build(BuildContext context) {
-    // 切换面板时主界面不会重建（「更多」页是 push 出服务器配置页的），上面 initState 不再跑；
-    // 新面板恢复出的登录态可能没带用户信息，这里同样补拉一次。只在「有 → 没有」时触发，
-    // 补拉失败状态不变，不会反复请求。
     ref.listen<AuthState>(authProvider, (previous, next) {
       if (next.status == AuthStatus.authenticated &&
           next.user == null &&
@@ -93,8 +78,6 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
       onPopInvokedWithResult: (didPop, _) => _handleBackPress(didPop),
       child: Scaffold(
         body: widget.child,
-        // 内容延伸到底栏下面（玻璃底栏透出内容）。Scaffold 会把底栏高度并进 body 的
-        // MediaQuery.padding.bottom，列表用 AppSpacing.listBottomOf(context) 就能让开底栏。
         extendBody: true,
         bottomNavigationBar: _GlassTabBar(
           currentIndex: idx,
@@ -107,57 +90,78 @@ class _MainScaffoldState extends ConsumerState<MainScaffold> {
   }
 }
 
-/// 底栏的一个 Tab。
+/// 底栏单个 Tab 定义。
 class MainTab {
   final String route;
   final String label;
   final IconData icon;
+  final IconData activeIcon;
 
-  const MainTab(this.route, this.label, this.icon);
+  const MainTab(this.route, this.label, this.icon, [IconData? activeIcon])
+    : activeIcon = activeIcon ?? icon;
 }
 
-/// v2.0 底栏：任务（首页）/ 日志 / 概览 / 变量 / 设置。实心图标 + 文字。
+/// v3.0 Nordic Calm 五栏轻盈导航：线性图标 + 克制钴蓝激活态。
 const List<MainTab> mainTabs = [
-  MainTab('/tasks', '任务', Icons.watch_later_rounded),
-  MainTab('/logs', '日志', Icons.receipt_long_rounded),
-  MainTab('/overview', '概览', Icons.bar_chart_rounded),
-  MainTab('/envs', '变量', Icons.key_rounded),
-  MainTab('/settings', '设置', Icons.settings_rounded),
+  MainTab(
+    '/tasks',
+    '任务',
+    Icons.schedule_outlined,
+    Icons.schedule_rounded,
+  ),
+  MainTab(
+    '/logs',
+    '日志',
+    Icons.article_outlined,
+    Icons.article_rounded,
+  ),
+  MainTab(
+    '/overview',
+    '概览',
+    Icons.space_dashboard_outlined,
+    Icons.space_dashboard_rounded,
+  ),
+  MainTab(
+    '/envs',
+    '变量',
+    Icons.vpn_key_outlined,
+    Icons.vpn_key_rounded,
+  ),
+  MainTab(
+    '/settings',
+    '设置',
+    Icons.tune_rounded,
+    Icons.tune_rounded,
+  ),
 ];
 
-/// 悬浮玻璃胶囊底栏（方案书 §2.4）。
-///
-/// - 选中项后面一块灰色药丸，切换时弹簧滑过去；
-/// - 系统开了「移除动画」时：药丸直接跳，玻璃不做模糊、换成 92% 不透明的实色
-///   （模糊是全屏最贵的一层绘制，顺带照顾低端机）。
 class _GlassTabBar extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onSelect;
 
   const _GlassTabBar({required this.currentIndex, required this.onSelect});
 
+  static const double _inset = 4;
+
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
     final reduce = AppMotion.reduce(context);
-    const radius = BorderRadius.all(
-      Radius.circular(AppTabBarMetrics.height / 2),
-    );
+    const radius = BorderRadius.all(Radius.circular(AppRadius.pill));
 
     Widget bar = DecoratedBox(
       decoration: BoxDecoration(
         color: reduce ? palette.glassSolid : palette.glass,
         borderRadius: radius,
-        border: Border.all(color: palette.glassBorder, width: 0.5),
+        border: Border.all(color: palette.glassBorder, width: 0.8),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(5),
+        padding: const EdgeInsets.all(_inset),
         child: LayoutBuilder(
           builder: (context, constraints) {
             final itemWidth = constraints.maxWidth / mainTabs.length;
             return Stack(
               children: [
-                // 选中药丸
                 AnimatedPositioned(
                   duration: AppMotion.of(context, AppMotion.slide),
                   curve: AppMotion.spring,
@@ -168,7 +172,7 @@ class _GlassTabBar extends StatelessWidget {
                   child: DecoratedBox(
                     key: const Key('main-tab-pill'),
                     decoration: BoxDecoration(
-                      color: palette.fill,
+                      color: palette.tint(palette.accent),
                       borderRadius: BorderRadius.circular(AppRadius.pill),
                     ),
                   ),
@@ -193,7 +197,7 @@ class _GlassTabBar extends StatelessWidget {
     );
     if (!reduce) {
       bar = BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
         child: bar,
       );
     }
@@ -207,15 +211,16 @@ class _GlassTabBar extends StatelessWidget {
         ),
         child: Container(
           height: AppTabBarMetrics.height,
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             borderRadius: radius,
-            // 悬浮感只靠一层很淡的下投影；这是全 App 唯一带投影的东西
             boxShadow: [
               BoxShadow(
-                color: Color(0x29000000),
-                blurRadius: 30,
-                spreadRadius: -10,
-                offset: Offset(0, 10),
+                color: palette.isLight
+                    ? const Color(0x140F172A)
+                    : const Color(0x47000000),
+                blurRadius: 28,
+                spreadRadius: -6,
+                offset: const Offset(0, 10),
               ),
             ],
           ),
@@ -240,10 +245,7 @@ class _TabItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    // 未选中的项稍微淡一点（效果演示是 .82），选中靠后面的药丸区分。
-    final color = selected
-        ? palette.text
-        : palette.text.withValues(alpha: 0.78);
+    final color = selected ? palette.accentInk : palette.text2;
 
     return Semantics(
       button: true,
@@ -256,9 +258,12 @@ class _TabItem extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(tab.icon, size: 23, color: color),
+            Icon(
+              selected ? tab.activeIcon : tab.icon,
+              size: 20,
+              color: color,
+            ),
             const SizedBox(height: 2),
-            // 大字号下标签缩小而不是撑破胶囊
             SizedBox(
               height: 14,
               child: FittedBox(
@@ -267,8 +272,8 @@ class _TabItem extends StatelessWidget {
                   tab.label,
                   maxLines: 1,
                   style: TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
                     color: color,
                   ),
                 ),

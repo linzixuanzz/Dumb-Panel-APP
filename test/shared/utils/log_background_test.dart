@@ -21,12 +21,12 @@ void main() {
 
       expect(theme.background, AppColors.termBgDark);
       expect(theme.brightness, Brightness.dark);
-      // 前景色是从最终底色的亮度推出来的，深底就必须给浅字。
-      expect(theme.foreground, AppColors.slate50);
-      expect(theme.mutedForeground, AppColors.slate300);
+      // 前景色是从最终底色的亮度推出来的，深底就必须给温润浅字。
+      expect(theme.foreground, const Color(0xFFE7E5E4));
+      expect(theme.mutedForeground, const Color(0xFF8A8F98));
     });
 
-    test('浅色模式留空 → 浅底深字', () {
+    test('浅色模式留空 → 暖纸浅底深字', () {
       final theme = resolveLogSurfaceTheme(
         null,
         themeBrightness: Brightness.light,
@@ -34,15 +34,25 @@ void main() {
 
       expect(theme.background, AppColors.termBgLight);
       expect(theme.brightness, Brightness.light);
-      expect(theme.foreground, AppColors.slate900);
-      expect(theme.mutedForeground, AppColors.slate500);
+      expect(theme.foreground, const Color(0xFF1C1917));
+      expect(theme.mutedForeground, const Color(0xFF78716C));
     });
 
-    test('兜底色与面板 Web 同值：两端观感必须是同一个产品', () {
-      // 面板 web/src/utils/panelAppearance.ts 的
-      // DEFAULT_LOG_BACKGROUND_COLOR_DARK / _LIGHT。改这两个值等于让 APP 和网页分叉。
-      expect(AppColors.termBgDark, const Color(0xFF0F172A));
-      expect(AppColors.termBgLight, const Color(0xFFF8FAFC));
+    test('v3.0 Nordic Calm 终端默认底色：浅色暖纸 #FAF9F6、深色护眼终端 #14161A', () {
+      expect(AppColors.termBgDark, const Color(0xFF14161A));
+      expect(AppColors.termBgLight, const Color(0xFFFAF9F6));
+    });
+
+    test('forceNightTerminal 开启时在浅色主题下也强制使用 #14161A 护眼深底', () {
+      final theme = resolveLogSurfaceTheme(
+        null,
+        themeBrightness: Brightness.light,
+        forceNightTerminal: true,
+      );
+
+      expect(theme.background, const Color(0xFF14161A));
+      expect(theme.brightness, Brightness.dark);
+      expect(theme.foreground, const Color(0xFFE7E5E4));
     });
   });
 
@@ -56,7 +66,7 @@ void main() {
       expect(theme.background, const Color(0xFFFFFFFF));
       // 底色是白的，前景就得跟着翻成深字，否则白底白字全糊。
       expect(theme.brightness, Brightness.light);
-      expect(theme.foreground, AppColors.slate900);
+      expect(theme.foreground, const Color(0xFF1C1917));
     });
 
     test('浅色模式下配了纯黑，就得给纯黑', () {
@@ -67,7 +77,7 @@ void main() {
 
       expect(theme.background, const Color(0xFF000000));
       expect(theme.brightness, Brightness.dark);
-      expect(theme.foreground, AppColors.slate50);
+      expect(theme.foreground, const Color(0xFFE7E5E4));
     });
   });
 

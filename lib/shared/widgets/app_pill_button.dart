@@ -2,30 +2,25 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/design_tokens.dart';
 
-/// 胶囊按钮的三种语义。
+/// 按钮的三种克制语义（v3.0 Nordic Calm）。
 enum AppPillVariant {
-  /// 主操作：浅色黑底白字、深色白底黑字。一屏最多一个。
+  /// 主操作：Nordic Cobalt 钴蓝配纯白文字。
   primary,
 
-  /// 次要操作：灰色填充 + 正文色。
+  /// 次要操作：暖石浅填充配正文色。
   secondary,
 
-  /// 危险操作：红色淡底 + 红色墨色字。
+  /// 危险操作：珊瑚红柔底配红墨色字。
   danger,
 }
 
-/// 胶囊按钮（方案书「主操作永远是黑色胶囊」）。
-///
-/// [onPressed] 为 null 时是禁用态（整体 40% 透明度，不响应点击）。
+/// 胶囊/圆角操作按钮（44dp 标准高度，14.5pt w600 克制字重）。
 class AppPillButton extends StatefulWidget {
   final String label;
   final IconData? icon;
   final VoidCallback? onPressed;
   final AppPillVariant variant;
-
-  /// 撑满父级宽度。
   final bool expand;
-
   final double height;
 
   const AppPillButton({
@@ -35,7 +30,7 @@ class AppPillButton extends StatefulWidget {
     required this.onPressed,
     this.variant = AppPillVariant.primary,
     this.expand = false,
-    this.height = 46,
+    this.height = 44,
   });
 
   @override
@@ -57,7 +52,7 @@ class _AppPillButtonState extends State<AppPillButton> {
 
     final (bg, fg) = switch (widget.variant) {
       AppPillVariant.primary => (palette.primaryBtnBg, palette.primaryBtnFg),
-      AppPillVariant.secondary => (palette.fill, palette.text),
+      AppPillVariant.secondary => (palette.card2, palette.text),
       AppPillVariant.danger => (palette.tint(palette.err), palette.errInk),
     };
 
@@ -66,8 +61,8 @@ class _AppPillButtonState extends State<AppPillButton> {
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         if (widget.icon != null) ...[
-          Icon(widget.icon, size: 19, color: fg),
-          const SizedBox(width: AppSpacing.sm),
+          Icon(widget.icon, size: 17, color: fg),
+          const SizedBox(width: 6),
         ],
         Flexible(
           child: Text(
@@ -75,8 +70,8 @@ class _AppPillButtonState extends State<AppPillButton> {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
+              fontSize: 14.5,
+              fontWeight: FontWeight.w600,
               color: fg,
             ),
           ),
@@ -94,17 +89,17 @@ class _AppPillButtonState extends State<AppPillButton> {
         onTapUp: enabled ? (_) => _setPressed(false) : null,
         onTapCancel: enabled ? () => _setPressed(false) : null,
         child: AnimatedScale(
-          scale: _pressed && !reduce ? 0.94 : 1,
+          scale: _pressed && !reduce ? 0.96 : 1,
           duration: AppMotion.of(context, AppMotion.fast),
           curve: AppMotion.spring,
           child: Opacity(
-            opacity: enabled ? 1 : 0.4,
+            opacity: enabled ? 1 : 0.42,
             child: Container(
               height: widget.height,
-              padding: const EdgeInsets.symmetric(horizontal: 24),
+              padding: const EdgeInsets.symmetric(horizontal: 20),
               decoration: BoxDecoration(
                 color: bg,
-                borderRadius: BorderRadius.circular(AppRadius.pill),
+                borderRadius: BorderRadius.circular(AppRadius.md),
               ),
               child: content,
             ),

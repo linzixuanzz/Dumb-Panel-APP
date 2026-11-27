@@ -2,36 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/design_tokens.dart';
 
-/// 分组列表（方案书 §2.4）：白色大圆角容器，行与行之间是缩进的发丝分隔线。
-/// 用在「所有任务」、变量、设置。
-///
-/// ```dart
-/// AppGroupedList(
-///   header: '面板',
-///   children: [
-///     AppGroupedRow(
-///       leading: AppIconTile(icon: Icons.dns_rounded, color: palette.accent, solid: true),
-///       title: '服务器管理',
-///       trailing: Text('2 个面板'),
-///       showChevron: true,
-///       onTap: ...,
-///     ),
-///     AppGroupedRow(title: '应用锁', onTap: ...),
-///   ],
-/// )
-/// ```
-///
-/// 分隔线由 [AppGroupedRow] 自己画在**顶部**（第一行不画），缩进到 leading 之后，
-/// 所以混进去的非 [AppGroupedRow] 子组件不会自动带分隔线。
+/// 分组卡片列表（v3.0 Nordic Calm：20dp 克制圆角、极轻暖纸边界与弥散阴影）。
 class AppGroupedList extends StatelessWidget {
   final List<Widget> children;
-
-  /// 容器上方的小标题（次要色说明字号），如「面板」「外观」。
   final String? header;
-
-  /// 容器下方的说明文字。
   final String? footer;
-
   final EdgeInsetsGeometry? margin;
 
   const AppGroupedList({
@@ -45,19 +20,27 @@ class AppGroupedList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    final caption = AppText.caption.copyWith(color: palette.text2);
+    final surfaces = AppSurfaces.of(context);
+    final caption = AppText.meta.copyWith(color: palette.text2);
 
-    Widget result = ClipRRect(
-      borderRadius: BorderRadius.circular(AppRadius.card),
-      child: ColoredBox(
-        color: palette.card,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (var i = 0; i < children.length; i++)
-              _GroupedIndex(index: i, child: children[i]),
-          ],
+    Widget result = Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: surfaces.cardBorder, width: 1),
+        boxShadow: surfaces.softShadow,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        child: ColoredBox(
+          color: palette.card,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < children.length; i++)
+                _GroupedIndex(index: i, child: children[i]),
+            ],
+          ),
         ),
       ),
     );
@@ -69,17 +52,20 @@ class AppGroupedList extends StatelessWidget {
         children: [
           if (header != null)
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-              child: Text(
-                header!,
-                style: caption.copyWith(fontWeight: FontWeight.w500),
-              ),
+              padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
+              child: Text(header!, style: caption),
             ),
           result,
           if (footer != null)
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-              child: Text(footer!, style: caption),
+              padding: const EdgeInsets.fromLTRB(6, 8, 6, 0),
+              child: Text(
+                footer!,
+                style: AppText.caption.copyWith(
+                  fontSize: 12,
+                  color: palette.text2,
+                ),
+              ),
             ),
         ],
       );
@@ -91,7 +77,6 @@ class AppGroupedList extends StatelessWidget {
   }
 }
 
-/// 告诉行「我是第几行」：第一行不画分隔线。
 class _GroupedIndex extends InheritedWidget {
   final int index;
 
@@ -104,27 +89,15 @@ class _GroupedIndex extends InheritedWidget {
   bool updateShouldNotify(_GroupedIndex oldWidget) => oldWidget.index != index;
 }
 
-/// 分组列表里的一行。
 class AppGroupedRow extends StatelessWidget {
-  /// 前导，一般是 [AppIconTile]（默认 36dp，分隔线据此缩进）。
   final Widget? leading;
   final String title;
   final String? subtitle;
-
-  /// 右侧：值文字、开关、等宽数字……
   final Widget? trailing;
-
-  /// 最右边的 `>`。可点进下一级的行打开它。
   final bool showChevron;
-
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
-
-  /// 标题颜色覆盖（危险操作行用 `palette.errInk`）。
   final Color? titleColor;
-
-  /// 是否画顶部分隔线。默认按在 [AppGroupedList] 里的位置决定（第一行不画）；
-  /// 自己用 `ListView.builder` 懒加载拼分组时没有 [AppGroupedList]，就传 `index > 0`。
   final bool? showSeparator;
 
   const AppGroupedRow({
@@ -140,10 +113,9 @@ class AppGroupedRow extends StatelessWidget {
     this.showSeparator,
   });
 
-  /// 行左右内边距与 leading 和文字的间距，分隔线缩进按它们算。
-  static const double _hPad = 18;
-  static const double _gap = 14;
-  static const double _leadingWidth = 36;
+  static const double _hPad = 16;
+  static const double _gap = 12;
+  static const double _leadingWidth = 34;
 
   @override
   Widget build(BuildContext context) {
@@ -152,9 +124,9 @@ class AppGroupedRow extends StatelessWidget {
     final textStart = leading == null ? _hPad : _hPad + _leadingWidth + _gap;
 
     final content = ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 56),
+      constraints: const BoxConstraints(minHeight: 52),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: _hPad, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: _hPad, vertical: 11),
         child: Row(
           children: [
             if (leading != null) ...[leading!, const SizedBox(width: _gap)],
@@ -168,7 +140,7 @@ class AppGroupedRow extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: AppText.body.copyWith(
-                      fontWeight: FontWeight.w600,
+                      fontWeight: FontWeight.w500,
                       color: titleColor ?? palette.text,
                     ),
                   ),
@@ -179,7 +151,10 @@ class AppGroupedRow extends StatelessWidget {
                         subtitle!,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: AppText.caption.copyWith(color: palette.text2),
+                        style: AppText.caption.copyWith(
+                          fontSize: 12.5,
+                          color: palette.text2,
+                        ),
                       ),
                     ),
                 ],
@@ -187,10 +162,9 @@ class AppGroupedRow extends StatelessWidget {
             ),
             if (trailing != null) ...[
               const SizedBox(width: AppSpacing.sm),
-              // 右侧值文字默认次要色
               DefaultTextStyle.merge(
                 style: AppText.caption.copyWith(
-                  fontSize: 15,
+                  fontSize: 13,
                   color: palette.text2,
                 ),
                 child: trailing!,
@@ -198,7 +172,7 @@ class AppGroupedRow extends StatelessWidget {
             ],
             if (showChevron) ...[
               const SizedBox(width: 4),
-              Icon(Icons.chevron_right_rounded, size: 22, color: palette.text3),
+              Icon(Icons.chevron_right_rounded, size: 19, color: palette.text3),
             ],
           ],
         ),
@@ -206,7 +180,6 @@ class AppGroupedRow extends StatelessWidget {
     );
 
     return CustomPaint(
-      // 顶部分隔线：第一行不画；从文字起点画到最右边（iOS 的缩进分隔线）。
       foregroundPainter: separator
           ? _TopSeparatorPainter(color: palette.separator, start: textStart)
           : null,
@@ -234,8 +207,8 @@ class _TopSeparatorPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
       ..color = color
-      ..strokeWidth = 0.5;
-    canvas.drawLine(Offset(start, 0.25), Offset(size.width, 0.25), paint);
+      ..strokeWidth = 0.6;
+    canvas.drawLine(Offset(start, 0.3), Offset(size.width - 16, 0.3), paint);
   }
 
   @override

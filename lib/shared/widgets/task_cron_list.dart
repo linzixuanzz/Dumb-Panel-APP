@@ -86,7 +86,7 @@ class TaskCronList extends StatelessWidget {
                           '${i + 1}',
                           style: TextStyle(
                             fontSize: compact ? 10 : 11,
-                            fontWeight: FontWeight.w800,
+                            fontWeight: FontWeight.w600,
                             color: badgeFg,
                           ),
                         )

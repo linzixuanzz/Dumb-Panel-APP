@@ -2,18 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/design_tokens.dart';
 
-/// 分段控件（方案书 §2.4）：灰色胶囊底槽，选中块是白色滑块，切换时弹簧滑过去。
-/// 用在概览（全部 / 定时 / 手动）、图表切换（每周 / 月度 / 年度）。
-///
-/// ```dart
-/// AppSegmented<String>(
-///   segments: const [('all', '全部'), ('cron', '定时'), ('manual', '手动')],
-///   value: _mode,
-///   onChanged: (v) => setState(() => _mode = v),
-/// )
-/// ```
-///
-/// 宽度撑满父级，各段等分。系统开了「移除动画」时滑块直接跳。
+/// 分段切换控件（v3.0 Nordic Calm：38dp 轻盈圆角槽、13pt w500/w600 克制滑块）。
 class AppSegmented<T> extends StatelessWidget {
   final List<(T, String)> segments;
   final T value;
@@ -26,8 +15,8 @@ class AppSegmented<T> extends StatelessWidget {
     required this.onChanged,
   });
 
-  static const double _height = 44;
-  static const double _inset = 4;
+  static const double _height = 38;
+  static const double _inset = 3;
 
   @override
   Widget build(BuildContext context) {
@@ -38,15 +27,14 @@ class AppSegmented<T> extends StatelessWidget {
       height: _height,
       padding: const EdgeInsets.all(_inset),
       decoration: BoxDecoration(
-        color: palette.fill,
-        borderRadius: BorderRadius.circular(AppRadius.pill),
+        color: palette.card2,
+        borderRadius: BorderRadius.circular(AppRadius.md),
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final width = constraints.maxWidth / segments.length;
           return Stack(
             children: [
-              // 选中滑块。value 不在 segments 里时不画（不假装选中了某一段）。
               if (selected >= 0)
                 AnimatedPositioned(
                   duration: AppMotion.of(context, AppMotion.slide),
@@ -59,14 +47,13 @@ class AppSegmented<T> extends StatelessWidget {
                     key: const Key('app-segmented-thumb'),
                     decoration: BoxDecoration(
                       color: palette.thumb,
-                      borderRadius: BorderRadius.circular(AppRadius.pill),
-                      // 浅色下白滑块压在浅灰底槽上，要一点投影才分得开
+                      borderRadius: BorderRadius.circular(9),
                       boxShadow: palette.isLight
                           ? const [
                               BoxShadow(
-                                color: Color(0x1F000000),
-                                blurRadius: 8,
-                                offset: Offset(0, 2),
+                                color: Color(0x140F172A),
+                                blurRadius: 6,
+                                offset: Offset(0, 1.5),
                               ),
                             ]
                           : null,
@@ -91,9 +78,13 @@ class AppSegmented<T> extends StatelessWidget {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600,
-                                color: palette.text,
+                                fontSize: 13,
+                                fontWeight: i == selected
+                                    ? FontWeight.w600
+                                    : FontWeight.w500,
+                                color: i == selected
+                                    ? palette.text
+                                    : palette.text2,
                               ),
                             ),
                           ),

@@ -254,8 +254,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 padding: EdgeInsets.fromLTRB(4, 24, 4, 16),
               ),
 
-              // ── 星空个人卡 ──
-              _StarProfileCard(
+              // ── Nordic 温润个人与节点卡 ──
+              _NordicProfileCard(
                 username: user?.username,
                 roleLabel: user == null ? null : _roleLabel(user.role),
                 panelName: _panel?.name,
@@ -272,7 +272,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     leading: AppIconTile(
                       icon: Icons.dns_rounded,
                       color: palette.accent,
-                      solid: true,
                     ),
                     title: '服务器管理',
                     trailing: _panelCount > 0 ? Text('$_panelCount 个面板') : null,
@@ -287,7 +286,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     leading: AppIconTile(
                       icon: Icons.lock_rounded,
                       color: palette.ok,
-                      solid: true,
                     ),
                     title: '应用锁',
                     trailing: Text(lockState.isEnabled ? '已开启' : '未开启'),
@@ -300,7 +298,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     leading: AppIconTile(
                       icon: Icons.home_rounded,
                       color: palette.warn,
-                      solid: true,
                     ),
                     title: '默认打开页面',
                     trailing: Text(DefaultLandingPage.label),
@@ -490,13 +487,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   };
 }
 
-/// 星空个人卡：黑色渐变到蓝紫，撒星点，放呆呆头像、用户名、角色、当前面板名称和地址。
-///
-/// ⚠️ 这张卡是**插画**，不是界面色：两种明暗模式下都是同一片夜空，
-/// 所以颜色写死在下面的常量里，不走 palette（方案书 §2.4「星空个人卡」，
-/// 取值来自 `APP效果演示.html` 的 `.prof`）。
-class _StarProfileCard extends StatelessWidget {
-  const _StarProfileCard({
+/// Nordic Calm 温润节点与个人卡：洁净纸感底、柔和描边与在线绿点，彻底取代刺眼星空紫卡。
+class _NordicProfileCard extends StatelessWidget {
+  const _NordicProfileCard({
     required this.username,
     required this.roleLabel,
     required this.panelName,
@@ -510,189 +503,126 @@ class _StarProfileCard extends StatelessWidget {
   final String? serverUrl;
   final VoidCallback onTap;
 
-  // ── 插画常量（夜空配色，明暗模式共用）──
-  static const Color _skyBlack = Color(0xFF000000);
-  static const Color _skyNavy = Color(0xFF0B1640);
-  static const Color _skyBlue = Color(0xFF1A2E9E);
-  static const Color _glowBlue = Color(0xFF2F6DFF);
-  static const Color _glowPurple = Color(0xFF7B5CFF);
-  static const Color _starWhite = Color(0xFFFFFFFF);
-
   @override
   Widget build(BuildContext context) {
+    final palette = context.palette;
+    final surfaces = AppSurfaces.of(context);
     final host = serverUrl
         ?.replaceAll('http://', '')
         .replaceAll('https://', '');
-    // 面板名称没起过时存的就是地址本身，这时不重复显示
-    final name = (panelName == null || panelName!.isEmpty || panelName == serverUrl)
+    final name =
+        (panelName == null || panelName!.isEmpty || panelName == serverUrl)
         ? null
         : panelName;
-    // 角色 · 面板名称，缺哪个就不显示哪个
     final line2 = [?roleLabel, ?name].join(' · ');
 
     return Semantics(
       button: true,
       label: '个人信息与当前面板，点按管理服务器',
-      child: GestureDetector(
-        onTap: onTap,
-        child: ClipRRect(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: palette.card,
           borderRadius: BorderRadius.circular(AppRadius.card),
-          child: Stack(
-            children: [
-              // 底：从左到右 黑 → 深蓝 → 蓝
-              const Positioned.fill(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment(-1, -0.3),
-                      end: Alignment(1, 0.3),
-                      colors: [_skyBlack, _skyBlack, _skyNavy, _skyBlue],
-                      stops: [0, 0.25, 0.6, 1],
+          border: Border.all(color: surfaces.cardBorder),
+          boxShadow: surfaces.softShadow,
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Row(
+                children: [
+                  Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: palette.separator),
                     ),
-                  ),
-                ),
-              ),
-              // 右上的蓝色光晕
-              Positioned.fill(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: RadialGradient(
-                      center: const Alignment(0.4, -1),
-                      radius: 0.9,
-                      colors: [_glowBlue.withValues(alpha: 0.85), _glowBlue.withValues(alpha: 0)],
-                    ),
-                  ),
-                ),
-              ),
-              // 右下的紫色光晕
-              Positioned.fill(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: RadialGradient(
-                      center: Alignment.bottomRight,
-                      radius: 1.1,
-                      colors: [_glowPurple, _glowPurple.withValues(alpha: 0)],
-                      stops: const [0, 0.55],
-                    ),
-                  ),
-                ),
-              ),
-              // 星点：静态的，不做闪烁 —— 常驻动画会让页面永远 settle 不下来，
-              // 也省得在「减少动画」时再分支。
-              const Positioned.fill(
-                child: CustomPaint(painter: _StarsPainter(color: _starWhite)),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(20),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 68,
-                      height: 68,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: _starWhite.withValues(alpha: 0.15),
-                          width: 3,
-                        ),
-                      ),
-                      child: ClipOval(
-                        child: Image.asset(
-                          'assets/icon.png',
-                          width: 62,
-                          height: 62,
-                          fit: BoxFit.cover,
-                        ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(15),
+                      child: Image.asset(
+                        'assets/icon.png',
+                        width: 56,
+                        height: 56,
+                        fit: BoxFit.cover,
                       ),
                     ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                username ?? '未获取到用户信息',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: -0.2,
+                                  color: palette.text,
+                                ),
+                              ),
+                            ),
+                            if (host != null && host.isNotEmpty) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                width: 7,
+                                height: 7,
+                                decoration: BoxDecoration(
+                                  color: palette.ok,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        if (line2.isNotEmpty) ...[
+                          const SizedBox(height: 3),
                           Text(
-                            username ?? '未获取到用户信息',
+                            line2,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w800,
-                              color: _starWhite,
+                            style: AppText.caption.copyWith(
+                              fontWeight: FontWeight.w500,
+                              color: palette.text2,
                             ),
                           ),
-                          if (line2.isNotEmpty) ...[
-                            const SizedBox(height: 3),
-                            Text(
-                              line2,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 14.5,
-                                fontWeight: FontWeight.w600,
-                                color: _starWhite.withValues(alpha: 0.85),
-                              ),
-                            ),
-                          ],
-                          if (host != null && host.isNotEmpty) ...[
-                            const SizedBox(height: 2),
-                            Text(
-                              host,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: _starWhite.withValues(alpha: 0.7),
-                              ),
-                            ),
-                          ],
                         ],
-                      ),
+                        if (host != null && host.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            host,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppText.meta.copyWith(color: palette.text3),
+                          ),
+                        ],
+                      ],
                     ),
-                    Icon(
-                      Icons.chevron_right_rounded,
-                      color: _starWhite.withValues(alpha: 0.6),
-                    ),
-                  ],
-                ),
+                  ),
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    size: 20,
+                    color: palette.text3,
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
     );
   }
-}
-
-/// 固定位置的星点（相对坐标 + 半径），对应演示稿 `.prof .stars` 的那几颗。
-class _StarsPainter extends CustomPainter {
-  const _StarsPainter({required this.color});
-
-  final Color color;
-
-  static const List<(double, double, double)> _stars = [
-    (0.20, 0.30, 1.0),
-    (0.40, 0.70, 1.0),
-    (0.65, 0.20, 1.2),
-    (0.80, 0.60, 1.0),
-    (0.55, 0.85, 1.0),
-    (0.90, 0.35, 1.3),
-    (0.12, 0.80, 1.0),
-    (0.33, 0.12, 1.0),
-    (0.72, 0.42, 0.8),
-    (0.48, 0.30, 0.8),
-  ];
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = color.withValues(alpha: 0.7);
-    for (final (x, y, r) in _stars) {
-      canvas.drawCircle(Offset(x * size.width, y * size.height), r, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_StarsPainter oldDelegate) => oldDelegate.color != color;
 }
 
 /// 外观：浅色 / 深色两张预览卡 + 「跟随系统」开关，读写 `themeModeProvider`。
@@ -779,16 +709,16 @@ class _ModePreviewCard extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
-  // ── 插画常量：预览卡里的三个色块 ──
+  // ── 插画常量：Nordic Calm 预览卡色块（钴蓝 · 森林绿 · 暖石层次）──
   static const List<Color> _lightBlocks = [
-    Color(0xFF8B74E6),
-    Color(0xFF4B94FF),
-    Color(0xFF2B2B2F),
+    Color(0xFF2B5BEE),
+    Color(0xFF15803D),
+    Color(0xFFEFECE6),
   ];
   static const List<Color> _darkBlocks = [
-    Color(0xFF4A39A8),
-    Color(0xFF1F6FE0),
-    Color(0xFF48484C),
+    Color(0xFF6C93FF),
+    Color(0xFF22C55E),
+    Color(0xFF25282E),
   ];
 
   @override
@@ -807,17 +737,14 @@ class _ModePreviewCard extends StatelessWidget {
         onTap: onTap,
         child: AnimatedContainer(
           duration: AppMotion.of(context, AppMotion.normal),
-          height: 128,
+          height: 118,
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: face.card,
-            borderRadius: BorderRadius.circular(22),
-            // 选中：3dp 强调色描边；未选中：浅色卡在白底上加一圈发丝线免得糊在一起
+            color: face.bg,
+            borderRadius: BorderRadius.circular(AppRadius.cardSm),
             border: Border.all(
-              color: selected
-                  ? palette.accent
-                  : (dark ? face.card : palette.separator),
-              width: 3,
+              color: selected ? palette.accent : palette.separator,
+              width: selected ? 2 : 1,
             ),
           ),
           child: Column(
@@ -827,18 +754,18 @@ class _ModePreviewCard extends StatelessWidget {
               Row(
                 children: [
                   Container(
-                    width: 40,
-                    height: 7,
+                    width: 38,
+                    height: 6,
                     decoration: BoxDecoration(
-                      color: face.text.withValues(alpha: 0.2),
+                      color: face.text.withValues(alpha: 0.18),
                       borderRadius: BorderRadius.circular(AppRadius.pill),
                     ),
                   ),
                   const Spacer(),
                   Icon(
                     dark ? Icons.dark_mode_outlined : Icons.light_mode_outlined,
-                    size: 18,
-                    color: face.text,
+                    size: 17,
+                    color: selected ? palette.accent : face.text2,
                   ),
                 ],
               ),
@@ -848,7 +775,7 @@ class _ModePreviewCard extends StatelessWidget {
                     if (i > 0) const SizedBox(width: 6),
                     Expanded(
                       child: Container(
-                        height: 26,
+                        height: 24,
                         decoration: BoxDecoration(
                           color: blocks[i],
                           borderRadius: BorderRadius.circular(AppRadius.sm),
@@ -861,8 +788,8 @@ class _ModePreviewCard extends StatelessWidget {
               Text(
                 label,
                 style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
                   color: face.text,
                 ),
               ),
